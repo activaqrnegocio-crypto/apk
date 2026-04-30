@@ -277,6 +277,52 @@ export default function QuoteFormClient({ clients, materials, projects = [], pre
     }
   }
 
+  const downloadPDFManual = () => {
+    if ((clientMode === 'NEW' || clientMode === 'CF') && !clientData.name && clientMode !== 'CF') {
+       alert("Ingresa al menos el nombre del cliente para descargar.");
+       return;
+    }
+
+    const clientInfo = {
+      name: clientMode === 'CF' ? 'CONSUMIDOR FINAL' : clientData.name || 'Cliente Nuevo',
+      ruc: clientMode === 'CF' ? '9999999999999' : clientData.ruc,
+      address: clientData.address,
+      phone: clientData.phone,
+      date: new Date()
+    }
+    
+    const pdfTotals = {
+      subtotal: Number(calculations.totalBudget || 0),
+      subtotal0: Number(calculations.subtotal0 || 0),
+      subtotal15: Number(calculations.subtotal15 || 0),
+      discountTotal: Number(calculations.discountTotal || 0),
+      ivaAmount: Number(calculations.ivaAmount || 0),
+      totalAmount: Number(calculations.grandTotal || 0)
+    }
+
+    const formattedItems = calculations.processed.map((p: any) => ({
+      ...p,
+      unitPrice: p.estimatedCost, 
+      description: p.name,
+      total: p.lineTotal,
+      discountPct: p.discountPct || 0
+    }))
+
+    generateProfessionalPDF(clientInfo, formattedItems, pdfTotals, {
+      docType: 'COTIZACIÓN',
+      docId: initialQuote?.id ? String(initialQuote.id) : 'PENDIENTE',
+      notes: notes,
+      sellerName: session?.user?.name || 'Aquatech',
+      action: 'save', // Direct download
+      optionalSection: {
+        title: optionalTitle,
+        description: optionalDescription,
+        imageBase64: optionalImageBase64,
+        image2Base64: optionalImage2Base64
+      }
+    })
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (clientMode === 'EXISTING' && !selectedClientId) return alert("Selecciona un cliente existente")
@@ -660,11 +706,20 @@ export default function QuoteFormClient({ clients, materials, projects = [], pre
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '25px' }}>
-            <button type="button" onClick={generatePreviewPDF} className="btn btn-secondary" style={{ width: '100%', padding: '15px', fontWeight: 'bold' }}>
-              Generar Vista Previa
-            </button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <button type="button" onClick={generatePreviewPDF} className="btn btn-secondary" style={{ width: '100%', padding: '12px', fontSize: '0.85rem', fontWeight: 'bold' }}>
+                Vista Previa
+              </button>
+              <button type="button" onClick={downloadPDFManual} className="btn" style={{ width: '100%', padding: '12px', fontSize: '0.85rem', fontWeight: 'bold', backgroundColor: '#10b981', color: 'white' }}>
+                Descargar PDF
+              </button>
+            </div>
             <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '15px', fontWeight: 'bold' }} disabled={loading}>
-              {loading ? 'Guardando...' : (initialQuote ? 'ACTUALIZAR COTIZACIÓN' : 'CREAR COTIZACIÓN')}
+              {loading ? 'Guardando...' : (
+                typeof navigator !== 'undefined' && !navigator.onLine 
+                ? 'GUARDAR OFFLINE Y DESCARGAR' 
+                : (initialQuote ? 'ACTUALIZAR COTIZACIÓN' : 'CREAR COTIZACIÓN')
+              )}
             </button>
           </div>
         </div>

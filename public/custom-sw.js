@@ -21,7 +21,7 @@ const PRE_CACHE = [
   '/cotizacion.jpg'
 ];
 
-const VERSION = 'v246';
+const VERSION = 'v251';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -260,7 +260,8 @@ async function rscNetworkFirst(request) {
         if (shellMatch) return shellMatch;
       }
     }
-    return undefined; // Let network error bubble up
+    console.warn(`[SW ${VERSION}] RSC Network First failed completely for:`, url.pathname);
+    return Response.error(); // v251: Prevent TypeError by returning a valid error response
   }
 }
 
@@ -288,7 +289,8 @@ async function rscStaleWhileRevalidate(request) {
     return cached;
   }
 
-  return fetchPromise;
+  // v251: Ensure we NEVER return null to respondWith()
+  return fetchPromise.then(res => res || Response.error());
 }
 
 /**

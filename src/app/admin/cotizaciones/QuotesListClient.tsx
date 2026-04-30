@@ -179,7 +179,36 @@ export default function QuotesListClient({ initialQuotes, activeProjects = [] }:
 
   return (
     <>
-      {/* Filtros eliminados según solicitud */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button 
+            onClick={() => setFilter('ALL')} 
+            className={`btn btn-xs ${filter === 'ALL' ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ border: filter === 'ALL' ? '' : '1px solid var(--border)' }}
+          >
+            Todas
+          </button>
+          <button 
+            onClick={() => setFilter('PROJECT')} 
+            className={`btn btn-xs ${filter === 'PROJECT' ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ border: filter === 'PROJECT' ? '' : '1px solid var(--border)' }}
+          >
+            De Proyectos
+          </button>
+          <button 
+            onClick={() => setFilter('DIRECT')} 
+            className={`btn btn-xs ${filter === 'DIRECT' ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ border: filter === 'DIRECT' ? '' : '1px solid var(--border)' }}
+          >
+            Directas
+          </button>
+        </div>
+        
+        <Link href="/admin/cotizaciones/nuevo" className="btn btn-primary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          Nueva Cotización
+        </Link>
+      </div>
 
       <div className="card shadow-sm" style={{ padding: 0, overflowX: 'auto', borderRadius: '16px' }}>
         <table style={{ minWidth: '900px', width: '100%', borderCollapse: 'collapse' }}>
@@ -256,8 +285,16 @@ export default function QuotesListClient({ initialQuotes, activeProjects = [] }:
             ))}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={5} style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                  No se encontraron cotizaciones.
+                <td colSpan={5} style={{ padding: '60px 40px', textAlign: 'center' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
+                    <div style={{ padding: '20px', borderRadius: '50%', backgroundColor: 'var(--bg-deep)', color: 'var(--text-muted)' }}>
+                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+                    </div>
+                    <div style={{ color: 'var(--text-muted)' }}>No se encontraron cotizaciones en esta vista.</div>
+                    <Link href="/admin/cotizaciones/nuevo" className="btn btn-primary">
+                      Crear mi primera cotización
+                    </Link>
+                  </div>
                 </td>
               </tr>
             )}

@@ -361,7 +361,12 @@ export default function ProyectosPage() {
 
           return (
             <div key={p.id} style={{ position: 'relative', opacity: p.isPending ? 0.8 : 1 }}>
-              <Link href={p.isPending ? '#' : `/admin/proyectos/${p.id}`} style={{ textDecoration: 'none', color: 'inherit', cursor: p.isPending ? 'default' : 'pointer' }}>
+              <Link href={p.isPending || !p.id ? '#' : `/admin/proyectos/${p.id}`} 
+                onClick={() => {
+                  if (!p.id || p.isPending) return;
+                  console.log('[AdminNav] Navigating to project:', p.id);
+                }}
+                style={{ textDecoration: 'none', color: 'inherit', cursor: p.isPending ? 'default' : 'pointer' }}>
                 <div className="card h-full" style={{ 
                   padding: '24px', 
                   borderRadius: '16px', 

@@ -31,11 +31,16 @@ export default function GlobalSyncWorker() {
     if (!navigator.onLine || isBulkSyncing) return
     
     // v245: Check Freshness before syncing (Avoid loops)
-    // Reduced from 6h to 1h so new projects appear faster in offline cache
+    const u = session?.user as any;
+    const userRole = (u?.role || 'OPERATOR').toUpperCase();
+    const isActuallyAdmin = ['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(userRole);
+    
     if (!force) {
       const meta = await db.cacheMetadata.get('projects_bulk');
-      const ONE_HOUR = 60 * 60 * 1000;
-      if (meta && (Date.now() - meta.lastSync) < ONE_HOUR) {
+      // For Admins: 1h. For Operators: 10 mins (more aggressive to capture new assignments)
+      const FRESHNESS_WINDOW = isActuallyAdmin ? 60 * 60 * 1000 : 10 * 60 * 1000;
+      
+      if (meta && (Date.now() - meta.lastSync) < FRESHNESS_WINDOW) {
         console.log('[Sync] Data is fresh, skipping automatic bulk sync.');
         return;
       }
@@ -55,7 +60,7 @@ export default function GlobalSyncWorker() {
 
       // 1. SYNC PROJECTS & CHATS (Smart Merge with Pacing)
       let projects: any[] = [];
-      const res = await fetch('/api/projects/bulk-cache?limit=200', { priority: 'low' })
+      const res = await fetch('/api/projects/bulk-cache?limit=500', { priority: 'low' })
       if (res.ok) {
         projects = await res.json()
         const totalToSync = projects.length
@@ -98,38 +103,44 @@ export default function GlobalSyncWorker() {
           }
         }
 
-        // v233: LIGHTWEIGHT PRE-FETCHING
-        // We only prefetch the universal shells and main sections.
-        // Projects data is already in IndexedDB; individual fetches are redundant and saturate the DB pool.
+        // v252: INTELLIGENT PRE-FETCHING (Unified for all roles)
+        // We prefetch universal shells and main sections with controlled pacing.
         if (projects.length > 0) {
           window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
-            detail: { message: `Preparando entorno offline...` }
+            detail: { message: `Preparando entorno offline inteligente...` }
           }))
 
-          const shellPath = isAdmin ? '/admin/proyectos/offline-shell' : '/admin/operador/proyecto/offline-shell';
-          router.prefetch(shellPath);
-          fetch(shellPath, { priority: 'low', headers: { 'Accept': 'text/html' } }).catch(() => {});
+          // 1. Universal Shells (Crucial for offline fallback)
+          const shells = ['/admin/proyectos/offline-shell', '/admin/operador/proyecto/offline-shell'];
+          for (const shell of shells) {
+            router.prefetch(shell);
+            fetch(shell, { priority: 'low', headers: { 'Accept': 'text/html' } }).catch(() => {});
+            await new Promise(r => setTimeout(r, 200));
+          }
 
-          // Prefetch main sections with BOTH HTML and RSC payloads for smooth navigation
-          // v244: Aggressive prefetch for "suave" offline experience
+          // 2. Main Sections (Role-Aware)
           const sections = isAdmin 
             ? ['/admin', '/admin/proyectos', '/admin/calendario', '/admin/inventario', '/admin/cotizaciones']
             : ['/admin/operador', '/admin/inventario', '/admin/cotizaciones'];
 
           for (const section of sections) {
             router.prefetch(section);
-            
-            // 1. Fetch HTML Shell
+            // Fetch HTML Shell
             fetch(section, { priority: 'low', headers: { 'Accept': 'text/html' } }).catch(() => {});
-            
-            // 2. Fetch RSC Payload (Crucial for soft navigation)
+            // Fetch RSC Payload
             const rscUrl = section.includes('?') ? `${section}&_rsc=prefetch` : `${section}?_rsc=prefetch`;
-            fetch(rscUrl, { 
-              priority: 'low', 
-              headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } 
-            }).catch(() => {});
+            fetch(rscUrl, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
 
-            await new Promise(resolve => setTimeout(resolve, 300)); // Pacing to avoid network congestion
+            await new Promise(resolve => setTimeout(resolve, 500)); // Pacing
+          }
+
+          // 3. Prioritize Top 5 Recent Projects (Instant Load)
+          const topProjects = projects.slice(0, 5);
+          for (const p of topProjects) {
+            const projectPath = isAdmin ? `/admin/proyectos/${p.id}` : `/admin/operador/proyecto/${p.id}`;
+            router.prefetch(projectPath);
+            fetch(projectPath, { priority: 'low', headers: { 'Accept': 'text/html' } }).catch(() => {});
+            await new Promise(r => setTimeout(r, 800)); // Careful pacing for deep pages
           }
         }
       }
@@ -435,9 +446,15 @@ export default function GlobalSyncWorker() {
       }
     }
     
+    const handleManualSync = (e: any) => {
+      console.log('[Sync] Manual sync triggered via event. Force:', e.detail?.force);
+      startBulkSync(e.detail?.force);
+    };
+
     window.addEventListener('online', handleStatusChange)
     window.addEventListener('offline', handleStatusChange)
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('trigger-bulk-sync', handleManualSync)
     
     // Initial sync and cache refresh
     if (navigator.onLine) {
@@ -469,6 +486,7 @@ export default function GlobalSyncWorker() {
       window.removeEventListener('online', handleStatusChange)
       window.removeEventListener('offline', handleStatusChange)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('trigger-bulk-sync', handleManualSync)
       clearInterval(interval)
       clearInterval(bulkInterval)
       clearInterval(keepAliveInterval)

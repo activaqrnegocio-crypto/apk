@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { getLocalNow, formatToEcuador } from '@/lib/date-utils'
 import { db } from '@/lib/db'
 import { useLiveQuery } from 'dexie-react-hooks'
@@ -43,9 +43,9 @@ export default function OperatorDashboardClient({
 }: OperatorDashboardClientProps) {
   const [activeTab, setActiveTab] = useState<'PROYECTOS' | 'TAREAS'>(() => {
     if (typeof window !== 'undefined') {
-      return (sessionStorage.getItem('operator_active_tab') as any) || 'TAREAS'
+      return (sessionStorage.getItem('operator_active_tab') as any) || 'PROYECTOS'
     }
-    return 'TAREAS'
+    return 'PROYECTOS'
   })
 
   useEffect(() => {
@@ -65,10 +65,12 @@ export default function OperatorDashboardClient({
         .toArray()
       
       // Filtrar localmente para asegurar que solo vea los suyos
-      return allProjects.filter(p => 
-        p.team?.some((m: any) => m.userId === Number(user.id)) ||
-        p.createdById === Number(user.id)
-      )
+      return allProjects.filter(p => {
+        const userId = Number(user?.id)
+        if (!userId) return false
+        return p.team?.some((m: any) => Number(m.userId) === userId) ||
+               Number(p.createdById) === userId
+      })
     },
     [user?.id]
   )
@@ -129,6 +131,36 @@ export default function OperatorDashboardClient({
   const canManageCalendar = hasModuleAccess(user, 'calendario')
 
   // 1. Initial hydration and offline cache for appointments
+  const syncTriggeredRef = useRef(false);
+
+  // v251: Cache Guard - Ensure all server projects are in Dexie
+  useEffect(() => {
+    if (typeof window === 'undefined' || !navigator.onLine || !initialProjects.length) return;
+
+    const timer = setTimeout(async () => {
+      if (projectsFromCache === undefined) return; // Wait for Dexie to load
+      if (syncTriggeredRef.current) return; // Already triggered in this session
+
+      const missingProjects = initialProjects.filter(sp => 
+        !projectsFromCache.some(cp => cp.id === sp.id)
+      );
+
+      if (missingProjects.length > 0) {
+        console.log('[CacheGuard] Missing projects in local cache:', missingProjects.map(p => p.id));
+        syncTriggeredRef.current = true;
+        // Trigger a force sync to populate the cache
+        window.dispatchEvent(new CustomEvent('trigger-bulk-sync', { 
+          detail: { force: true } 
+        }));
+        
+        // Reset guard after 30s to allow retry if still missing
+        setTimeout(() => { syncTriggeredRef.current = false; }, 30000);
+      }
+    }, 2000); // 2s delay to let initial sync/load settle
+
+    return () => clearTimeout(timer);
+  }, [initialProjects, projectsFromCache]);
+
   useEffect(() => {
     if (initialAppointments.length > 0) {
       localStorage.setItem('operator_appointments_cache', JSON.stringify(initialAppointments))
@@ -323,8 +355,9 @@ export default function OperatorDashboardClient({
         ) */}
       </div>
 
-      {/* iOS Install Guide (Only if needed) */}
+      {/* iOS Install Guide */}
       <IosInstallBanner />
+
 
       {/* Sync Manager for Offline (Available for Operators too) */}
       <div style={{ marginTop: '15px' }}>

@@ -33,124 +33,88 @@ export default function ProjectExecutionClient({
   projectCity,
   panelBase = '/admin/operador'
 }: any) {
-  const [isPending, startTransition] = useTransition()
-  const searchParams = useSearchParams()
-  const [activeTab, setActiveTab] = useState<'records' | 'chat' | 'gallery'>('records')
+  const GALLERY_LABEL = "Planos y Referencias"
+  // 1. Core Lifecycle & Navigation
+  const [mounted, setMounted] = useState(false)
+  const [isSmallScreen, setIsSmallScreen] = useState(false)
+  const router = useRouter()
   const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const { data: session } = useSession()
+  const [isPending, startTransition] = useTransition()
 
-  // v230: Robust ID extraction using regex to handle trailing slashes and Universal Shell
-  // v231: Enhanced regex to capture digits even in complex paths
+  // 2. Connectivity & Mode States (Consolidated)
+  const [isOnline, setIsOnline] = useState(true)
+  const [isOfflineMode, setIsOfflineMode] = useState(false)
+  const [isSyncingOffline, setIsSyncingOffline] = useState(false)
+  const [cacheNotFound, setCacheNotFound] = useState(false)
+
+  // 3. Project & Data State
+  const [localProject, setLocalProject] = useState<any>(null)
+  const [localChat, setLocalChat] = useState<any[]>([])
+  const [liveChat, setLiveChat] = useState<any[]>(initialChat || [])
+  const [localExpenses, setLocalExpenses] = useState<any[]>(expenses || [])
+  const project = localProject || initialProject
+
+  // 4. UI UI State
+  const [activeTab, setActiveTab] = useState<'records' | 'chat' | 'gallery'>('records')
+  const [isFichaOpen, setIsFichaOpen] = useState(false)
+  const [selectedPreviewImage, setSelectedPreviewImage] = useState<any>(null)
+  const [handleDownloadLoading, setHandleDownloadLoading] = useState<string | null>(null)
+  const [isSendingMessage, setIsSendingMessage] = useState(false)
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
+
+  // 5. Refs
+  const expensesInitialized = useRef(false)
+  const isSyncingRef = useRef(false)
+  const hasRecoveredRef = useRef(false)
+  const liveChatInitialized = useRef(false)
+  const liveChatRef = useRef(liveChat)
+
+
+  // v253: Robust ID extraction
   const idFromUrl = useMemo(() => {
     if (typeof window === 'undefined') return 0;
     const path = window.location.pathname;
     const match = path.match(/\/proyecto[s]?\/(\d+)/i);
     if (match) return Number(match[1]);
-
-    // Ultimate fallback: check if the last segment is a number
     const segments = path.split('/').filter(Boolean);
     const last = segments[segments.length - 1];
-    if (last && /^\d+$/.test(last)) return Number(last);
-
-    return 0;
+    return (last && /^\d+$/.test(last)) ? Number(last) : 0;
   }, []);
-  const [localProject, setLocalProject] = useState<any>(null);
-  const project = localProject || initialProject;
+  const pendingItems = useLiveQuery(() => db.outbox.where('projectId').equals(idFromUrl).toArray(), [idFromUrl]) || []
 
-  const hasActiveRecordInThisProject = activeRecord && Number(activeRecord.projectId) === Number(idFromUrl);
-  const hasActiveRecordInOtherProject = activeRecord && !hasActiveRecordInThisProject;
-  const router = useRouter()
-  const { data: session } = useSession()
-  const userRole = session?.user?.role
-  const isFieldStaff = userRole === 'OPERATOR' || userRole === 'OPERADOR' || userRole === 'SUBCONTRATISTA'
+  // Sync refs
+  useEffect(() => { liveChatRef.current = liveChat }, [liveChat])
 
-  const [handleDownloadLoading, setHandleDownloadLoading] = useState<string | null>(null)
-  const [selectedPreviewImage, setSelectedPreviewImage] = useState<any>(null)
-  const [liveChat, setLiveChat] = useState<any[]>(initialChat || [])
-  const liveChatInitialized = useRef(false)
-  const [localChat, setLocalChat] = useState<any[]>([]);
-  const [isOfflineMode, setIsOfflineMode] = useState(false);
-  const [isSyncingOffline, setIsSyncingOffline] = useState(false);
-  const [mounted, setMounted] = useState(false)
-  const [isSendingMessage, setIsSendingMessage] = useState(false)
-  const [isOffline, setIsOffline] = useState(false)
-  const [isOnline, setIsOnline] = useState(true)
-  const [isFichaOpen, setIsFichaOpen] = useState(false)
-  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
-  const isSyncingRef = useRef(false)
-  const hasRecoveredRef = useRef(false)
-
-  const GALLERY_LABEL = "Planos y Referencias"
-
-  useEffect(() => {
-    async function initProject() {
-      if (hasRecoveredRef.current) return;
-      
-      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
-      setIsOfflineMode(isOffline);
-
-      // Check if we need to recover from cache
-      const isShell = project?.title?.includes('Cargando Proyecto Offline');
-      const needsCacheRecovery = (!project || Number(project?.id) !== idFromUrl || isShell) && idFromUrl > 0;
-
-      if (needsCacheRecovery) {
-        setIsSyncingOffline(true);
-        console.log('[Operator-Offline] Universal Shell detected. Recovering ID:', idFromUrl);
-        try {
-          const cached = await db.projectsCache.get(idFromUrl);
-          if (cached) {
-            setLocalProject(cached);
-            const chat = await db.chatCache.get(idFromUrl);
-            setLocalChat(chat?.messages || []);
-            hasRecoveredRef.current = true; // MARK AS RECOVERED
-          } else {
-            console.warn('[Operator-Offline] Project not found in local cache:', idFromUrl);
-          }
-        } catch (err) {
-          console.error('[Operator-Offline] Recovery error:', err);
-        } finally {
-          setIsSyncingOffline(false);
-        }
-      } else {
-        // Online or Correct Shell
-        setLocalProject(project);
-        setLocalChat(initialChat || []);
-        if (project?.id) {
-          db.projectsCache.put({ ...project, lastAccessedAt: Date.now() }).catch(() => {});
-          if (initialChat?.length > 0) {
-            db.chatCache.put({ projectId: project.id, messages: initialChat }).catch(() => {});
-          }
-        }
-      }
-    }
-    initProject();
-  }, [project, idFromUrl, pathname, initialChat]);
-
+  // Single mount effect
   useEffect(() => {
     setMounted(true)
+    const checkSize = () => setIsSmallScreen(window.innerWidth < 768)
+    checkSize()
+    window.addEventListener('resize', checkSize)
+
+    const updateOnlineStatus = () => {
+      const online = navigator.onLine
+      setIsOnline(online)
+      setIsOfflineMode(!online)
+    }
+    window.addEventListener('online', updateOnlineStatus)
+    window.addEventListener('offline', updateOnlineStatus)
+    updateOnlineStatus()
+
+    return () => {
+      window.removeEventListener('resize', checkSize)
+      window.removeEventListener('online', updateOnlineStatus)
+      window.removeEventListener('offline', updateOnlineStatus)
+    }
   }, [])
 
-  // --- SAFETY GUARD (v231) ---
-  if (!project && mounted) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: '20px', color: 'var(--text)' }}>
-        <div style={{ width: '40px', height: '40px', border: '3px solid var(--border-color)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-        <p>Cargando proyecto...</p>
-        {isOfflineMode && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Buscando en almacenamiento local (ID: {idFromUrl})</p>}
-        {!idFromUrl && <p style={{ color: 'var(--error)' }}>Error: No se pudo identificar el ID del proyecto.</p>}
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-    );
-  }
-
-
-  // --- INCREMENTAL FETCH: only gets NEW messages since last one ---
+  // --- HELPER FUNCTIONS ---
   const fetchMessages = async (since?: string): Promise<any[]> => {
     try {
       const url = `/api/projects/${idFromUrl}/messages?_t=${Date.now()}${since ? `&since=${since}` : ''}`
-      const resp = await fetch(url, {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' }
-      })
+      const resp = await fetch(url, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } })
       if (!resp.ok) return []
       const newMsgs = await resp.json()
       return (newMsgs || []).map((m: any) => ({
@@ -165,14 +129,88 @@ export default function ProjectExecutionClient({
     }
   }
 
-  const liveChatRef = useRef(liveChat)
-  useEffect(() => {
-    liveChatRef.current = liveChat
-  }, [liveChat])
+  const handleDownload = async (url: string, filename: string) => {
+    setHandleDownloadLoading(url)
+    try {
+      const response = await fetch(url)
+      const blob = await response.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(blobUrl)
+    } catch (error) {
+      console.error('Download error:', error)
+      window.open(url, '_blank')
+    } finally {
+      setHandleDownloadLoading(null)
+    }
+  }
 
-  // --- REAL-TIME POLLING: Aggressive polling for chat ---
+  const handleDeleteGalleryItem = async (itemId: number | string) => {
+    if (!window.confirm('¿Estás seguro de eliminar este archivo?')) return
+    if (typeof itemId === 'string' && itemId.startsWith('pending-')) {
+      const outboxId = Number(itemId.replace('pending-', ''))
+      await db.outbox.delete(outboxId)
+      return
+    }
+    try {
+      const res = await fetch(`/api/projects/${idFromUrl}/gallery/${itemId}`, { method: 'DELETE' })
+      if (res.ok) {
+        startTransition(() => { if (typeof navigator !== 'undefined' && navigator.onLine) router.refresh() })
+      } else { alert('Error eliminando archivo') }
+    } catch (err) {
+      console.error('Delete error:', err)
+      alert('Error de conexión')
+    }
+  }
+
+  // Initial project recovery effect
   useEffect(() => {
-    if (!idFromUrl) return; // v231: Prevent calls for ID 0
+    async function initProject() {
+      if (hasRecoveredRef.current) return;
+      const needsCacheRecovery = (!project || Number(project?.id) !== idFromUrl) && idFromUrl > 0;
+
+      if (needsCacheRecovery) {
+        setIsSyncingOffline(true);
+        const timeoutId = setTimeout(() => {
+          setIsSyncingOffline(false);
+          setCacheNotFound(true);
+        }, 5000);
+
+        try {
+          const cached = await db.projectsCache.get(idFromUrl);
+          if (cached) {
+            setLocalProject(cached);
+            const chat = await db.chatCache.get(idFromUrl);
+            setLocalChat(chat?.messages || []);
+            hasRecoveredRef.current = true;
+          } else {
+            setCacheNotFound(true);
+          }
+        } catch (err) {
+          setCacheNotFound(true);
+        } finally {
+          clearTimeout(timeoutId);
+          setIsSyncingOffline(false);
+        }
+      }
+    }
+    if (mounted) initProject();
+  }, [mounted, idFromUrl]);
+
+  const userRole = session?.user?.role
+  const isFieldStaff = userRole === 'OPERATOR' || userRole === 'OPERADOR' || userRole === 'SUBCONTRATISTA'
+  const hasActiveRecordInThisProject = activeRecord && Number(activeRecord.projectId) === Number(idFromUrl)
+  const hasActiveRecordInOtherProject = activeRecord && !hasActiveRecordInThisProject
+
+  // 1. Chat Effects (Ref sync handled at top)
+
+  useEffect(() => {
+    if (!idFromUrl) return; 
     const markAsSeen = async () => {
       try {
         await fetch('/api/notifications/summary', {
@@ -180,11 +218,10 @@ export default function ProjectExecutionClient({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectId: idFromUrl })
         })
-      } catch (e) { /* silent */ }
+      } catch (e) { }
     }
     markAsSeen()
 
-    // On first mount, do an immediate full fetch
     if (!liveChatInitialized.current) {
       liveChatInitialized.current = true
       fetchMessages().then(msgs => {
@@ -198,11 +235,9 @@ export default function ProjectExecutionClient({
     const pollInterval = setInterval(async () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) return
       if (typeof document !== 'undefined' && document.hidden) return
-      
       const currentChat = liveChatRef.current
       const lastMsg = currentChat[currentChat.length - 1]
       const since = lastMsg?.createdAt
-      
       try {
         const freshMsgs = await fetchMessages(since)
         if (freshMsgs && freshMsgs.length > 0) {
@@ -227,27 +262,17 @@ export default function ProjectExecutionClient({
       }
     })
 
-    if (typeof window !== 'undefined') {
-      window.addEventListener('focus', handleFocus)
-    }
-    
+    if (typeof window !== 'undefined') window.addEventListener('focus', handleFocus)
     return () => {
       clearInterval(pollInterval)
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('focus', handleFocus)
-      }
+      if (typeof window !== 'undefined') window.removeEventListener('focus', handleFocus)
     }
   }, [idFromUrl])
 
-  // Sync localChat when server props update (RSC refresh) or from recovery
   useEffect(() => {
     if (localChat && localChat.length > 0) {
       setLiveChat(prev => {
-        // If server has MORE messages than local, use the server data
-        if (localChat.length > prev.length) {
-          return localChat
-        }
-        // Otherwise merge in case local has optimistic adds
+        if (localChat.length > prev.length) return localChat
         const serverIds = new Set(localChat.map((m: any) => m.id))
         const localOnly = prev.filter((m: any) => typeof m.id === 'string' || !serverIds.has(m.id))
         if (localOnly.length === 0) return localChat
@@ -258,126 +283,54 @@ export default function ProjectExecutionClient({
     }
   }, [localChat])
 
-  const pendingItems = useLiveQuery(() => db.outbox.where('projectId').equals(idFromUrl).toArray(), [idFromUrl]) || []
+  // 2. Expenses & Gallery Hooks (States moved to top)
 
-  const [localExpenses, setLocalExpenses] = useState<any[]>(expenses || [])
-  const expensesInitialized = useRef(false)
-
-  // Polling for expenses to avoid "reverting to 0" on mobile state resets
   useEffect(() => {
-    if (!mounted || !idFromUrl) return; // v231: Prevent calls for ID 0
-    
+    if (!mounted || !idFromUrl) return; 
     const fetchExpenses = async () => {
       if (!navigator.onLine) return
       try {
-        const resp = await fetch(`/api/operator/projects/${idFromUrl}/expenses?_t=${Date.now()}`, {
-          cache: 'no-store'
-        })
+        const resp = await fetch(`/api/operator/projects/${idFromUrl}/expenses?_t=${Date.now()}`, { cache: 'no-store' })
         if (resp.ok) {
           const fresh = await resp.json()
-          if (Array.isArray(fresh) && fresh.length > 0) {
-            setLocalExpenses(fresh)
-          }
+          if (Array.isArray(fresh) && fresh.length > 0) setLocalExpenses(fresh)
         }
-      } catch (e) { /* silent fail */ }
+      } catch (e) {}
     }
-
     const expInterval = setInterval(fetchExpenses, 5000)
     return () => clearInterval(expInterval)
   }, [mounted, idFromUrl])
 
-  const handleDeleteGalleryItem = async (itemId: number | string) => {
-    if (!window.confirm('¿Estás seguro de eliminar este archivo?')) return
-
-    if (typeof itemId === 'string' && itemId.startsWith('pending-')) {
-      // Borrar de la outbox si es pendiente
-      const outboxId = Number(itemId.replace('pending-', ''))
-      await db.outbox.delete(outboxId)
-      return
-    }
-
-    try {
-      const res = await fetch(`/api/projects/${idFromUrl}/gallery/${itemId}`, {
-        method: 'DELETE'
-      })
-      if (res.ok) {
-        startTransition(() => {
-          if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
-     }
-        })
-      } else {
-        alert('Error eliminando archivo')
-      }
-    } catch (err) {
-      console.error('Delete error:', err)
-      alert('Error de conexión')
-    }
-  }
-
-  // Aggregate ALL expenses (prop, local state, Outbox, and Chat messages)
   const allExpenses = useMemo(() => {
-    // 1. Start with localExpenses (which includes server data)
     let list = [...localExpenses]
-
-    // 2. Add pending expenses from Outbox
-    pendingItems
-      .filter((item: any) => item.type === 'EXPENSE')
-      .forEach((item: any) => {
+    pendingItems.filter((item: any) => item.type === 'EXPENSE').forEach((item: any) => {
+      list.push({
+        id: `pending-${item.id}`, description: item.payload.description, amount: Number(item.payload.amount),
+        date: new Date(item.timestamp).toISOString(), isNote: item.payload.isNote, isPending: true, userName: 'Yo (Pendiente)'
+      })
+    })
+    liveChat.filter((msg: any) => msg.type === 'EXPENSE_LOG' || msg.type === 'EXPENSE').forEach((msg: any) => {
+      const amount = msg.extraData?.amount ?? msg.amount
+      const isNote = msg.extraData?.isNote ?? msg.isNote
+      const exists = list.some(le => le.chatMessageId === msg.id || (le.description === msg.content && Math.abs(le.amount - amount) < 0.01))
+      if (!exists) {
         list.push({
-          id: `pending-${item.id}`,
-          description: item.payload.description,
-          amount: Number(item.payload.amount),
-          date: new Date(item.timestamp).toISOString(),
-          isNote: item.payload.isNote,
-          isPending: true,
-          userName: 'Yo (Pendiente)'
+          id: `chat-exp-${msg.id}`, chatMessageId: msg.id, description: msg.content, amount: Number(amount),
+          date: msg.createdAt, isNote: !!isNote, userName: msg.userName || 'Usuario'
         })
-      })
-
-    // 3. Add EXPENSE_LOG messages from liveChat that didn't make it to expenses yet
-    // To avoid duplicates, we only add if the ID or description doesn't exist in localExpenses
-    liveChat
-      .filter((msg: any) => msg.type === 'EXPENSE_LOG' || msg.type === 'EXPENSE')
-      .forEach((msg: any) => {
-        const amount = msg.extraData?.amount ?? msg.amount
-        const isNote = msg.extraData?.isNote ?? msg.isNote
-        const msgId = msg.id
-        
-        // Basic check to see if this expense is already in the main list
-        // Chat expenses usually have "Gasto registrado desde chat" or similar as description in the DB
-        const exists = list.some(le => le.chatMessageId === msgId || (le.description === msg.content && Math.abs(le.amount - amount) < 0.01))
-        
-        if (!exists) {
-          list.push({
-            id: `chat-exp-${msgId}`,
-            chatMessageId: msgId,
-            description: msg.content,
-            amount: Number(amount),
-            date: msg.createdAt,
-            isNote: !!isNote,
-            userName: msg.userName || 'Usuario'
-          })
-        }
-      })
-
+      }
+    })
     return list.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
   }, [localExpenses, pendingItems, liveChat])
 
   const myTotalSpent = useMemo(() => {
-    return (allExpenses || [])
-      .filter((e: any) => !e.isNote && !e.isPending)
-      .reduce((acc: number, curr: any) => acc + Number(curr.amount || 0), 0)
+    return (allExpenses || []).filter((e: any) => !e.isNote && !e.isPending).reduce((acc: number, curr: any) => acc + Number(curr.amount || 0), 0)
   }, [allExpenses])
 
-  // --- EXPENSE EDIT/DELETE STATE ---
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false)
   const [editingExpense, setEditingExpense] = useState<any>(null)
   const [expenseFormFields, setExpenseFormFields, removeExpenseDraft] = useLocalStorage(`project_${idFromUrl}_expense_draft`, {
-    amount: '',
-    description: '',
-    isNote: false,
-    date: new Date().toISOString().split('T')[0]
+    amount: '', description: '', isNote: false, date: new Date().toISOString().split('T')[0]
   })
   const [isSavingExpense, setIsSavingExpense] = useState(false)
   const [galleryFilter, setGalleryFilter] = useState<'ALL' | 'IMAGES' | 'VIDEOS' | 'AUDIOS' | 'DOCS'>('ALL')
@@ -389,40 +342,25 @@ export default function ProjectExecutionClient({
       return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO'
     })
     const expenseFiles = (localExpenses || []).map((exp: any) => ({
-      id: `exp-${exp.id}`,
-      url: exp.receiptUrl || '',
-      filename: exp.description || 'Recibo',
-      mimeType: exp.receiptUrl ? 'image/jpeg' : 'text/plain',
-      category: 'MASTER',
-      isExpense: true
+      id: `exp-${exp.id}`, url: exp.receiptUrl || '', filename: exp.description || 'Recibo',
+      mimeType: exp.receiptUrl ? 'image/jpeg' : 'text/plain', category: 'MASTER', isExpense: true
     })).filter((e: any) => e.url)
-
-    // Add pending uploads for Master
-    const pendingGallery = (pendingItems || [])
-      .filter((item: any) => {
-        if (item.type !== 'MEDIA_UPLOAD' && item.type !== 'GALLERY_UPLOAD') return false
-        const cat = (item.payload?.category || 'MASTER').toUpperCase()
-        return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO'
-      })
-      .map((item: any) => ({
-        id: `pending-${item.id}`,
-        url: item.payload?.url || item.payload?.base64 || '',
-        filename: item.payload?.filename || 'Pendiente...',
-        mimeType: item.payload?.mimeType || 'image/jpeg',
-        category: 'MASTER',
-        isPending: true
-      }))
-
+    const pendingGallery = (pendingItems || []).filter((item: any) => {
+      if (item.type !== 'MEDIA_UPLOAD' && item.type !== 'GALLERY_UPLOAD') return false
+      const cat = (item.payload?.category || 'MASTER').toUpperCase()
+      return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO'
+    }).map((item: any) => ({
+      id: `pending-${item.id}`, url: item.payload?.url || item.payload?.base64 || '',
+      filename: item.payload?.filename || 'Pendiente...', mimeType: item.payload?.mimeType || 'image/jpeg',
+      category: 'MASTER', isPending: true
+    }))
     const list = [...baseFiles, ...expenseFiles, ...pendingGallery]
-    
-    // Filter by type
     return list.filter((item: any) => {
       const url = (item.url || '').toLowerCase();
       const mime = (item.mimeType || '').toLowerCase();
       const isImage = mime.startsWith('image/') || url.match(/\.(jpg|jpeg|png|gif|webp|heic|svg)$/);
       const isVideo = mime.startsWith('video/') || url.match(/\.(mp4|mov|avi|webm|mkv|3gp|m4v)$/);
       const isAudio = mime.startsWith('audio/') || url.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/);
-
       if (galleryFilter === 'IMAGES') return isImage;
       if (galleryFilter === 'VIDEOS') return isVideo;
       if (galleryFilter === 'AUDIOS') return isAudio;
@@ -432,58 +370,31 @@ export default function ProjectExecutionClient({
   }, [project?.gallery, galleryFilter, localExpenses, pendingItems])
 
   const chatGallery = useMemo(() => {
-    // Extract media from liveChat messages (persistent)
-    const fromChat = liveChat
-      .filter((msg: any) => msg.media && msg.media.length > 0)
-      .flatMap((msg: any) => msg.media.map((m: any) => ({
-        ...m,
-        isFromChat: true,
-        userName: msg.userName,
-        createdAt: msg.createdAt
-      })))
-
-    // Extract media from pending chat messages in outbox
-    const pendingChat = (pendingItems || [])
-      .filter((item: any) => item.type === 'MESSAGE' && item.payload?.media)
-      .map((item: any) => ({
-        id: `pending-chat-${item.id}`,
-        url: item.payload.media.url || item.payload.media.base64 || '',
-        filename: item.payload.media.filename || 'Enviando...',
-        mimeType: item.payload.media.mimeType || 'image/jpeg',
-        isFromChat: true,
-        isPending: true,
-        createdAt: new Date(item.timestamp).toISOString()
-      }))
-
-    return [...fromChat, ...pendingChat].sort((a: any, b: any) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )
+    const fromChat = liveChat.filter((msg: any) => msg.media && msg.media.length > 0).flatMap((msg: any) => msg.media.map((m: any) => ({
+      ...m, isFromChat: true, userName: msg.userName, createdAt: msg.createdAt
+    })))
+    const pendingChat = (pendingItems || []).filter((item: any) => item.type === 'MESSAGE' && item.payload?.media).map((item: any) => ({
+      id: `pending-chat-${item.id}`, url: item.payload.media.url || item.payload.media.base64 || '',
+      filename: item.payload.media.filename || 'Enviando...', mimeType: item.payload.media.mimeType || 'image/jpeg',
+      isFromChat: true, isPending: true, createdAt: new Date(item.timestamp).toISOString()
+    }))
+    return [...fromChat, ...pendingChat].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
   }, [liveChat, pendingItems])
 
   const [evidenceFilter, setEvidenceFilter] = useState<'ALL' | 'IMAGES' | 'VIDEOS' | 'AUDIOS' | 'DOCS'>('ALL')
   const evidenceGallery = useMemo(() => {
     if (!project?.gallery) return []
-    // Filter ONLY by EVIDENCE category (explicitly uploaded as finals)
     const list = [...project.gallery.filter((item: any) => !item.isFromChat && (item.category || '').toUpperCase() === 'EVIDENCE')]
-    
-    // Add pending uploads for Evidence
-    const pendingEvidence = (pendingItems || [])
-      .filter((item: any) => {
-        const isGalleryType = item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD'
-        const isEvidenceCat = (item.payload?.category || '').toUpperCase() === 'EVIDENCE'
-        return isGalleryType && isEvidenceCat
-      })
-      .map((item: any) => ({
-        id: `pending-ev-${item.id}`,
-        url: item.payload?.url || item.payload?.base64 || '',
-        filename: item.payload?.filename || 'Subiendo...',
-        mimeType: item.payload?.mimeType || 'image/jpeg',
-        category: 'EVIDENCE',
-        isPending: true
-      }))
-
+    const pendingEvidence = (pendingItems || []).filter((item: any) => {
+      const isGalleryType = item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD'
+      const isEvidenceCat = (item.payload?.category || '').toUpperCase() === 'EVIDENCE'
+      return isGalleryType && isEvidenceCat
+    }).map((item: any) => ({
+      id: `pending-ev-${item.id}`, url: item.payload?.url || item.payload?.base64 || '',
+      filename: item.payload?.filename || 'Subiendo...', mimeType: item.payload?.mimeType || 'image/jpeg',
+      category: 'EVIDENCE', isPending: true
+    }))
     const combinedList = [...list, ...pendingEvidence]
-
     if (evidenceFilter === 'ALL') return combinedList
     return combinedList.filter((item: any) => {
       const url = (item.url || '').toLowerCase();
@@ -491,7 +402,6 @@ export default function ProjectExecutionClient({
       const isImage = mime.startsWith('image/') || url.match(/\.(jpg|jpeg|png|gif|webp|heic|svg)$/);
       const isVideo = mime.startsWith('video/') || url.match(/\.(mp4|mov|avi|webm|mkv|3gp|m4v)$/);
       const isAudio = mime.startsWith('audio/') || url.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/);
-
       if (evidenceFilter === 'IMAGES') return isImage;
       if (evidenceFilter === 'VIDEOS') return isVideo;
       if (evidenceFilter === 'AUDIOS') return isAudio;
@@ -500,26 +410,16 @@ export default function ProjectExecutionClient({
     })
   }, [project?.gallery, evidenceFilter, pendingItems])
 
-  const handleDownload = async (url: string, filename: string) => {
-    setHandleDownloadLoading(url)
-    try {
-      const response = await fetch(url)
-      const blob = await response.blob()
-      const blobUrl = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = blobUrl
-      link.download = filename
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(blobUrl)
-    } catch (error) {
-      console.error('Download error:', error)
-      window.open(url, '_blank')
-    } finally {
-      setHandleDownloadLoading(null)
-    }
-  }
+  const costoExcedido = useMemo(() => {
+    const tBudget = project?.estimatedBudget || 0
+    return tBudget > 0 && myTotalSpent > tBudget
+  }, [project?.estimatedBudget, myTotalSpent])
+  const expenseRatio = useMemo(() => {
+    const tBudget = project?.estimatedBudget || 0
+    if (tBudget === 0) return 0
+    return Math.min((myTotalSpent / tBudget) * 100, 100)
+  }, [project?.estimatedBudget, myTotalSpent])
+  const totalGastado = myTotalSpent
 
 
   const setActiveTabWithUrl = (tab: 'records' | 'chat' | 'gallery') => {
@@ -547,7 +447,6 @@ export default function ProjectExecutionClient({
   const [description, setDescription] = useState('')
   const [isNote, setIsNote] = useState(false)
   const [expensePhoto, setExpensePhoto] = useState<string | null>(null)
-  const [isSmallScreen, setIsSmallScreen] = useState(false)
   const [chatFilter, setChatFilter] = useState<'all' | 'media' | 'notes' | 'text'>('all')
   const [waForwardMsg, setWaForwardMsg] = useState<any>(null)
 
@@ -603,14 +502,6 @@ export default function ProjectExecutionClient({
     }
   }
 
-  useEffect(() => {
-    setMounted(true)
-    setIsOnline(navigator.onLine)
-    const checkScreen = () => setIsSmallScreen(window.innerWidth < 640)
-    checkScreen()
-    window.addEventListener('resize', checkScreen)
-    return () => window.removeEventListener('resize', checkScreen)
-  }, [])
 
   // Chat State
   // Instead of trying to find an active phase, default to null ("General")
@@ -1194,13 +1085,13 @@ export default function ProjectExecutionClient({
   // Extract all media files from the project chat messages
   // Extract all media files from the project gallery (which now includes chat media from server)
   const projectMediaFiles: ProjectFile[] = useMemo(() => {
-    return (project.gallery || []).map((m: any) => ({
+    return (project?.gallery || []).map((m: any) => ({
       url: m.url,
       filename: m.filename,
       mimeType: m.mimeType,
       type: m.mimeType?.startsWith('image/') ? 'IMAGE' : m.mimeType?.startsWith('video/') ? 'VIDEO' : 'DOCUMENT'
     }))
-  }, [project.gallery])
+  }, [project?.gallery])
 
   const combinedChat = [
     ...liveChat,
@@ -1275,11 +1166,11 @@ export default function ProjectExecutionClient({
         fetch('/api/notifications/summary', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectId: project.id })
+          body: JSON.stringify({ projectId: project?.id || idFromUrl })
         }).catch(() => {})
       }
     }
-  }, [filteredChat.length, activeTab, project.id])
+  }, [filteredChat.length, activeTab, project?.id, idFromUrl])
 
 
   
@@ -1533,8 +1424,68 @@ export default function ProjectExecutionClient({
     }
   }
 
+
   if (!mounted) {
-    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', backgroundColor: 'var(--bg-deep)', color: 'white' }}>Cargando operador...</div>;
+    return (
+      <div style={{ 
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', 
+        height: '100vh', backgroundColor: '#0c1a2a', color: 'white',
+        background: 'radial-gradient(circle at center, #1a2a3a 0%, #0c1a2a 100%)'
+      }}>
+        <div className="animate-pulse" style={{ marginBottom: '20px' }}>
+          <svg width="50" height="50" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+          </svg>
+        </div>
+        <div style={{ fontSize: '1.1rem', fontWeight: '500', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.8)' }}>
+          Cargando Proyecto Offline...
+        </div>
+        <div style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.4)', marginTop: '8px' }}>
+          Sincronizando con base de datos local
+        </div>
+      </div>
+    );
+  }
+
+  // v252: Premium Offline Recovery UI (Moved after all hooks to prevent Error #310)
+  if (cacheNotFound) {
+    return (
+      <div style={{ 
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', 
+        height: '100vh', width: '100vw', backgroundColor: '#0c1a2a', color: 'white', padding: '40px', textAlign: 'center',
+        background: 'radial-gradient(circle at center, #1a2a3a 0%, #0c1a2a 100%)'
+      }}>
+        <div style={{ 
+          width: '80px', height: '80px', borderRadius: '24px', backgroundColor: 'rgba(239, 68, 68, 0.1)', 
+          display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '24px',
+          border: '1px solid rgba(239, 68, 68, 0.2)', boxShadow: '0 0 30px rgba(239, 68, 68, 0.1)'
+        }}>
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <h2 style={{ fontSize: '1.8rem', fontWeight: 'bold', marginBottom: '12px', letterSpacing: '-0.02em' }}>Proyecto no disponible offline</h2>
+        <p style={{ color: 'rgba(255,255,255,0.6)', maxWidth: '400px', lineHeight: '1.6', marginBottom: '32px' }}>
+          Este proyecto no se encuentra en la memoria local de tu dispositivo. Por favor, conéctate a internet para sincronizarlo.
+        </p>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button 
+            onClick={() => window.location.reload()}
+            className="btn btn-primary"
+            style={{ padding: '12px 24px', borderRadius: '12px', fontWeight: 'bold' }}
+          >
+            Reintentar Carga
+          </button>
+          <button 
+            onClick={() => router.push('/admin/operador')}
+            className="btn btn-secondary"
+            style={{ padding: '12px 24px', borderRadius: '12px', fontWeight: 'bold', backgroundColor: 'rgba(255,255,255,0.05)' }}
+          >
+            Volver al Listado
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // v228: Loading guard while project data is fetched from Dexie or API

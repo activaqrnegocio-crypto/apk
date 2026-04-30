@@ -39,6 +39,7 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [activeTab, setActiveTab] = useState<'CHAT' | 'GALLERY' | 'EVIDENCE'>('CHAT')
 
   const GALLERY_LABEL = 'Planos y Referencias'
+  const GALLERY_LIMIT = 8
 
   const setActiveTabWithUrl = (tab: 'CHAT' | 'GALLERY' | 'EVIDENCE') => {
     setActiveTab(tab)
@@ -73,6 +74,7 @@ export default function ProjectDetailClient({ project: initialProject, available
     return 0;
   }, []);
   const [localProject, setLocalProject] = useState<any>(null);
+  const [cacheNotFound, setCacheNotFound] = useState(false);
   const project = localProject || initialProject;
   
   const [localChat, setLocalChat] = useState<any[]>([]);
@@ -91,6 +93,16 @@ export default function ProjectDetailClient({ project: initialProject, available
       if (needsCacheRecovery) {
         setIsSyncingOffline(true);
         console.log('[Recovery] No server project or mismatch. ID:', idFromUrl);
+        
+        // v252: Added safety timeout for recovery
+        const timeoutId = setTimeout(() => {
+          if (setIsSyncingOffline) {
+            console.warn('[Recovery] Timeout reached');
+            setIsSyncingOffline(false);
+            setCacheNotFound(true);
+          }
+        }, 5000);
+
         try {
           const cached = await db.projectsCache.get(idFromUrl);
           if (cached) {
@@ -100,10 +112,13 @@ export default function ProjectDetailClient({ project: initialProject, available
             setLocalChat(chat?.messages || []);
           } else {
             console.warn('[Recovery] Project not found in local cache:', idFromUrl);
+            setCacheNotFound(true);
           }
         } catch (err) {
           console.error('[Recovery] Dexie error:', err);
+          setCacheNotFound(true);
         } finally {
+          clearTimeout(timeoutId);
           setIsSyncingOffline(false);
         }
       } else if (initialProject) {
@@ -323,89 +338,9 @@ export default function ProjectDetailClient({ project: initialProject, available
     )
   }, [chatMessages, pendingItems])
 
-  // --- SAFETY GUARD (v231) ---
-  if (!project && isMounted) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: '20px', color: 'var(--text)' }}>
-        <div style={{ width: '40px', height: '40px', border: '3px solid var(--border-color)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-        <p>Cargando información del proyecto...</p>
-        {isOfflineMode && <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Buscando en almacenamiento local (ID: {idFromUrl})</p>}
-        {!idFromUrl && <p style={{ color: 'var(--error)' }}>Error: No se pudo identificar el ID del proyecto.</p>}
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-    );
-  }
-
-  // --- METRICS CALCULATION (v230: Consolidated & Fixed) ---
-  const { 
-    totalPhases, 
-    completedPhases, 
-    progressPercent, 
-    grandTotal, 
-    theoreticalBudget, 
-    ivaAmount, 
-    realExpensesValue, 
-    expenseRatio, 
-    isCostoExcedido,
-    theoreticalDays,
-    realDays,
-    timeRatio,
-    isTiempoExcedido
-  } = useMemo(() => {
-    const phases = project?.phases || []
-    const exps = project?.expenses || []
-    
-    const total = phases.length
-    const completed = phases.filter((p: any) => p.status === 'COMPLETADA').length
-    const progress = total > 0 ? Math.round((completed / total) * 100) : 0
-
-    const gTotal = Number(project?.estimatedBudget || 0)
-    const tBudget = gTotal / 1.15
-    const iva = gTotal - tBudget
-
-    const realExp = exps
-      .filter((e: any) => !e.isNote)
-      .reduce((acc: number, curr: any) => acc + Number(curr.amount || 0), 0)
-
-    const eRatio = tBudget > 0 ? Math.min((realExp / tBudget) * 100, 100) : 0
-    const costExceeded = realExp > tBudget && tBudget > 0
-
-    const tDays = phases.reduce((acc: number, phase: any) => acc + (phase.estimatedDays || 0), 0)
-    
-    let rDays = 0
-    if (project?.startDate) {
-      const start = new Date(project.startDate)
-      const end = (project.status === 'COMPLETADA' || project.status === 'FINALIZADO') && project.endDate 
-        ? new Date(project.endDate) 
-        : new Date()
-      const diff = end.getTime() - start.getTime()
-      rDays = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
-    }
-
-    const tRatio = tDays > 0 ? Math.min((rDays / tDays) * 100, 100) : 0
-    const timeExceeded = rDays > tDays && tDays > 0
-
-    return {
-      totalPhases: total,
-      completedPhases: completed,
-      progressPercent: progress,
-      grandTotal: gTotal,
-      theoreticalBudget: tBudget,
-      ivaAmount: iva,
-      realExpensesValue: realExp,
-      expenseRatio: eRatio,
-      isCostoExcedido: costExceeded,
-      theoreticalDays: tDays,
-      realDays: rDays,
-      timeRatio: tRatio,
-      isTiempoExcedido: timeExceeded
-    }
-  }, [project, project?.phases, project?.expenses, project?.estimatedBudget, project?.startDate, project?.endDate, project?.status])
-
-  // Alias for backward compatibility if needed
-  const realExpenses = realExpensesValue;
-
-
+  // --- REORDERED HOOKS: Ensuring all hooks run on every render (v252 Fix) ---
+  
+  // 1. Core State
   const [isUploading, setIsUploading] = useState(false)
   const [showAllGallery, setShowAllGallery] = useState(false)
   const [showAllEvidence, setShowAllEvidence] = useState(false)
@@ -413,12 +348,8 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [evidenceFilter, setEvidenceFilter] = useState('ALL')
   const [currentStatus, setCurrentStatus] = useState(project?.status || 'ACTIVO')
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
-  const GALLERY_LIMIT = 12
-
-  
   const [isEditingBudget, setIsEditingBudget] = useState(false)
   const [editBudget, setEditBudget] = useState(project?.estimatedBudget || 0)
-
   const [isFichaOpen, setIsFichaOpen] = useState(false)
   const [isEditingFicha, setIsEditingFicha] = useState(false)
   const [isSavingFicha, setIsSavingFicha] = useState(false)
@@ -428,14 +359,12 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [editingPhases, setEditingPhases] = useState<any[]>([])
   const [isSavingPhases, setIsSavingPhases] = useState(false)
   const [selectedPreviewImage, setSelectedPreviewImage] = useState<any>(null)
-  
-  // Project Deletion States
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteStep, setDeleteStep] = useState(1)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
 
-  // Form State for Ficha (Safe access v228)
+  // 2. Form State
   const [editTitle, setEditTitle] = useState(project?.title || '')
   const [editType, setEditType] = useState(project?.type || 'CONSTRUCCION')
   const [editSubtype, setEditSubtype] = useState(project?.subtype || '')
@@ -456,14 +385,50 @@ export default function ProjectDetailClient({ project: initialProject, available
       return parsed.description || ''
     } catch { return '' }
   })
+  const [editClientName, setEditClientName] = useState(project?.client?.name || '')
+  const [editClientRuc, setEditClientRuc] = useState(project?.client?.ruc || '')
+  const [editClientPhone, setEditClientPhone] = useState(project?.client?.phone || '')
+  const [editClientEmail, setEditClientEmail] = useState(project?.client?.email || '')
+  const [editClientCity, setEditClientCity] = useState(project?.client?.city || '')
+  const [editClientAddress, setEditClientAddress] = useState(project?.client?.address || '')
 
-  // Client Form State
-  const [editClientName, setEditClientName] = useState(project.client?.name || '')
-  const [editClientRuc, setEditClientRuc] = useState(project.client?.ruc || '')
-  const [editClientPhone, setEditClientPhone] = useState(project.client?.phone || '')
-  const [editClientEmail, setEditClientEmail] = useState(project.client?.email || '')
-  const [editClientCity, setEditClientCity] = useState(project.client?.city || '')
-  const [editClientAddress, setEditClientAddress] = useState(project.client?.address || '')
+  // 3. Metrics Calculation
+  const { 
+    totalPhases, completedPhases, progressPercent, grandTotal, 
+    theoreticalBudget, ivaAmount, realExpensesValue, expenseRatio, 
+    isCostoExcedido, theoreticalDays, realDays, timeRatio, isTiempoExcedido 
+  } = useMemo(() => {
+    const phases = project?.phases || []
+    const exps = project?.expenses || []
+    const total = phases.length
+    const completed = phases.filter((p: any) => p.status === 'COMPLETADA').length
+    const progress = total > 0 ? Math.round((completed / total) * 100) : 0
+    const gTotal = Number(project?.estimatedBudget || 0)
+    const tBudget = gTotal / 1.15
+    const iva = gTotal - tBudget
+    const realExp = exps.filter((e: any) => !e.isNote).reduce((acc: number, curr: any) => acc + Number(curr.amount || 0), 0)
+    const eRatio = tBudget > 0 ? Math.min((realExp / tBudget) * 100, 100) : 0
+    const costExceeded = realExp > tBudget && tBudget > 0
+    const tDays = phases.reduce((acc: number, phase: any) => acc + (phase.estimatedDays || 0), 0)
+    let rDays = 0
+    if (project?.startDate) {
+      const start = new Date(project.startDate)
+      const end = (project.status === 'COMPLETADA' || project.status === 'FINALIZADO') && project.endDate 
+        ? new Date(project.endDate) : new Date()
+      const diff = end.getTime() - start.getTime()
+      rDays = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+    }
+    const tRatio = tDays > 0 ? Math.min((rDays / tDays) * 100, 100) : 0
+    const timeExceeded = rDays > tDays && tDays > 0
+    return {
+      totalPhases: total, completedPhases: completed, progressPercent: progress, grandTotal: gTotal,
+      theoreticalBudget: tBudget, ivaAmount: iva, realExpensesValue: realExp, expenseRatio: eRatio,
+      isCostoExcedido: costExceeded, theoreticalDays: tDays, realDays: rDays, timeRatio: tRatio, isTiempoExcedido: timeExceeded
+    }
+  }, [project, project?.phases, project?.expenses, project?.estimatedBudget, project?.startDate, project?.endDate, project?.status])
+
+
+
 
   // --- INCREMENTAL FETCH: gets new messages from server ---
   const fetchMessages = async (since?: string): Promise<any[]> => {
@@ -1780,15 +1745,71 @@ export default function ProjectDetailClient({ project: initialProject, available
     }
   }
 
-  if (!isMounted) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', backgroundColor: 'var(--bg-deep)', color: 'white' }}>Cargando proyecto...</div>;
+  if (!isMounted) return null;
 
-  // v228: Loading guard while project data is fetched from Dexie or API
-  if ((!project || !project.title) && idFromUrl !== 0) {
+  // v252: Premium Loading / Error UI for Admin
+  if (cacheNotFound || ((!project || !project.title) && !isSyncingOffline)) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', backgroundColor: 'var(--bg-deep)', color: 'white', padding: '20px', textAlign: 'center' }}>
-        <div className="loading-spinner" style={{ width: '40px', height: '40px', border: '3px solid rgba(56, 189, 248, 0.1)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 1s linear infinite', marginBottom: '20px' }}></div>
-        <h2 style={{ fontSize: '1.5rem', marginBottom: '10px' }}>Cargando datos del proyecto...</h2>
-        <p style={{ color: 'var(--text-muted)' }}>Buscando en memoria local (Dexie)...</p>
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        height: '100vh', 
+        backgroundColor: 'var(--bg-deep)', 
+        color: 'white', 
+        padding: '40px', 
+        textAlign: 'center' 
+      }}>
+        <div style={{ fontSize: '4rem', marginBottom: '20px', opacity: 0.5 }}>📡</div>
+        <h2 style={{ fontSize: '1.8rem', fontWeight: 'bold', marginBottom: '10px' }}>Proyecto no disponible offline</h2>
+        <p style={{ color: 'rgba(255,255,255,0.6)', maxWidth: '450px', marginBottom: '30px', lineHeight: 1.6 }}>
+          No pudimos encontrar los datos de este proyecto en la memoria local de tu dispositivo. 
+          Asegúrate de haberlo abierto al menos una vez mientras estabas conectado.
+        </p>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button 
+            onClick={() => window.location.reload()}
+            className="btn btn-primary"
+            style={{ padding: '12px 30px' }}
+          >
+            Reintentar
+          </button>
+          <button 
+            onClick={() => router.push('/admin/proyectos')}
+            className="btn btn-outline"
+            style={{ padding: '12px 30px' }}
+          >
+            Volver a Proyectos
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSyncingOffline || !project || !project.title) {
+    return (
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        height: '100vh', 
+        backgroundColor: 'var(--bg-deep)', 
+        color: 'white', 
+        textAlign: 'center' 
+      }}>
+        <div style={{ 
+          width: '50px', 
+          height: '50px', 
+          border: '4px solid rgba(255,255,255,0.1)', 
+          borderTopColor: 'var(--primary)', 
+          borderRadius: '50%', 
+          animation: 'spin 1s linear infinite',
+          marginBottom: '24px'
+        }}></div>
+        <h2 style={{ fontSize: '1.2rem', margin: '0 0 8px 0' }}>Sincronizando información offline</h2>
+        <p style={{ opacity: 0.6, fontSize: '0.9rem' }}>Buscando en almacenamiento local (ID: {idFromUrl})</p>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     );
@@ -2873,7 +2894,7 @@ export default function ProjectDetailClient({ project: initialProject, available
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                     Agregar Gasto o Nota
                   </button>
-                  <span style={{ fontWeight: 'bold', color: isCostoExcedido ? 'var(--danger)' : 'var(--success)' }}>$ {realExpenses.toFixed(2)}</span>
+                  <span style={{ fontWeight: 'bold', color: isCostoExcedido ? 'var(--danger)' : 'var(--success)' }}>$ {realExpensesValue.toFixed(2)}</span>
                 </div>
               </div>
 
@@ -2890,8 +2911,8 @@ export default function ProjectDetailClient({ project: initialProject, available
           
           <div style={{ marginTop: '15px', fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'center' }}>
              {isCostoExcedido 
-               ? `Exceso de $ ${(realExpenses - theoreticalBudget).toFixed(2)} sobre el presupuesto.`
-               : `Restante: $ ${(theoreticalBudget - realExpenses).toFixed(2)} (${(100 - (realExpenses/theoreticalBudget*100)).toFixed(1)}%)`
+               ? `Exceso de $ ${(realExpensesValue - theoreticalBudget).toFixed(2)} sobre el presupuesto.`
+               : `Restante: $ ${(theoreticalBudget - realExpensesValue).toFixed(2)} (${(100 - (realExpensesValue/theoreticalBudget*100)).toFixed(1)}%)`
              }
           </div>
 

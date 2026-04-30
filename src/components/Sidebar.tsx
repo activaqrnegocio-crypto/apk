@@ -495,10 +495,10 @@ export default function Sidebar() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           {item.icon}
                           {item.label}
-                          {item.label === 'Proyectos' && notifications.totalUnread > 0 && (
+                          {item.label === 'Proyectos' && (notifications?.totalUnread || 0) > 0 && (
                             <span className="notification-badge">{notifications.totalUnread}</span>
                           )}
-                          {item.label === 'Mis Proyectos' && notifications.totalUnread > 0 && (
+                          {item.label === 'Mis Proyectos' && (notifications?.totalUnread || 0) > 0 && (
                             <span className="notification-badge">{notifications.totalUnread}</span>
                           )}
                         </div>
@@ -518,7 +518,7 @@ export default function Sidebar() {
                               style={{ padding: '8px 12px', fontSize: '0.85rem' }}
                             >
                               {subItem.label}
-                              {subItem.label === 'Chat' && projectId && notifications.byProject[projectId] > 0 && (
+                              {subItem.label === 'Chat' && projectId && (notifications?.byProject?.[projectId] || 0) > 0 && (
                                 <span className="notification-badge small">{notifications.byProject[projectId]}</span>
                               )}
                             </Link>
@@ -534,7 +534,7 @@ export default function Sidebar() {
                     >
                       {item.icon}
                       {item.label}
-                      {item.label === 'Mis Proyectos' && notifications.totalUnread > 0 && (
+                      {item.label === 'Mis Proyectos' && (notifications?.totalUnread || 0) > 0 && (
                         <span className="notification-badge">{notifications.totalUnread}</span>
                       )}
                     </Link>

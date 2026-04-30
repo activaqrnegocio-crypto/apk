@@ -12,7 +12,7 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url)
     const limit = parseInt(searchParams.get('limit') || '100', 10)
-    const safeLimit = Math.min(limit, 200) // v222: Increased for Admin scale
+    const safeLimit = Math.min(limit, 500) // v252: Increased for full Admin coverage
     
     const rawRole = (session.user as any).role || ''
     const userRole = String(rawRole).toUpperCase().trim()
@@ -95,7 +95,7 @@ export async function GET(request: Request) {
             }
           },
           orderBy: { createdAt: 'desc' },
-          take: 30
+          take: 15 // v252: Reduced from 30 to allow more projects in bulk sync
         },
         expenses: {
           select: {
@@ -106,7 +106,7 @@ export async function GET(request: Request) {
             date: true,
             receiptUrl: true,
           },
-          take: 20
+          take: 5 // v252: Reduced from 20 for bulk efficiency
         },
         gallery: {
           select: {
@@ -117,7 +117,7 @@ export async function GET(request: Request) {
             createdAt: true,
             filename: true
           },
-          take: 30
+          take: 10 // v252: Reduced from 30 for bulk efficiency
         }
       },
       orderBy: { updatedAt: 'desc' }
