@@ -1,12 +1,23 @@
 import webpush from 'web-push'
 import { prisma } from './prisma'
 
-// Configure VAPID details
-webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT || 'mailto:aquatech@cesarreyesjaramillo.com',
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
-  process.env.VAPID_PRIVATE_KEY!
-)
+// Configure VAPID details only if keys are present
+const VAPID_PUBLIC = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY
+
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+  try {
+    webpush.setVapidDetails(
+      process.env.VAPID_SUBJECT || 'mailto:aquatech@cesarreyesjaramillo.com',
+      VAPID_PUBLIC,
+      VAPID_PRIVATE
+    )
+  } catch (e) {
+    console.warn('[PUSH] Failed to set VAPID details:', e)
+  }
+} else {
+  console.warn('[PUSH] VAPID keys missing. Notifications disabled for this session (Build context).')
+}
 
 interface PushPayload {
   title: string
