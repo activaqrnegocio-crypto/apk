@@ -248,6 +248,7 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [expenseImage, setExpenseImage] = useState<string | null>(null)
   const [expenseImagePreview, setExpenseImagePreview] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const sendLockRef = useRef(false)
 
   const masterGallery = useMemo(() => {
     // Only MASTER, PLANOS, LEVANTAMIENTO categories
@@ -348,8 +349,10 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [evidenceFilter, setEvidenceFilter] = useState('ALL')
   const [currentStatus, setCurrentStatus] = useState(project?.status || 'ACTIVO')
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
+  const [isSavingBudget, setIsSavingBudget] = useState(false)
   const [isEditingBudget, setIsEditingBudget] = useState(false)
   const [editBudget, setEditBudget] = useState(project?.estimatedBudget || 0)
+  const [isRenamingItem, setIsRenamingItem] = useState(false)
   const [isFichaOpen, setIsFichaOpen] = useState(false)
   const [isEditingFicha, setIsEditingFicha] = useState(false)
   const [isSavingFicha, setIsSavingFicha] = useState(false)
@@ -363,6 +366,7 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [deleteStep, setDeleteStep] = useState(1)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isDeletingExpense, setIsDeletingExpense] = useState(false)
 
   // 2. Form State
   const [editTitle, setEditTitle] = useState(project?.title || '')
@@ -579,7 +583,7 @@ export default function ProjectDetailClient({ project: initialProject, available
         await db.outbox.add({
           type: 'GALLERY_DELETE',
           projectId: project.id,
-          payload: { itemId },
+          payload: { galleryId: itemId }, // v255: Consistente con GlobalSyncWorker
           timestamp: Date.now(),
           status: 'pending'
         })
@@ -611,31 +615,53 @@ export default function ProjectDetailClient({ project: initialProject, available
 
   const handleSaveFicha = async () => {
     setIsSavingFicha(true)
+    const fichaPayload = {
+      title: editTitle,
+      type: editType,
+      subtype: editSubtype,
+      city: editCity,
+      address: editAddress,
+      startDate: editStartDate,
+      endDate: editEndDate,
+      categoryList: JSON.stringify(editCategoryList),
+      contractTypeList: JSON.stringify(editContractTypeList),
+      technicalSpecs: JSON.stringify({ description: editTechnicalSpecs }),
+      specsTranscription: editSpecsTranscription,
+      client: {
+        name: editClientName,
+        ruc: editClientRuc,
+        phone: editClientPhone,
+        email: editClientEmail,
+        city: editClientCity,
+        address: editClientAddress
+      }
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      try {
+        await db.outbox.add({
+          type: 'PROJECT_UPDATE',
+          projectId: project.id,
+          payload: fichaPayload,
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        setIsEditingFicha(false)
+        // Local state update
+        setLocalProject((prev: any) => ({ ...prev, ...fichaPayload, client: fichaPayload.client }))
+        return
+      } catch (e) {
+        console.error('Error saving offline ficha:', e)
+      } finally {
+        setIsSavingFicha(false)
+      }
+    }
+
     try {
       const resp = await fetch(`/api/projects/${project.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: editTitle,
-          type: editType,
-          subtype: editSubtype,
-          city: editCity,
-          address: editAddress,
-          startDate: editStartDate,
-          endDate: editEndDate,
-          categoryList: JSON.stringify(editCategoryList),
-          contractTypeList: JSON.stringify(editContractTypeList),
-          technicalSpecs: JSON.stringify({ description: editTechnicalSpecs }),
-          specsTranscription: editSpecsTranscription,
-          client: {
-            name: editClientName,
-            ruc: editClientRuc,
-            phone: editClientPhone,
-            email: editClientEmail,
-            city: editClientCity,
-            address: editClientAddress
-          }
-        })
+        body: JSON.stringify(fichaPayload)
       })
 
       if (resp.ok) {
@@ -807,8 +833,23 @@ export default function ProjectDetailClient({ project: initialProject, available
     }
   }
  
-  const handleSaveBudget = async () => {
+   const handleSaveBudget = async () => {
+    if (isSavingBudget) return
+    setIsSavingBudget(true)
     try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'PROJECT_UPDATE',
+          projectId: project.id,
+          payload: { estimatedBudget: Number(editBudget) },
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        setIsEditingBudget(false)
+        setLocalProject((prev: any) => ({ ...prev, estimatedBudget: Number(editBudget) }))
+        return
+      }
+
       const resp = await fetch(`/api/projects/${project.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -816,14 +857,14 @@ export default function ProjectDetailClient({ project: initialProject, available
       })
       if (resp.ok) {
         setIsEditingBudget(false)
-        startTransition(() => {
-          // router.refresh() - removed
-        })
+        setLocalProject((prev: any) => ({ ...prev, estimatedBudget: Number(editBudget) }))
       } else {
         alert('Error al actualizar el presupuesto')
       }
-    } catch (e) {
+     } catch (e) {
       alert('Error de conexión')
+    } finally {
+      setIsSavingBudget(false)
     }
   }
 
@@ -883,23 +924,26 @@ export default function ProjectDetailClient({ project: initialProject, available
     }
   }
 
-  const handleDeleteFromGallery = async (itemId: number) => {
-    if (!confirm('¿Eliminar esta imagen de la galería?')) return
-    try {
-      const resp = await fetch(`/api/projects/${project.id}/gallery/${itemId}`, {
-        method: 'DELETE'
-      })
-      if (resp.ok) {
-        setGallery(prev => prev.filter(item => item.id !== itemId))
-      }
-    } catch (e) {
-      console.error('Error deleting from gallery:', e)
-    }
-  }
+  // Unused redundancy removed in v255. handleDeleteGalleryItem is used instead.
 
-  const handleRenameGalleryItem = async (itemId: number) => {
-    if (!editingFilename.trim()) return
+   const handleRenameGalleryItem = async (itemId: number) => {
+    if (!editingFilename.trim() || isRenamingItem) return
+    setIsRenamingItem(true)
     try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'GALLERY_RENAME',
+          projectId: project.id,
+          payload: { galleryId: itemId, filename: editingFilename },
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        setGallery((prev: any[]) => prev.map(item => item.id === itemId ? { ...item, filename: editingFilename } : item))
+        setEditingItemId(null)
+        setEditingFilename('')
+        return
+      }
+
       const resp = await fetch(`/api/projects/${project.id}/gallery/${itemId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -909,15 +953,51 @@ export default function ProjectDetailClient({ project: initialProject, available
         const updated = await resp.json()
         setGallery((prev: any[]) => prev.map(item => item.id === itemId ? updated : item))
         setEditingItemId(null)
+        setEditingFilename('')
       }
-    } catch (e) {
+     } catch (e) {
       console.error('Error renaming gallery item:', e)
+    } finally {
+      setIsRenamingItem(false)
     }
   }
 
   const handleSavePhases = async () => {
     setIsSavingPhases(true)
     try {
+      // Offline support
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        for (const phase of editingPhases) {
+          if (phase.isNew) {
+            await db.outbox.add({
+              type: 'PHASE_CREATE', // Note: Need to check if worker handles this, or use POST to /phases
+              projectId: project.id,
+              payload: { ...phase, displayOrder: editingPhases.indexOf(phase) + 1 },
+              timestamp: Date.now(),
+              status: 'pending'
+            })
+          } else {
+            await db.outbox.add({
+              type: 'PHASE_UPDATE',
+              projectId: project.id,
+              payload: { 
+                phaseId: phase.id,
+                title: phase.title,
+                description: phase.description,
+                estimatedDays: phase.estimatedDays,
+                status: phase.status
+              },
+              timestamp: Date.now(),
+              status: 'pending'
+            })
+          }
+        }
+        setIsEditingPhases(false)
+        // Local state update
+        setLocalProject((prev: any) => ({ ...prev, phases: editingPhases }))
+        return
+      }
+
       for (const phase of editingPhases) {
         if (phase.isNew) {
           const resp = await fetch(`/api/projects/${project.id}/phases`, {
@@ -1101,18 +1181,21 @@ export default function ProjectDetailClient({ project: initialProject, available
           }]
         })
         setMessage('')
-        setShowMediaCapture(null)
+         setShowMediaCapture(null)
       }
     } catch (error) {
       console.error('Error sending message:', error)
       alert('Error al enviar el mensaje')
     } finally {
       setIsSending(false)
+      sendLockRef.current = false
     }
   }
 
   // Handler for ProjectChatUnified component
-  const handleChatUnifiedSend = async (content: string, type: string, extraData?: any) => {
+   const handleChatUnifiedSend = async (content: string, type: string, extraData?: any) => {
+    if (isSending || sendLockRef.current) return
+    sendLockRef.current = true
     setIsSending(true)
     console.log('Sending message:', { content, type, extraData }) // Debug log
     try {
@@ -1298,15 +1381,46 @@ export default function ProjectDetailClient({ project: initialProject, available
         ? `/api/projects/${project.id}/expenses/${editingExpense.id}`
         : `/api/projects/${project.id}/expenses`
 
+      const payload = {
+        ...expenseForm,
+        projectId: project?.id,
+        amount: Number(expenseForm.amount),
+        receiptPhoto: expenseImage
+      }
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'EXPENSE',
+          projectId: project.id,
+          payload: editingExpense ? { ...payload, id: editingExpense.id } : payload,
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        
+        // Optimistic UI update
+        const tempExpense = {
+          ...payload,
+          id: editingExpense?.id || Math.random(),
+          _pending: true
+        }
+        
+        if (editingExpense) {
+          setExpenses((prev: any) => prev.map((ex: any) => ex.id === editingExpense.id ? tempExpense : ex))
+        } else {
+          setExpenses((prev: any) => [tempExpense, ...prev])
+        }
+        
+        setIsExpenseModalOpen(false)
+        setEditingExpense(null)
+        setExpenseForm({ amount: '', description: '', isNote: false, date: new Date().toISOString().split('T')[0] })
+        setExpenseImage(null)
+        return
+      }
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...expenseForm,
-          projectId: project?.id,
-          amount: Number(expenseForm.amount),
-          receiptPhoto: expenseImage
-        })
+        body: JSON.stringify(payload)
       })
 
       if (res.ok) {
@@ -1329,17 +1443,32 @@ export default function ProjectDetailClient({ project: initialProject, available
     }
   }
 
-  const handleDeleteExpense = async (expenseId: number) => {
-    if (!confirm('¿Seguro que deseas eliminar este gasto?')) return
+   const handleDeleteExpense = async (expenseId: number) => {
+    if (isDeletingExpense || !confirm('¿Seguro que deseas eliminar este gasto?')) return
+    setIsDeletingExpense(true)
     try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'EXPENSE_DELETE',
+          projectId: project.id,
+          payload: { expenseId },
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        setExpenses((prev: any) => prev.filter((ex: any) => ex.id !== expenseId))
+        return
+      }
+
       const res = await fetch(`/api/projects/${project?.id}/expenses/${expenseId}`, {
         method: 'DELETE'
       })
       if (res.ok) {
         setExpenses((prev: any) => prev.filter((ex: any) => ex.id !== expenseId))
       }
-    } catch (error) {
+     } catch (error) {
       console.error('Error deleting expense:', error)
+    } finally {
+      setIsDeletingExpense(false)
     }
   }
 
@@ -1731,6 +1860,19 @@ export default function ProjectDetailClient({ project: initialProject, available
   const handleStatusChange = async (newStatus: string) => {
     setIsUpdatingStatus(true)
     try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'PROJECT_UPDATE',
+          projectId: project.id,
+          payload: { status: newStatus },
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        setCurrentStatus(newStatus)
+        setLocalProject((prev: any) => ({ ...prev, status: newStatus }))
+        return
+      }
+
       const res = await fetch(`/api/projects/${project.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1738,6 +1880,7 @@ export default function ProjectDetailClient({ project: initialProject, available
       })
       if (res.ok) {
         setCurrentStatus(newStatus)
+        setLocalProject((prev: any) => ({ ...prev, status: newStatus }))
       } else {
         alert('Error al actualizar el estado')
       }

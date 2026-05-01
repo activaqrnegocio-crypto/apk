@@ -244,8 +244,6 @@ export default function GlobalSyncWorker() {
     }
   }
 
-  // Cache session info for offline role detection
-  // v232: Include permissions so offline UI renders identically to online
   useEffect(() => {
     if (session?.user?.id && navigator.onLine) {
       const u = session.user
@@ -262,6 +260,24 @@ export default function GlobalSyncWorker() {
       db.authShadow.put({ ...authData, id: 'current' }).catch(console.error)
     }
   }, [session])
+  
+  // Cleanup stuck 'syncing' items on startup (prevents permanent orphaned items)
+  useEffect(() => {
+    const cleanupStuckItems = async () => {
+      try {
+        const stuckItems = await db.outbox.where('status').equals('syncing').toArray();
+        if (stuckItems.length > 0) {
+          console.log(`[Sync] Reseteando ${stuckItems.length} elementos bloqueados a 'pending'...`);
+          for (const item of stuckItems) {
+            await db.outbox.update(item.id!, { status: 'pending' });
+          }
+        }
+      } catch (err) {
+        console.error('[Sync] Error en limpieza de outbox:', err);
+      }
+    };
+    cleanupStuckItems();
+  }, []);
 
   const syncOutbox = async () => {
     if (typeof window === 'undefined' || !navigator.onLine || syncLock.current) return
@@ -298,11 +314,32 @@ export default function GlobalSyncWorker() {
           if (item.type === 'QUOTE') { endpoint = '/api/quotes' }
           else if (item.type === 'MATERIAL') { endpoint = '/api/materials' }
           else if (item.type === 'MESSAGE' || item.type === 'MEDIA_UPLOAD') { endpoint = `/api/projects/${item.projectId}/messages` }
-          else if (item.type === 'EXPENSE') { endpoint = `/api/projects/${item.projectId}/expenses` }
+          else if (item.type === 'EXPENSE') { 
+            if (item.payload.id) {
+              endpoint = `/api/projects/${item.projectId}/expenses/${item.payload.id}`;
+              method = 'PATCH';
+            } else {
+              endpoint = `/api/projects/${item.projectId}/expenses`;
+              method = 'POST';
+            }
+          }
+          else if (item.type === 'EXPENSE_DELETE') {
+            endpoint = `/api/projects/${item.projectId}/expenses/${item.payload.expenseId}`;
+            method = 'DELETE';
+          }
           else if (item.type === 'DAY_START') { endpoint = `/api/day-records` }
           else if (item.type === 'DAY_END') { endpoint = `/api/day-records`; method = 'PUT' }
-          else if (item.type === 'PHASE_COMPLETE') { endpoint = `/api/projects/${item.projectId}/phases/${item.payload.phaseId}`; method = 'PATCH' }
+          else if (item.type === 'PHASE_COMPLETE' || item.type === 'PHASE_UPDATE') { 
+            endpoint = `/api/projects/${item.projectId}/phases/${item.payload.phaseId}`; 
+            method = 'PATCH' 
+          }
+          else if (item.type === 'PHASE_CREATE') {
+            endpoint = `/api/projects/${item.projectId}/phases`;
+            method = 'POST'
+          }
           else if (item.type === 'PROJECT') { endpoint = '/api/projects' }
+          else if (item.type === 'PROJECT_UPDATE') { endpoint = `/api/projects/${item.projectId}`; method = 'PATCH' }
+          else if (item.type === 'TEAM_UPDATE') { endpoint = `/api/projects/${item.projectId}/team`; method = 'PUT' }
           else if (item.type === 'TASK') {
             if (!item.payload.isNew && (item.payload.id || item.payload._id)) {
               endpoint = `/api/appointments/${item.payload.id || item.payload._id}`
@@ -313,6 +350,11 @@ export default function GlobalSyncWorker() {
           }
           else if (item.type === 'TASK_STATUS_TOGGLE') { endpoint = `/api/appointments/${item.payload.appointmentId}`; method = 'PATCH' }
           else if (item.type === 'GALLERY_UPLOAD') { endpoint = `/api/projects/${item.projectId}/gallery` }
+          else if (item.type === 'GALLERY_DELETE') { endpoint = `/api/projects/${item.projectId}/gallery/${item.payload.galleryId}`; method = 'DELETE' }
+          else if (item.type === 'GALLERY_RENAME') { 
+            endpoint = `/api/projects/${item.projectId}/gallery/${item.payload.galleryId}`; 
+            method = 'PATCH' 
+          }
           
           let finalPayload = { ...item.payload }
           

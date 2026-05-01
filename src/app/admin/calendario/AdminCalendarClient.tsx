@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/lib/db'
 import CalendarView from '@/components/Calendar/CalendarView'
@@ -25,8 +25,10 @@ export default function AdminCalendarClient({
   const [appointments, setAppointments] = useState<any[]>([])
   const [selectedOperatorId, setSelectedOperatorId] = useState<string>(isAdmin ? 'all' : userId.toString())
   const [isModalOpen, setIsModalOpen] = useState(false)
-  const [editingEvent, setEditingEvent] = useState<any>(null)
+   const [editingEvent, setEditingEvent] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const saveLockRef = useRef(false)
 
   useEffect(() => {
     async function initCache() {
@@ -137,7 +139,10 @@ export default function AdminCalendarClient({
     return () => window.removeEventListener('calendar-refresh', handleRefresh)
   }, [selectedOperatorId])
 
-  const handleSaveAppointment = async (data: any) => {
+   const handleSaveAppointment = async (data: any) => {
+    if (isSaving || saveLockRef.current) return
+    saveLockRef.current = true
+    setIsSaving(true)
     const isNew = !data.id
     const url = isNew ? '/api/appointments' : `/api/appointments/${data.id}`
     const method = isNew ? 'POST' : 'PATCH'
@@ -179,7 +184,7 @@ export default function AdminCalendarClient({
       }
     }
 
-    const res = await fetch(url, {
+     const res = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -188,6 +193,8 @@ export default function AdminCalendarClient({
       setIsModalOpen(false)
       fetchAppointments()
     }
+    setIsSaving(false)
+    saveLockRef.current = false
   }
 
   const handleDeleteAppointment = async (id: number) => {

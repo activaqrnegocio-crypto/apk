@@ -78,6 +78,7 @@ export default function ProjectChatUnified({
   const cameraInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const chatBodyRef = useRef<HTMLDivElement>(null)
+  const sendLockRef = useRef(false)
 
   const [autoScroll, setAutoScroll] = useState(true)
   const [showNewMsgBtn, setShowNewMsgBtn] = useState(false)
@@ -180,9 +181,12 @@ export default function ProjectChatUnified({
 
 
   const handleSend = () => {
-    if (!inputValue.trim() || isSending) return
+    if (!inputValue.trim() || isSending || sendLockRef.current) return
+    sendLockRef.current = true
     onSendMessage(inputValue, 'TEXT', { phaseId: selectedPhaseId })
     setInputValue('')
+    // Reset lock after a small timeout to allow UI state to catch up
+    setTimeout(() => { sendLockRef.current = false }, 1000)
   }
 
   const handleGetGPS = () => {
@@ -263,9 +267,11 @@ export default function ProjectChatUnified({
 
   const handleCameraChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
+    if (file && !isSending && !sendLockRef.current) {
+      sendLockRef.current = true;
       const type = file.type.startsWith('video/') ? 'VIDEO' : 'IMAGE';
       onSendMessage('', type, { file });
+      setTimeout(() => { sendLockRef.current = false }, 1000)
     }
   }
 

@@ -163,6 +163,11 @@ export default async function OperatorProjectDetail({ params }: { params: Promis
     userName: (e as any).user?.name || 'Operador'
   }))
 
+  const availableOperators = await prisma.user.findMany({
+    where: { role: { in: ['OPERATOR', 'SUBCONTRATISTA'] }, isActive: true },
+    select: { id: true, name: true, phone: true }
+  })
+
   return (
     <div className="pt-0 pl-0 pr-0 sm:pt-6 sm:pl-6 sm:pr-6">
       <ProjectExecutionClient 
@@ -175,6 +180,7 @@ export default async function OperatorProjectDetail({ params }: { params: Promis
           clientName: project.client?.name || 'Cliente sin nombre',
           projectAddress: project.address || project.client?.address || '',
           projectCity: project.client?.city || '',
+          availableOperators,
           panelBase: "/admin/operador"
         })}
       />

@@ -31,6 +31,7 @@ export default function ProjectExecutionClient({
   clientName,
   projectAddress,
   projectCity,
+  availableOperators = [],
   panelBase = '/admin/operador'
 }: any) {
   const GALLERY_LABEL = "Planos y Referencias"
@@ -63,6 +64,10 @@ export default function ProjectExecutionClient({
   const [handleDownloadLoading, setHandleDownloadLoading] = useState<string | null>(null)
   const [isSendingMessage, setIsSendingMessage] = useState(false)
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
+  const [isEditingTeam, setIsEditingTeam] = useState(false)
+  const [isSavingTeam, setIsSavingTeam] = useState(false)
+  const [localTeam, setLocalTeam] = useState<any[]>(project?.team || [])
+  const [selectedTeamIds, setSelectedTeamIds] = useState<number[]>(project?.team?.map((t: any) => t.id) || [])
 
   // 5. Refs
   const expensesInitialized = useRef(false)
@@ -70,6 +75,8 @@ export default function ProjectExecutionClient({
   const hasRecoveredRef = useRef(false)
   const liveChatInitialized = useRef(false)
   const liveChatRef = useRef(liveChat)
+  const sendLockRef = useRef(false)
+  const teamLockRef = useRef(false)
 
 
   // v253: Robust ID extraction
@@ -179,6 +186,57 @@ export default function ProjectExecutionClient({
     }
   }
 
+  const handleSaveTeam = async () => {
+    if (teamLockRef.current || isSavingTeam) return
+    teamLockRef.current = true
+    setIsSavingTeam(true)
+
+    try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'TEAM_UPDATE',
+          projectId: idFromUrl,
+          payload: { operatorIds: selectedTeamIds },
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        
+        // Optimistic update for local UI
+        const newTeam = availableOperators
+          .filter((op: any) => selectedTeamIds.includes(op.id))
+          .map((op: any) => ({ id: op.id, name: op.name, role: op.role || 'OPERADOR' }))
+        
+        setLocalTeam(newTeam)
+        setIsEditingTeam(false)
+        return
+      }
+
+      const res = await fetch(`/api/projects/${idFromUrl}/team`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operatorIds: selectedTeamIds })
+      })
+
+      if (res.ok) {
+        const newTeam = availableOperators
+          .filter((op: any) => selectedTeamIds.includes(op.id))
+          .map((op: any) => ({ id: op.id, name: op.name, role: op.role || 'OPERADOR' }))
+        
+        setLocalTeam(newTeam)
+        setIsEditingTeam(false)
+        if (typeof navigator !== 'undefined' && navigator.onLine) router.refresh()
+      } else {
+        alert('Error al actualizar el equipo')
+      }
+    } catch (error) {
+      console.error('Error saving team:', error)
+      alert('Error de conexión')
+    } finally {
+      setIsSavingTeam(false)
+      teamLockRef.current = false
+    }
+  }
+
   const handleDeleteGalleryItem = async (itemId: number | string) => {
     if (!window.confirm('¿Estás seguro de eliminar este archivo?')) return
     if (typeof itemId === 'string' && itemId.startsWith('pending-')) {
@@ -186,6 +244,24 @@ export default function ProjectExecutionClient({
       await db.outbox.delete(outboxId)
       return
     }
+
+    // Offline support for server items
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      try {
+        await db.outbox.add({
+          type: 'GALLERY_DELETE',
+          projectId: idFromUrl,
+          payload: { galleryId: itemId }, // v255: Consistente con GlobalSyncWorker
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        alert('Archivo marcado para eliminar. Se borrará del servidor cuando recuperes conexión.')
+        return
+      } catch (e) {
+        console.error('Error saving offline deletion:', e)
+      }
+    }
+
     try {
       const res = await fetch(`/api/projects/${idFromUrl}/gallery/${itemId}`, { method: 'DELETE' })
       if (res.ok) {
@@ -810,9 +886,11 @@ export default function ProjectExecutionClient({
     }
   }
 
-  const handleSendMessage = async (e: React.FormEvent, customMsg?: string, customPhase?: number, mediaFile?: File, extraData?: any, forcedType?: string) => {
+   const handleSendMessage = async (e: React.FormEvent, customMsg?: string, customPhase?: number, mediaFile?: File, extraData?: any, forcedType?: string) => {
     if (e) e.preventDefault()
-    if (loading || isSendingMessage) return // Guard against double execution
+    if (loading || isSendingMessage || sendLockRef.current) return // Guard against double execution
+    sendLockRef.current = true
+    setIsSendingMessage(true)
     const msgToSend = customMsg || message
     const phaseIdToSend = customPhase !== undefined ? customPhase : activePhase
     
@@ -853,12 +931,10 @@ export default function ProjectExecutionClient({
       }
     ])
 
-    // Clear drafts instantly so they can keep typing
     if (!customMsg) removeMessageDraft()
     else removeNoteDraft()
 
     // --- ASYNC BACKGROUND PROCESSING ---
-    setIsSendingMessage(true)
     const processMessage = async () => {
       try {
         let location: any = null
@@ -999,6 +1075,7 @@ export default function ProjectExecutionClient({
         setLiveChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m))
       } finally {
         setIsSendingMessage(false)
+        sendLockRef.current = false
       }
     }
 
@@ -1297,7 +1374,7 @@ export default function ProjectExecutionClient({
 
       let y = 70
 
-      // Categorías y Contratos for merging
+      // Categorías and Contratos for merging
       let categories: string[] = []
       let contracts: string[] = []
       try { categories = JSON.parse(fullProject.categoryList || '[]') } catch {}
@@ -1445,13 +1522,26 @@ export default function ProjectExecutionClient({
   const handleDeleteExpense = async (expenseId: number) => {
     if (!confirm('¿Seguro que deseas eliminar este gasto?')) return
     try {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'EXPENSE_DELETE',
+          projectId: project.id,
+          payload: { expenseId },
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        setLocalExpenses(prev => prev.filter(e => e.id !== expenseId))
+        return
+      }
+
       const res = await fetch(`/api/projects/${project.id}/expenses/${expenseId}`, {
         method: 'DELETE'
       })
       if (res.ok) {
+        setLocalExpenses(prev => prev.filter(e => e.id !== expenseId))
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
-     }
+          router.refresh()
+        }
       }
     } catch (error) {
       console.error('Error deleting expense:', error)
@@ -1462,20 +1552,37 @@ export default function ProjectExecutionClient({
     e.preventDefault()
     setIsSavingExpense(true)
     try {
+      const payload = {
+        ...expenseFormFields,
+        amount: Number(expenseFormFields.amount)
+      }
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        await db.outbox.add({
+          type: 'EXPENSE',
+          projectId: project.id,
+          payload: { ...payload, id: editingExpense.id },
+          timestamp: Date.now(),
+          status: 'pending'
+        })
+        setLocalExpenses(prev => prev.map(ex => ex.id === editingExpense.id ? { ...ex, ...payload } : ex))
+        setIsExpenseModalOpen(false)
+        setEditingExpense(null)
+        return
+      }
+
       const res = await fetch(`/api/projects/${project.id}/expenses/${editingExpense.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...expenseFormFields,
-          amount: Number(expenseFormFields.amount)
-        })
+        body: JSON.stringify(payload)
       })
       if (res.ok) {
+        setLocalExpenses(prev => prev.map(ex => ex.id === editingExpense.id ? { ...ex, ...payload } : ex))
         setIsExpenseModalOpen(false)
         setEditingExpense(null)
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
-     }
+          router.refresh()
+        }
       }
     } catch (error) {
       console.error('Error updating expense:', error)
@@ -1827,8 +1934,74 @@ export default function ProjectExecutionClient({
             paddingBottom: isSmallScreen ? '100px' : '0' 
           }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 250px), 1fr))', gap: '20px' }}>
+                
+                {/* Equipo Asignado Card */}
+                <div className="card" style={{ height: '100%', display: 'flex', flexDirection: 'column', margin: '0px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                    <h3 style={{ margin: '0px', fontSize: '1.1rem', color: 'var(--text)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                      </svg>
+                      Equipo Asignado
+                    </h3>
+                    <button 
+                      className="btn btn-ghost btn-sm" 
+                      style={{ padding: '4px 8px' }}
+                      onClick={() => {
+                        setSelectedTeamIds(localTeam.map(t => t.id))
+                        setIsEditingTeam(true)
+                      }}
+                    >
+                      Editar
+                    </button>
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', flex: '1 1 0%' }}>
+                    {localTeam.length === 0 ? (
+                      <div style={{ gridColumn: 'span 2', padding: '20px', textAlign: 'center', opacity: 0.5, fontSize: '0.8rem' }}>
+                        Sin equipo asignado
+                      </div>
+                    ) : (
+                      localTeam.map((member: any) => (
+                        <div key={member.id} style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '8px', 
+                          padding: '6px 8px', 
+                          backgroundColor: 'var(--bg-surface)', 
+                          borderRadius: '8px',
+                          border: '1px solid rgba(255,255,255,0.03)',
+                          minWidth: 0 // Prevent grid blowout
+                        }}>
+                          <div style={{ 
+                            width: '24px', 
+                            height: '24px', 
+                            borderRadius: '50%', 
+                            backgroundColor: 'var(--bg-card)', 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'center', 
+                            color: 'var(--primary)', 
+                            fontWeight: 'bold',
+                            fontSize: '0.65rem',
+                            flexShrink: 0
+                          }}>
+                            {member.name?.substring(0, 2).toUpperCase()}
+                          </div>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: '500' }}>{member.name}</div>
+                            <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>{member.role || 'OPERADOR'}</div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
 
-                {/* Uploader para Planos y Registros - Visible para operadores offline/online */}
+                {/* Uploader para Planos y Registros */}
                 <div className="card" style={{ minWidth: 0, marginBottom: '20px' }}>
                   <ProjectUploader 
                     files={[]}
@@ -2335,6 +2508,86 @@ export default function ProjectExecutionClient({
           </div>
         </div>
       )}
+
+      {/* Team Edit Modal */}
+      {isEditingTeam && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 11000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ backgroundColor: 'var(--bg-card)', borderRadius: '16px', width: '100%', maxWidth: '500px', maxHeight: '80vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0 }}>Gestionar Equipo</h3>
+              <button onClick={() => setIsEditingTeam(false)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            
+            <div style={{ padding: '20px', overflowY: 'auto', flex: 1 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {availableOperators.map((op: any) => {
+                  const isSelected = selectedTeamIds.includes(op.id)
+                  return (
+                    <div 
+                      key={op.id} 
+                      onClick={() => {
+                        if (isSelected) {
+                          setSelectedTeamIds(prev => prev.filter(id => id !== op.id))
+                        } else {
+                          setSelectedTeamIds(prev => [...prev, op.id])
+                        }
+                      }}
+                      style={{ 
+                        padding: '8px 12px', 
+                        borderRadius: '12px', 
+                        backgroundColor: isSelected ? 'rgba(56, 189, 248, 0.1)' : 'rgba(255,255,255,0.03)',
+                        border: `1px solid ${isSelected ? 'var(--primary)' : 'transparent'}`,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: 'var(--bg-deep)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 'bold' }}>
+                          {op.name.substring(0, 2).toUpperCase()}
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: isSelected ? 'bold' : 'normal' }}>{op.name}</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{op.phone || 'Sin teléfono'}</div>
+                        </div>
+                      </div>
+                      <div style={{ 
+                        width: '20px', height: '20px', borderRadius: '6px', 
+                        border: '2px solid var(--primary)',
+                        backgroundColor: isSelected ? 'var(--primary)' : 'transparent',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center'
+                      }}>
+                        {isSelected && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><polyline points="20 6 9 17 4 12"/></svg>}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            
+            <div style={{ padding: '20px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '12px' }}>
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setIsEditingTeam(false)}
+                style={{ flex: 1 }}
+              >
+                Cancelar
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleSaveTeam}
+                disabled={isSavingTeam}
+                style={{ flex: 2 }}
+              >
+                {isSavingTeam ? 'Guardando...' : 'Guardar Cambios'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Lightbox / Preview Modal */}
       {selectedPreviewImage && (() => {
         const getCleanType = (item: any) => {
