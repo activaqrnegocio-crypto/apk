@@ -146,24 +146,52 @@ export default function GlobalSyncWorker() {
           status: 'idle'
         })
 
-        // v252: INTELLIGENT PRE-FETCHING (Unified for all roles)
-        // We prefetch universal shells and main sections with controlled pacing.
+        // v267: INTELLIGENT PRE-FETCHING — Sequential chunk-by-chunk, SW-aware
         if (true) {
           window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
             detail: { message: `Preparando entorno offline inteligente...` }
           }))
 
+          // v267: Helper — waits up to 10s for the SW controller to be available
+          // This is crucial on first load where the SW installs DURING the sync loop.
+          const getController = async (): Promise<ServiceWorker | null> => {
+            if (!('serviceWorker' in navigator)) return null;
+            // If controller is already there, return it immediately
+            if (navigator.serviceWorker.controller) return navigator.serviceWorker.controller;
+            // Wait for the SW to be ready (installed + activated)
+            await navigator.serviceWorker.ready;
+            // Poll for controller with timeout (handles the "installed but not yet controlling" case)
+            for (let attempt = 0; attempt < 20; attempt++) {
+              if (navigator.serviceWorker.controller) return navigator.serviceWorker.controller;
+              await new Promise(r => setTimeout(r, 500));
+            }
+            return navigator.serviceWorker.controller;
+          };
+
+          // v267: Sends a PRECACHE_URLS message and awaits SW confirmation via MessageChannel
+          // This converts the fire-and-forget postMessage into a reliable awaitable call.
+          const precacheAndWait = async (url: string): Promise<void> => {
+            const controller = await getController();
+            if (!controller) {
+              // SW not available — fall back to direct fetch so the page is at least downloaded
+              await fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'text/html' } }).catch(() => {});
+              return;
+            }
+            // Use MessageChannel so we can await the SW's reply
+            await new Promise<void>((resolve) => {
+              const { port1, port2 } = new MessageChannel();
+              const timeout = setTimeout(() => resolve(), 12000); // 12s timeout per URL
+              port1.onmessage = () => { clearTimeout(timeout); resolve(); };
+              controller.postMessage({ type: 'PRECACHE_URLS', urls: [url], replyPort: port2 }, [port2]);
+            });
+          };
+
           // 1. Universal Shells (Crucial for offline fallback)
           const shells = ['/admin/proyectos/offline-shell', '/admin/operador/proyecto/offline-shell'];
           for (const shell of shells) {
-            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-              navigator.serviceWorker.controller.postMessage({ type: 'PRECACHE_URLS', urls: [shell] });
-            }
-            // v263: Explicitly pre-fetch RSC payload for shells to satisfy SW fallback
-            const shellRscUrl = `${shell}?_rsc=1`; 
-            fetch(shellRscUrl, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
-            
-            await new Promise(r => setTimeout(r, 100)); 
+            await precacheAndWait(shell);
+            fetch(`${shell}?_rsc=1`, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
+            await new Promise(r => setTimeout(r, 200));
           }
 
           // 2. Main Sections (Role-Aware)
@@ -172,18 +200,13 @@ export default function GlobalSyncWorker() {
             : ['/admin/operador', '/admin/inventario', '/admin/cotizaciones'];
 
           for (const section of sections) {
-            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-              navigator.serviceWorker.controller.postMessage({ type: 'PRECACHE_URLS', urls: [section] });
-            }
-            // Fetch RSC Payload (SW warm-cache only handles HTML)
+            await precacheAndWait(section);
             const rscUrl = section.includes('?') ? `${section}&_rsc=prefetch` : `${section}?_rsc=prefetch`;
             fetch(rscUrl, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
-
-            await new Promise(resolve => setTimeout(resolve, 300)); 
+            await new Promise(resolve => setTimeout(resolve, 300));
           }
 
-          // 3. Prioritize Top 30 Recent Projects (Full Offline Coverage)
-          // v254: Increased from 10 to 30 to ensure operators have ALL their projects cached
+          // 3. Top 30 Recent Projects — Sequential, one at a time, SW confirms each one
           if (projectsToProcess.length === 0) {
             projectsToProcess = await db.projectsCache
               .orderBy('lastAccessedAt')
@@ -192,32 +215,23 @@ export default function GlobalSyncWorker() {
               .toArray();
           }
 
-          const topProjects = projectsToProcess.slice(0, 30); 
+          const topProjects = projectsToProcess.slice(0, 30);
           for (let i = 0; i < topProjects.length; i++) {
             const p = topProjects[i];
             const projectPath = isAdmin ? `/admin/proyectos/${p.id}` : `/admin/operador/proyecto/${p.id}`;
-            
-            // v256: Added URL to logs for verification
+
             const msg = `[Sync] Pre-cacheando ${i + 1}/${topProjects.length}: ${p.title || p.id} -> ${projectPath}`;
             console.log(msg);
-            window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
-              detail: { message: msg }
-            }))
-            
-            // v258: Use the Service Worker's Warm-cache logic (PRECACHE_URLS)
-            // This is crucial because it extracts and caches JS chunks, not just the HTML.
-            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-              navigator.serviceWorker.controller.postMessage({
-                type: 'PRECACHE_URLS',
-                urls: [projectPath]
-              });
-            }
+            window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', { detail: { message: msg } }));
 
-            // Fetch RSC Payload manually (SW warm-cache only handles HTML)
-            const rscUrl = `${projectPath}?_rsc=prefetch`;
-            fetch(rscUrl, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
-            
-            await new Promise(r => setTimeout(r, 400)); // Optimized pacing for background sync
+            // v267: AWAIT the SW warm-cache (includes chunk extraction) before moving to next project
+            await precacheAndWait(projectPath);
+
+            // Also fetch RSC payload so Next.js navigation is instant offline
+            fetch(`${projectPath}?_rsc=prefetch`, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
+
+            // Pacing: gives the server time to breathe between projects
+            await new Promise(r => setTimeout(r, 800));
           }
         }
       }

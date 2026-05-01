@@ -20,6 +20,7 @@ export default function ProyectosPage() {
   const router = useRouter()
   const [projects, setProjects] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [initialCacheLoaded, setInitialCacheLoaded] = useState(false) // v267: track if we at least have cache
   const [statusFilter, setStatusFilter] = useState('ALL')
   const [searchQuery, setSearchQuery] = useState('')
   const [visibleCount, setVisibleCount] = useState(10)
@@ -65,14 +66,18 @@ export default function ProyectosPage() {
 
   useEffect(() => {
     if (isAuthorized === true) {
-      // Stale-while-revalidate: Load from cache immediately
+      // v267: Fast-path cache loading
       db.projectsCache.toArray().then(cached => {
         if (cached.length > 0) {
-          // Sort by creation date descending
           const sorted = cached.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
           setProjects(sorted)
-          setLoading(false)
         }
+        setInitialCacheLoaded(true)
+        // If we have cache, we can stop the 'full-page' loading spinner earlier
+        if (cached.length > 0) setLoading(false)
+      }).finally(() => {
+        // Safety timeout: Never stay in loading more than 3 seconds
+        setTimeout(() => setLoading(false), 3000)
       })
 
       fetchProjects()
@@ -238,7 +243,18 @@ export default function ProyectosPage() {
   // Reset pagination when filters or search change
   useEffect(() => { setVisibleCount(PAGE_SIZE) }, [statusFilter, searchQuery])
 
-  if (loading) return <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>Cargando proyectos...</div>
+  // v267: Only block with a full-page spinner if we have NO projects and we are still 'loading'
+  if (loading && projects.length === 0) {
+    return (
+      <div style={{ 
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', 
+        height: '80vh', gap: '15px', color: 'var(--text-muted)' 
+      }}>
+        <div className="spinner"></div>
+        <p style={{ fontWeight: '600', fontSize: '0.9rem' }}>Conectando con la base de datos...</p>
+      </div>
+    )
+  }
 
   return (
     <div className="p-6">

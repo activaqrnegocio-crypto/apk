@@ -1,6 +1,6 @@
 // ============================================================
-// Aquatech CRM — Custom Service Worker v201-DEPLOY-FIX
-// CLEAN: Calendar removed, deploy pipeline fixed
+// Aquatech CRM — Custom Service Worker v267
+// v267: MessageChannel reply on PRECACHE_URLS for sequential chunk caching
 // ============================================================
 const STATIC_CACHE = 'aquatech-static';
 const PAGES_CACHE  = 'aquatech-pages';
@@ -22,7 +22,7 @@ const PRE_CACHE = [
   '/cotizacion.jpg'
 ];
 
-const VERSION = 'v263';
+const VERSION = 'v267';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -785,23 +785,29 @@ self.addEventListener('message', (event) => {
   }
 
   // Warm-up pre-caching — caches responses INCLUDING redirects (except login)
+  // v267: Supports replyPort (MessageChannel) so the client can await completion per-URL.
   if (event.data && event.data.type === 'PRECACHE_URLS') {
     const urls = event.data.urls || [];
+    const replyPort = event.data.replyPort || null; // v267: MessageChannel port for client await
     console.log('[SW] Warm-up pre-caching request for', urls.length, 'URLs');
     
     event.waitUntil(
       caches.open(PAGES_CACHE).then(async (cache) => {
-        // v223: Process one by one with longer delays to prevent Nginx 502/504 saturation
         for (const url of urls) {
           try {
             // v233: Strict skip if already in cache and response is valid
             const existing = await cache.match(url);
             if (existing && existing.ok && !existing.redirected) {
+               // v267: Still reply so the client doesn't wait the full timeout
+               if (replyPort) replyPort.postMessage({ done: true, url, cached: true });
                continue;
             }
 
             // v253: Skip data URIs to avoid console errors
-            if (url.startsWith('data:')) continue;
+            if (url.startsWith('data:')) {
+              if (replyPort) replyPort.postMessage({ done: true, url, skipped: true });
+              continue;
+            }
 
             const response = await fetchWithTimeout(new Request(url, { 
               credentials: 'same-origin',
@@ -848,9 +854,14 @@ self.addEventListener('message', (event) => {
               }
             }
             
-            await new Promise(r => setTimeout(r, 600)); 
+            // v267: Reply to client AFTER processing this URL so precacheAndWait() resolves
+            if (replyPort) replyPort.postMessage({ done: true, url });
+
+            await new Promise(r => setTimeout(r, 200)); // v267: Reduced — pacing is now client-side (800ms)
           } catch (e) {
             console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
+            // v267: Reply even on failure so the client doesn't hang
+            if (replyPort) replyPort.postMessage({ done: true, url, error: true });
           }
         }
         console.log(`[SW ${VERSION}] Pre-caching sequence finished`);

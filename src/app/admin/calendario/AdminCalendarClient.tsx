@@ -28,6 +28,7 @@ export default function AdminCalendarClient({
    const [editingEvent, setEditingEvent] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false) // v267: avoid empty screen on slow network
   const saveLockRef = useRef(false)
 
   useEffect(() => {
@@ -64,8 +65,10 @@ export default function AdminCalendarClient({
           ? cached 
           : cached.filter((a: any) => a.userId === Number(selectedOperatorId))
         setAppointments(filtered)
-        setLoading(false) // Stop initial loading if we have cache
       }
+      setInitialDataLoaded(true)
+      // Safety timeout for loading spinner
+      setTimeout(() => setLoading(false), 2000)
     }
     loadInitialCache()
   }, [selectedOperatorId])
@@ -105,9 +108,9 @@ export default function AdminCalendarClient({
         setLoading(false)
       }
     } catch (error) {
-      if (retryCount < 1) {
-        console.warn('Error de red detectado. Reintentando conexión a DB en 500ms...', error)
-        setTimeout(() => fetchAppointments(silent, retryCount + 1), 500)
+      if (retryCount < 2) { // v267: 2 retries instead of 1
+        console.warn('Error de red detectado. Reintentando conexión a DB...', error)
+        setTimeout(() => fetchAppointments(silent, retryCount + 1), 1000)
         return
       }
       console.warn('Network fetch failed, staying with cache:', error)
@@ -239,7 +242,6 @@ export default function AdminCalendarClient({
              <label className="filter-label">Filtrar por Operador:</label>
              <select 
                className="form-select operator-select" 
-               value={selectedOperatorId}
                onChange={(e) => setSelectedOperatorId(e.target.value)}
              >
                <option value="all">Todos los operadores</option>
@@ -247,7 +249,15 @@ export default function AdminCalendarClient({
                  <option key={op.id} value={op.id}>{op.name}</option>
                ))}
              </select>
-             {loading && <span className="loading-text">Cargando agenda...</span>}
+             {loading && <span className="loading-text spinner-xs">Sincronizando...</span>}
+             {!loading && initialDataLoaded && (
+               <button 
+                 onClick={() => fetchAppointments()}
+                 style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '0.7rem', cursor: 'pointer', padding: '0 5px', textDecoration: 'underline' }}
+               >
+                 Actualizar
+               </button>
+             )}
           </div>
         )}
 

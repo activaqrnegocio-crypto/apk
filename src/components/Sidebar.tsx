@@ -179,7 +179,7 @@ export default function Sidebar() {
     }
 
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 10000) // Every 10 seconds
+    const interval = setInterval(fetchNotifications, 60000) // v267: 60s to reduce server load and navigation jank
     return () => clearInterval(interval)
   }, [status])
   
@@ -529,6 +529,7 @@ export default function Sidebar() {
                             <Link
                               key={subItem.href}
                               href={subItem.href}
+                              prefetch={true}
                               className={`sidebar-link ${isActive(subItem.href) ? 'active' : ''}`}
                               onClick={() => setMobileOpen(false)}
                               style={{ padding: '8px 12px', fontSize: '0.85rem' }}
@@ -545,6 +546,7 @@ export default function Sidebar() {
                   ) : (
                     <Link
                       href={item.href}
+                      prefetch={true}
                       className={`sidebar-link ${isActive(item.href) ? 'active' : ''}`}
                       onClick={() => setMobileOpen(false)}
                     >
