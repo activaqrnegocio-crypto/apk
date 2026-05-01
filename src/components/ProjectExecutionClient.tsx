@@ -73,6 +73,7 @@ export default function ProjectExecutionClient({
 
 
   // v253: Robust ID extraction
+  // v255: Ultra-robust ID extraction for mobile offline-shell
   const idFromUrl = useMemo(() => {
     if (typeof window === 'undefined') return 0;
     
@@ -89,8 +90,26 @@ export default function ProjectExecutionClient({
     // 3. Last segment fallback
     const segments = path.split('/').filter(Boolean);
     const last = segments[segments.length - 1];
-    return (last && /^\d+$/.test(last)) ? Number(last) : 0;
-  }, [pathname, searchParams]); // v254: React to changes in path or params
+    if (last && /^\d+$/.test(last)) return Number(last);
+
+    // 4. MOBILE FALLBACK: If we are in the shell, use the last remembered ID
+    if (path.includes('offline-shell') && typeof sessionStorage !== 'undefined') {
+      const stored = sessionStorage.getItem('last_viewed_project_id');
+      if (stored) {
+        console.log('[Offline] Recuperando ID de sesión para shell:', stored);
+        return Number(stored);
+      }
+    }
+
+    return 0;
+  }, [pathname, searchParams]);
+
+  // Persist the ID so the shell can find it if Next.js redirects
+  useEffect(() => {
+    if (idFromUrl > 0 && typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('last_viewed_project_id', idFromUrl.toString());
+    }
+  }, [idFromUrl]);
   
   const pendingItems = useLiveQuery(() => db.outbox.where('projectId').equals(idFromUrl).toArray(), [idFromUrl]) || []
 
