@@ -1409,6 +1409,7 @@ export default function ProjectDetailClient({ project: initialProject, available
       alert('Error al enviar el mensaje')
     } finally {
       setIsSending(false)
+      sendLockRef.current = false
     }
   }
 

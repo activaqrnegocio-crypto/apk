@@ -12,6 +12,26 @@ export default function GlobalSyncWorker() {
   const [isSyncing, setIsSyncing] = useState(false)
   const syncLock = useRef(false)
   
+  // v261: PWA Visibility Fallback (Critical for iOS/Safari)
+  // When app returns to foreground, proactively wake up the Service Worker sync
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        console.log('[Sync] App returned to focus. Triggering background sync fallback...');
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.ready.then(reg => {
+            if ('sync' in reg) {
+              // Consolidate to one registration to avoid duplicate SW wakeups
+              (reg as any).sync.register('sync-outbox').catch(() => {});
+            }
+          });
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+  
   // States for bulk cache sync (background)
   const [isBulkSyncing, setIsBulkSyncing] = useState(false)
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0 })

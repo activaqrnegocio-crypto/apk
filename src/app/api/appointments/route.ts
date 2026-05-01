@@ -65,8 +65,33 @@ export async function GET(request: Request) {
   }
 }
 
+// v261: In-memory cache for idempotency (deduplication)
+// Stores sync-id -> timestamp to avoid processing the same offline sync twice
+const processedSyncIds = new Map<string, number>();
+
+// Clean up old IDs every 10 minutes to prevent memory leaks
+if (typeof global !== 'undefined') {
+  if (!(global as any).idempotencyCleanupInterval) {
+    (global as any).idempotencyCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [id, timestamp] of processedSyncIds.entries()) {
+        if (now - timestamp > 5 * 60 * 1000) processedSyncIds.delete(id);
+      }
+    }, 10 * 60 * 1000);
+  }
+}
+
 export async function POST(request: Request) {
   try {
+    const syncId = request.headers.get('x-sync-id');
+    if (syncId) {
+      if (processedSyncIds.has(syncId)) {
+        console.log(`[Idempotency] Skipping already processed sync-id: ${syncId}`);
+        return NextResponse.json({ success: true, message: 'Already processed', isDuplicate: true }, { status: 200 });
+      }
+      processedSyncIds.set(syncId, Date.now());
+    }
+
     const session = await getServerSession(authOptions)
     if (!session) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -89,6 +114,9 @@ export async function POST(request: Request) {
     if (targetUserIds.length === 0) {
       return NextResponse.json({ error: 'Se requiere al menos un operador' }, { status: 400 })
     }
+
+    // v261: Asegurar IDs únicos para evitar duplicados accidentales
+    targetUserIds = Array.from(new Set(targetUserIds));
 
     // Non-managers can only assign to themselves
     if (!canManage) {

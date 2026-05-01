@@ -9,6 +9,7 @@ export interface OutboxItem {
   lat?: number;
   lng?: number;
   status: 'pending' | 'syncing' | 'failed' | 'synced';
+  attempts?: number;
 }
 
 export interface AuthCache {
@@ -109,6 +110,19 @@ export class OfflineDatabase extends Dexie {
     });
     this.version(11).stores({
       outbox: '++id, projectId, status, timestamp, type',
+      auth: 'id',
+      authShadow: 'id',
+      materialsCache: 'id, code, name, category',
+      clientsCache: 'id, name, ruc',
+      quotesCache: 'id, clientName, projectId',
+      projectsCache: 'id, title, lastAccessedAt',
+      appointmentsCache: 'id, projectId',
+      chatCache: 'projectId',
+      dashboardCache: 'id',
+      cacheMetadata: 'id'
+    });
+    this.version(12).stores({
+      outbox: '++id, projectId, status, timestamp, type, attempts',
       auth: 'id',
       authShadow: 'id',
       materialsCache: 'id, code, name, category',

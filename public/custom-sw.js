@@ -854,8 +854,8 @@ self.addEventListener('message', (event) => {
 
 // ─── BACKGROUND SYNC ───────────────────────────────────────────────
 self.addEventListener('sync', (event) => {
-  if (event.tag === 'sync-outbox') {
-    console.log('[SW] Background sync triggered: sync-outbox');
+  if (event.tag === 'sync-outbox' || event.tag === 'sync-TASK') {
+    console.log(`[SW] Background sync triggered: ${event.tag}`);
     event.waitUntil(processOutboxSync());
   }
 });
@@ -885,15 +885,6 @@ self.addEventListener('message', (event) => {
   if (type === 'PRECACHE_URLS' && urls && Array.isArray(urls)) {
     event.waitUntil(
       (async () => {
-        const cache = await caches.open(PAGES_CACHE);
-        for (const url of urls) {
-          try {
-            const response = await fetch(url, {
-              credentials: 'same-origin',
-              headers: { 'Cache-Control': 'no-cache', 'Accept': 'text/html' }
-            });
-            if (response.ok) {
-              await cache.put(url, response.clone());
               console.log(`[SW] Pre-cached via message: ${url}`);
             }
           } catch (e) {
@@ -914,7 +905,23 @@ function openAquatechDB() {
   });
 }
 
+let isSyncingGlobal = false;
+
 async function processOutboxSync() {
+  if (isSyncingGlobal) {
+    console.log('[SW] Sync already in progress, skipping concurrent execution.');
+    return;
+  }
+  isSyncingGlobal = true;
+  try {
+    await _internalProcessOutbox();
+  } finally {
+    isSyncingGlobal = false;
+    console.log('[SW] Global sync lock released.');
+  }
+}
+
+async function _internalProcessOutbox() {
   let db;
   try {
     db = await openAquatechDB();
@@ -941,44 +948,44 @@ async function processOutboxSync() {
       const getAllRequest = outboxStore.getAll();
 
     getAllRequest.onsuccess = async () => {
-      const items = getAllRequest.result || [];
-      const pendingItems = items.filter(i => 
-        (i.status === 'pending' || i.status === 'failed')
-      );
+    // v262: Captura atómica de items pendientes. 
+    // Usamos una transacción de escritura para marcar todos los pendientes como 'syncing' 
+    // de un solo golpe, evitando que otra instancia los reclame.
+    const pendingItems = await new Promise((res) => {
+      const tx = db.transaction(['outbox'], 'readwrite');
+      const store = tx.objectStore('outbox');
+      const getAll = store.getAll();
+      getAll.onsuccess = () => {
+        const allItems = getAll.result || [];
+        const toSync = allItems.filter(i => (i.status === 'pending' || i.status === 'failed'));
+        
+        // Marcamos todos como 'syncing' en la misma transacción
+        for (const item of toSync) {
+          const lockedItem = { ...item, status: 'syncing' };
+          store.put(lockedItem);
+        }
+        res(toSync);
+      };
+      getAll.onerror = () => res([]);
+    });
 
-      if (pendingItems.length === 0) {
-        resolve();
-        return;
+    if (pendingItems.length === 0) {
+      resolve();
+      return;
+    }
+
+    console.log(`[SW] Claimed ${pendingItems.length} items for atomic sync`);
+
+    const now = Date.now();
+    for (const item of pendingItems) {
+      // Re-verificamos el backup de reintentos
+      if (item.attempts >= 5) {
+        const hoursSinceLastAttempt = (now - (item.lastAttemptAt || item.timestamp)) / 3600000;
+        if (hoursSinceLastAttempt < 1) continue;
       }
 
-      console.log(`[SW] Found ${pendingItems.length} pending items to sync`);
-
-      const now = Date.now();
-      for (const item of pendingItems) {
-
-        // Re-check status inside a transaction to ensure it's still pending
-        const stillPending = await new Promise((res) => {
-          const tx = db.transaction(['outbox'], 'readonly');
-          const store = tx.objectStore('outbox');
-          const req = store.get(item.id);
-          req.onsuccess = () => {
-            const result = req.result;
-            res(result && (result.status === 'pending' || result.status === 'failed'));
-          };
-          req.onerror = () => res(false);
-        });
-
-        if (!stillPending) continue;
-
-        try {
-          await new Promise((res, rej) => {
-            const tx = db.transaction(['outbox'], 'readwrite');
-            const store = tx.objectStore('outbox');
-            item.status = 'syncing';
-            const req = store.put(item);
-            req.onsuccess = res;
-            req.onerror = rej;
-          });
+      try {
+        // ... el resto del bucle ya procesará los items marcados como syncing
 
           let endpoint = '';
           let method = 'POST';
@@ -1128,7 +1135,10 @@ async function processOutboxSync() {
           if (endpoint) {
             const res = await fetch(endpoint, {
               method,
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 
+                'Content-Type': 'application/json',
+                'x-sync-id': `sync-${item.id}-${item.timestamp}` // v261: Idempotency Key
+              },
               credentials: 'same-origin',
               body: JSON.stringify({ 
                 ...finalPayload, 
@@ -1157,9 +1167,13 @@ async function processOutboxSync() {
             const txError = db.transaction(['outbox'], 'readwrite');
             const storeError = txError.objectStore('outbox');
             item.status = 'failed';
+            item.attempts = (item.attempts || 0) + 1;
+            item.lastAttemptAt = Date.now();
             storeError.put(item).onsuccess = res;
           });
         }
+        // v261: Pacing delay between items to prevent server saturation
+        await new Promise(r => setTimeout(r, 500));
       }
       resolve();
     };

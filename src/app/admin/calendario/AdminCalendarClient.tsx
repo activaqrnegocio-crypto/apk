@@ -139,23 +139,24 @@ export default function AdminCalendarClient({
     return () => window.removeEventListener('calendar-refresh', handleRefresh)
   }, [selectedOperatorId])
 
-   const handleSaveAppointment = async (data: any) => {
+  const handleSaveAppointment = async (data: any) => {
     if (isSaving || saveLockRef.current) return
     saveLockRef.current = true
     setIsSaving(true)
-    const isNew = !data.id
-    const url = isNew ? '/api/appointments' : `/api/appointments/${data.id}`
-    const method = isNew ? 'POST' : 'PATCH'
 
-    // Build payload — include userIds for multi-assignment on create
-    const payload: any = { ...data }
-    if (isNew && data.userIds && Array.isArray(data.userIds)) {
-      payload.userIds = data.userIds
-    }
+    try {
+      const isNew = !data.id
+      const url = isNew ? '/api/appointments' : `/api/appointments/${data.id}`
+      const method = isNew ? 'POST' : 'PATCH'
 
-    // Offline interceptor
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      try {
+      // Build payload — include userIds for multi-assignment on create
+      const payload: any = { ...data }
+      if (isNew && data.userIds && Array.isArray(data.userIds)) {
+        payload.userIds = data.userIds
+      }
+
+      // Offline interceptor
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
         await db.outbox.add({
           type: 'TASK',
           projectId: Number(payload.projectId) || 0,
@@ -177,24 +178,27 @@ export default function AdminCalendarClient({
 
         alert('Tarea guardada localmente. Se sincronizará y notificará a los operadores cuando vuelvas a tener internet.')
         return
-      } catch (err) {
-        console.error('Error saving task offline:', err)
-        alert('Error al guardar localmente')
-        return
       }
-    }
 
-     const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    })
-    if (res.ok) {
-      setIsModalOpen(false)
-      fetchAppointments()
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      
+      if (res.ok) {
+        setIsModalOpen(false)
+        fetchAppointments()
+      } else {
+        alert('Error al guardar en el servidor')
+      }
+    } catch (err) {
+      console.error('Error saving task:', err)
+      alert('Error crítico al guardar la tarea')
+    } finally {
+      setIsSaving(false)
+      saveLockRef.current = false
     }
-    setIsSaving(false)
-    saveLockRef.current = false
   }
 
   const handleDeleteAppointment = async (id: number) => {

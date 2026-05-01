@@ -151,6 +151,7 @@ export default function AppointmentModal({
 
   const [isRecording, setIsRecording] = useState(false)
   const recognitionRef = useRef<any>(null)
+  const saveLockRef = useRef(false) // v261: Lock para evitar doble envío
 
   // Cleanup recognition on unmount or modal close
   useEffect(() => {
@@ -347,20 +348,34 @@ export default function AppointmentModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const start = new Date(formData.startTime)
-    const end = new Date(formData.endTime)
-    if (end <= start) { alert('Error: La fecha de fin debe ser posterior.'); return; }
-
-    let targetUserIds = getTargetUserIds()
-    // Fallback if empty and we have a valid userId prop (especially for operators offline)
-    if (targetUserIds.length === 0 && userId > 0) {
-      targetUserIds = [userId]
-    }
     
-    if (targetUserIds.length === 0) { alert('Selecciona al menos un operador.'); return; }
-
+    // v261: Lock instantáneo antes de cualquier proceso async
+    if (saveLockRef.current || loading) return
+    saveLockRef.current = true
     setLoading(true)
+
     try {
+      const start = new Date(formData.startTime)
+      const end = new Date(formData.endTime)
+      if (end <= start) { 
+        alert('Error: La fecha de fin debe ser posterior.'); 
+        saveLockRef.current = false;
+        setLoading(false);
+        return; 
+      }
+
+      let targetUserIds = getTargetUserIds()
+      if (targetUserIds.length === 0 && userId > 0) {
+        targetUserIds = [userId]
+      }
+      
+      if (targetUserIds.length === 0) { 
+        alert('Selecciona al menos un operador.'); 
+        saveLockRef.current = false;
+        setLoading(false);
+        return; 
+      }
+
       let realFiles: any[] = []
       let linkFiles: any[] = []
 
@@ -369,26 +384,29 @@ export default function AppointmentModal({
         realFiles = result.realFiles
         linkFiles = result.linkFiles
       } else {
-        // Offline: Convert files to base64 for outbox
+        // Offline: Compress images and convert files to base64 for outbox
         for (const file of formData.mediaFiles) {
+          // v262: Comprimir imagen antes de guardar en outbox (corrige error .heic)
+          const compressedFile = await compressImage(file);
+          
           const base64 = await new Promise<string>((resolve) => {
             const reader = new FileReader()
             reader.onload = () => resolve(reader.result as string)
-            reader.readAsDataURL(file)
+            reader.readAsDataURL(compressedFile)
           })
           
-          const ext = file.name.split('.').pop()?.toLowerCase() || '';
-          const isVideo = file.type.startsWith('video/') || ['mp4', 'mov', 'webm'].includes(ext);
-          const isAudio = file.type.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext);
-          const isImage = file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+          const ext = compressedFile.name.split('.').pop()?.toLowerCase() || '';
+          const isVideo = compressedFile.type.startsWith('video/') || ['mp4', 'mov', 'webm'].includes(ext);
+          const isAudio = compressedFile.type.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(ext);
+          const isImage = compressedFile.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
 
           if (isVideo) {
-            linkFiles.push({ type: 'video', name: file.name, url: base64, isOffline: true })
+            linkFiles.push({ type: 'video', name: compressedFile.name, url: base64, isOffline: true })
           } else {
             let mediaType = 'document'
             if (isImage) mediaType = 'image'
             if (isAudio) mediaType = 'audio'
-            realFiles.push({ type: mediaType, name: file.name, data: base64, isOffline: true })
+            realFiles.push({ type: mediaType, name: compressedFile.name, data: base64, isOffline: true })
           }
         }
       }
@@ -426,6 +444,7 @@ export default function AppointmentModal({
       console.error('Error:', error)
       alert('Error al guardar')
     } finally {
+      saveLockRef.current = false
       setLoading(false)
     }
   }
