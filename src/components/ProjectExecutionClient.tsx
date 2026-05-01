@@ -111,6 +111,24 @@ export default function ProjectExecutionClient({
     return 0;
   }, [pathname, searchParams]);
 
+  // v261: Helper to wake up SW and register background sync
+  const triggerBackgroundSync = async () => {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        if ('sync' in reg) {
+          await (reg as any).sync.register('sync-outbox');
+          console.log('[Sync] Registered SW sync from ProjectExecution');
+        }
+        if (navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC' });
+        }
+      } catch (e) {
+        console.warn('Background sync registration failed:', e);
+      }
+    }
+  };
+
   // Persist the ID so the shell can find it if Next.js redirects
   useEffect(() => {
     if (idFromUrl > 0 && typeof sessionStorage !== 'undefined') {
@@ -218,6 +236,7 @@ export default function ProjectExecutionClient({
         
         setLocalTeam(newTeam)
         setIsEditingTeam(false)
+        triggerBackgroundSync()
         return
       }
 
@@ -271,6 +290,7 @@ export default function ProjectExecutionClient({
           timestamp: Date.now(),
           status: 'pending'
         })
+        triggerBackgroundSync()
         return
       } catch (e) {
         console.error('Error saving offline deletion:', e)
@@ -715,6 +735,7 @@ export default function ProjectExecutionClient({
           lng: location?.lng,
           status: 'pending'
         })
+        triggerBackgroundSync()
         setLoading(false)
         return
       }
@@ -742,6 +763,7 @@ export default function ProjectExecutionClient({
           lng: location?.lng,
           status: 'pending'
         })
+        triggerBackgroundSync()
       }
     } catch (e) {
       console.error(e)
@@ -808,6 +830,7 @@ export default function ProjectExecutionClient({
             lng: location?.lng,
             status: 'pending'
           })
+          triggerBackgroundSync()
           return
         }
 
@@ -838,6 +861,7 @@ export default function ProjectExecutionClient({
             lng: location?.lng,
             status: 'pending'
           })
+          triggerBackgroundSync()
         }
       } catch (e) {
         console.error("Background expense error:", e)
@@ -869,6 +893,7 @@ export default function ProjectExecutionClient({
           lng: undefined,
           status: 'pending'
         })
+        triggerBackgroundSync()
         if (typeof navigator !== 'undefined' && navigator.onLine) {
        router.refresh()
      }
@@ -1049,6 +1074,7 @@ export default function ProjectExecutionClient({
          
          // Remove ephemeral optimistic msg and let pendingItems (useLiveQuery) take over
          setLiveChat(prev => prev.filter(m => m.id !== tempId))
+         triggerBackgroundSync()
          return
       }
 
@@ -1207,6 +1233,7 @@ export default function ProjectExecutionClient({
           status: 'pending'
         })
         setLoading(false)
+        triggerBackgroundSync()
         return
       }
 
@@ -1235,6 +1262,7 @@ export default function ProjectExecutionClient({
           lng: location?.lng,
           status: 'pending'
         })
+        triggerBackgroundSync()
       }
     } catch (e) {
       console.error(e)
@@ -1567,6 +1595,7 @@ export default function ProjectExecutionClient({
           status: 'pending'
         })
         setLocalExpenses(prev => prev.filter(e => e.id !== expenseId))
+        triggerBackgroundSync()
         return
       }
 
@@ -1604,6 +1633,7 @@ export default function ProjectExecutionClient({
         setLocalExpenses(prev => prev.map(ex => ex.id === editingExpense.id ? { ...ex, ...payload } : ex))
         setIsExpenseModalOpen(false)
         setEditingExpense(null)
+        triggerBackgroundSync()
         return
       }
 

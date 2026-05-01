@@ -73,6 +73,24 @@ export default function ProjectDetailClient({ project: initialProject, available
 
     return 0;
   }, []);
+
+  // v261: Helper to wake up SW and register background sync
+  const triggerBackgroundSync = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        if ('sync' in reg) {
+          await (reg as any).sync.register('sync-outbox');
+          console.log('[Sync] Registered SW sync from ProjectDetail');
+        }
+        if (navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC' });
+        }
+      } catch (e) {
+        console.warn('Background sync registration failed:', e);
+      }
+    }
+  }, []);
   const [localProject, setLocalProject] = useState<any>(null);
   const [cacheNotFound, setCacheNotFound] = useState(false);
   const project = localProject || initialProject;
@@ -618,6 +636,7 @@ export default function ProjectDetailClient({ project: initialProject, available
           status: 'pending'
         })
         // v260: Don't remove from state — let isPendingDelete overlay show the clock icon
+        triggerBackgroundSync()
         return
       } catch (e) {
         console.error('Error saving offline deletion:', e)
@@ -678,6 +697,7 @@ export default function ProjectDetailClient({ project: initialProject, available
         setIsEditingFicha(false)
         // Local state update
         setLocalProject((prev: any) => ({ ...prev, ...fichaPayload, client: fichaPayload.client }))
+        triggerBackgroundSync()
         return
       } catch (e) {
         console.error('Error saving offline ficha:', e)
@@ -824,6 +844,7 @@ export default function ProjectDetailClient({ project: initialProject, available
           date: new Date().toISOString().split('T')[0]
         })
         setIsExpenseModalOpen(false)
+        triggerBackgroundSync() // v261: Ensure SW wakes up for expense sync
         return
       } catch (e) {
         console.error('Error saving offline expense:', e)
@@ -876,6 +897,7 @@ export default function ProjectDetailClient({ project: initialProject, available
         })
         setIsEditingBudget(false)
         setLocalProject((prev: any) => ({ ...prev, estimatedBudget: Number(editBudget) }))
+        triggerBackgroundSync()
         return
       }
 
@@ -927,6 +949,7 @@ export default function ProjectDetailClient({ project: initialProject, available
           })
           
           setIsUploading(false)
+          triggerBackgroundSync() // v261: Critical for media/gallery background sync
           return
        } catch (e) {
           console.error('Error saving offline gallery item:', e)
@@ -1060,6 +1083,7 @@ export default function ProjectDetailClient({ project: initialProject, available
       console.error('Error saving phases:', e)
     } finally {
       setIsSavingPhases(false)
+      triggerBackgroundSync() // v261: Always trigger sync attempt after phase update
     }
   }
 
@@ -1088,6 +1112,7 @@ export default function ProjectDetailClient({ project: initialProject, available
         }));
         
         setIsEditingTeam(false)
+        triggerBackgroundSync() // v261: Ensure SW wakes up for background sync
         return
       }
 
