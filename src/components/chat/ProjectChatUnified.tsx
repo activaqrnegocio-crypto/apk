@@ -132,18 +132,10 @@ export default function ProjectChatUnified({
       }
     })
 
-    // Include gallery items if project exists
-    const galleryItems = (project?.gallery || []).map((g: any) => ({
-      ...g,
-      type: g.type === 'IMAGE' ? 'IMAGES' : g.type === 'VIDEO' ? 'VIDEOS' : g.type === 'AUDIO' ? 'AUDIOS' : 'DOCS',
-      timestamp: g.createdAt || new Date().toISOString(),
-      sender: 'Sistema (Ficha)'
-    }))
-
-    return [...list, ...galleryItems].sort((a, b) => 
+    return list.sort((a, b) => 
       new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
     )
-  }, [messages, project?.gallery])
+  }, [messages])
 
   const evidenceGallery = useMemo(() => {
     if (!project?.gallery) return []
@@ -774,7 +766,8 @@ export default function ProjectChatUnified({
                       backgroundColor: filesFilter === f ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
                       color: filesFilter === f ? 'white' : 'var(--text-muted)',
                       border: 'none',
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      flexShrink: 0
                     }}
                   >
                     {f === 'ALL' ? 'Todo' : f === 'IMAGES' ? 'Fotos' : f === 'VIDEOS' ? 'Videos' : f === 'AUDIOS' ? 'Audio' : f === 'DOCS' ? 'Docs' : 'Gastos'}
@@ -796,9 +789,20 @@ export default function ProjectChatUnified({
                           mimeType: media.mimeType || (
                             media.type === 'IMAGES' ? 'image/jpeg' : 
                             media.type === 'VIDEOS' ? 'video/mp4' : 
-                            media.type === 'AUDIOS' ? 'audio/mpeg' : 'application/octet-stream'
+                            media.type === 'AUDIOS' ? 'audio/mpeg' : 
+                            media.type === 'EXPENSES' ? 'image/jpeg' : 'application/octet-stream'
                           )
                         };
+                        
+                        if (media.type === 'DOCS' && previewItem.url) {
+                          window.open(previewItem.url, '_blank');
+                          return;
+                        }
+                        
+                        if (media.type === 'EXPENSES' && !previewItem.url) {
+                          return; // Can't preview an expense without a receipt image
+                        }
+                        
                         setSelectedPreviewMedia(previewItem);
                       }}
                       style={{ 
@@ -829,11 +833,25 @@ export default function ProjectChatUnified({
                            <span style={{ fontSize: '2rem' }}>🎵</span>
                            <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>Audio</span>
                         </div>
+                      ) : media.type === 'EXPENSES' ? (
+                        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', padding: '10px', background: 'var(--bg-card)', position: 'relative' }}>
+                          <span style={{ fontSize: '1rem', fontWeight: 'bold', color: '#10b981', zIndex: 2, textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+                            ${Number(media.amount || 0).toFixed(2)}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', flex: 1, overflow: 'hidden', zIndex: 2, textShadow: '0 1px 2px rgba(0,0,0,0.8)', color: 'white' }}>
+                            {media.filename}
+                          </span>
+                          {media.url && (
+                            <div style={{ position: 'absolute', inset: 0, opacity: 0.5, zIndex: 1 }}>
+                              <img src={media.url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Recibo"/>
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px', textAlign: 'center' }}>
                            <span style={{ fontSize: '2rem' }}>📄</span>
                            <span style={{ fontSize: '0.65rem', opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                             {media.name || 'Documento'}
+                             {media.name || media.filename || 'Documento'}
                            </span>
                         </div>
                       )}

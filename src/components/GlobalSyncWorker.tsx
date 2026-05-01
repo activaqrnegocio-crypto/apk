@@ -14,6 +14,7 @@ export default function GlobalSyncWorker() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
   const [isSyncing, setIsSyncing] = useState(false)
   const syncLock = useRef(false)
+  const outboxLock = useRef(false) // v272: Separate lock — outbox sync must NEVER be blocked by bulk sync
   
   // v261: PWA Visibility Fallback (Critical for iOS/Safari)
   // When app returns to foreground, proactively wake up the Service Worker sync
@@ -227,11 +228,9 @@ export default function GlobalSyncWorker() {
             // v267: AWAIT the SW warm-cache (includes chunk extraction) before moving to next project
             await precacheAndWait(projectPath);
 
-            // Also fetch RSC payload so Next.js navigation is instant offline
-            fetch(`${projectPath}?_rsc=prefetch`, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
-
-            // Pacing: gives the server time to breathe between projects
-            await new Promise(r => setTimeout(r, 800));
+            // v271: Removed Next.js RSC fetch. Offline relies entirely on Dexie + offline-shell now.
+            // This prevents 502 DB Exhaustion on the VPS.
+            await new Promise(r => setTimeout(r, 200));
           }
         }
       }
@@ -310,43 +309,38 @@ export default function GlobalSyncWorker() {
     }
   }, [session])
   
-  // Cleanup stuck 'syncing' items on startup (prevents permanent orphaned items)
-  useEffect(() => {
-    const cleanupStuckItems = async () => {
-      try {
-        const stuckItems = await db.outbox.where('status').equals('syncing').toArray();
-        if (stuckItems.length > 0) {
-          console.log(`[Sync] Reseteando ${stuckItems.length} elementos bloqueados a 'pending'...`);
-          for (const item of stuckItems) {
-            await db.outbox.update(item.id!, { status: 'pending' });
-          }
-        }
-      } catch (err) {
-        console.error('[Sync] Error en limpieza de outbox:', err);
-      }
-    };
-    cleanupStuckItems();
-  }, []);
-
   const syncOutbox = async () => {
-    if (typeof window === 'undefined' || !navigator.onLine || syncLock.current) return
+    if (typeof window === 'undefined' || !navigator.onLine || outboxLock.current) return
     
-    // 1. Cross-tab and remount lock
+    // v272: Reset stuck 'syncing' items every cycle (not just on mount)
+    try {
+      const stuckItems = await db.outbox.where('status').equals('syncing').toArray();
+      const now = Date.now();
+      for (const item of stuckItems) {
+        const stuckTime = now - (item.lastAttemptAt || item.timestamp || 0);
+        if (stuckTime > 30000) { // Stuck for more than 30 seconds
+          console.log(`[Sync] Reseteando elemento bloqueado ${item.id} (${item.type}) a 'pending'`);
+          await db.outbox.update(item.id!, { status: 'pending' });
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    // Cross-tab and remount lock
     const now = Date.now()
-    if (now - lastSyncExecution < 10000) {
-      // Throttle: don't sync more than once every 10 seconds per tab session
+    if (now - lastSyncExecution < 5000) {
+      // v272: Reduced throttle from 10s to 5s for faster retry
       return
     }
 
     const lastSyncStart = localStorage.getItem('global_sync_lock')
-    if (lastSyncStart && (now - Number(lastSyncStart)) < 60000) {
-      // A sync is likely running in another tab (60s safety timeout)
+    if (lastSyncStart && (now - Number(lastSyncStart)) < 30000) {
+      // v272: Reduced cross-tab lock from 60s to 30s
       return
     }
     localStorage.setItem('global_sync_lock', String(now))
     lastSyncExecution = now;
 
-    syncLock.current = true
+    outboxLock.current = true
     try {
       const items = await db.outbox
         .where('status')
@@ -360,9 +354,21 @@ export default function GlobalSyncWorker() {
 
       console.log(`[Sync] Processing ${items.length} items from outbox...`);
 
+      // v272: Sort chronologically (FIFO) — critical for dependency order
+      // DAY_START must sync before EXPENSE/MESSAGE, PROJECT before PHASE_CREATE, etc.
+      items.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
       let hasSyncedAnything = false
+      const failedContexts = new Set<string>(); // v272: Track failed projects/contexts
 
       for (const item of items) {
+        // v272: If a previous item for this project failed, skip dependents
+        const ctx = item.projectId ? `proj-${item.projectId}` : (item.type === 'DAY_START' || item.type === 'DAY_END' ? 'day-record' : null);
+        if (ctx && failedContexts.has(ctx)) {
+          console.log(`[Sync] Skipping ${item.type} — earlier dependency for ${ctx} failed`);
+          continue;
+        }
+
         // Double check status hasn't changed by another process (sanity check)
         const currentItem = await db.outbox.get(item.id!)
         if (!currentItem || currentItem.status === 'syncing') continue
@@ -560,6 +566,7 @@ export default function GlobalSyncWorker() {
                const status = res.status
                if (status === 401 || status === 429) {
                  // Unauthorized or rate limited -> keep pending and retry later
+                 if (ctx) failedContexts.add(ctx); // v272: block dependents
                  await db.outbox.update(item.id!, { status: 'pending' })
                } else if (status >= 400 && status < 500) {
                  // Permanent client error (400, 403, 404) -> Drop it so it doesn't loop forever
@@ -567,6 +574,7 @@ export default function GlobalSyncWorker() {
                  await db.outbox.delete(item.id!)
                } else {
                  // Server errors (500+) -> mark as failed and increment attempts
+                 if (ctx) failedContexts.add(ctx); // v272: block dependents
                  await db.outbox.update(item.id!, { 
                    status: 'failed',
                    attempts: (item.attempts || 0) + 1,
@@ -579,6 +587,8 @@ export default function GlobalSyncWorker() {
           // v261: Pacing delay to prevent server saturation and race conditions
           await new Promise(r => setTimeout(r, 500));
        } catch (e) {
+          // v272: Mark context as failed so dependents are skipped
+          if (ctx) failedContexts.add(ctx);
           await db.outbox.update(item.id!, { 
             status: 'pending',
             attempts: (item.attempts || 0) + 1,
@@ -591,7 +601,7 @@ export default function GlobalSyncWorker() {
       router.refresh()
     }
     } finally {
-      syncLock.current = false
+      outboxLock.current = false
       localStorage.removeItem('global_sync_lock')
     }
   }
@@ -685,9 +695,10 @@ export default function GlobalSyncWorker() {
     
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible' && typeof navigator !== 'undefined' && navigator.onLine) {
+        // v272: Always call syncOutbox regardless of syncLock (uses its own outboxLock)
+        console.log('[Sync] App visible and online, checking for fresh data...');
+        syncOutbox()
         if (!syncLock.current) {
-          console.log('[Sync] App visible and online, checking for fresh data...');
-          syncOutbox()
           startBulkSync()
         }
       } else if (document.visibilityState === 'hidden') {

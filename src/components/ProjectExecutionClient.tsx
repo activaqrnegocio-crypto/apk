@@ -2394,9 +2394,9 @@ export default function ProjectExecutionClient({
                         const getCleanType = (mime: string, url: string) => {
                           if (mime === 'application/octet-stream' || !mime) {
                             const ext = url.split('.').pop()?.toLowerCase();
-                            if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) return 'image/jpeg';
-                            if (['mp4', 'mov', 'webm'].includes(ext || '')) return 'video/mp4';
-                            if (['mp3', 'wav', 'ogg', 'm4a'].includes(ext || '')) return 'audio/mpeg';
+                            if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'svg'].includes(ext || '')) return 'image/jpeg';
+                            if (['mp4', 'mov', 'webm', '3gp', 'm4v', 'avi'].includes(ext || '')) return 'video/mp4';
+                            if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext || '')) return 'audio/mpeg';
                           }
                           return mime;
                         };
@@ -2747,9 +2747,9 @@ export default function ProjectExecutionClient({
           if (mime === 'application/octet-stream' || !mime.includes('/')) {
             const urlPath = item.url ? item.url.split('?')[0] : '';
             const ext = urlPath.split('.').pop()?.toLowerCase();
-            if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) return 'image/jpeg';
-            if (['mp4', 'mov', 'webm'].includes(ext || '')) return 'video/mp4';
-            if (['mp3', 'wav', 'ogg', 'm4a'].includes(ext || '')) return 'audio/mpeg';
+            if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'svg'].includes(ext || '')) return 'image/jpeg';
+            if (['mp4', 'mov', 'webm', '3gp', 'm4v', 'avi'].includes(ext || '')) return 'video/mp4';
+            if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext || '')) return 'audio/mpeg';
           }
           return mime.toLowerCase();
         };
@@ -2802,13 +2802,16 @@ export default function ProjectExecutionClient({
                 />
               ) : isVideo ? (
                 <video 
-                  src={selectedPreviewImage.url} 
+                  src={selectedPreviewImage.url}
                   controls 
                   autoPlay 
                   playsInline
+                  preload="metadata"
                   style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: '8px', outline: 'none' }}
                   onClick={(e) => e.stopPropagation()}
-                />
+                >
+                  Tu navegador no soporta el video.
+                </video>
               ) : isAudio ? (
                 <div 
                   style={{ backgroundColor: 'var(--bg-card)', padding: '40px', borderRadius: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', width: '100%', maxWidth: '400px', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }}

@@ -325,11 +325,12 @@ export default function Sidebar() {
 
   // Efectos (Después de useMemo)
   useEffect(() => {
+    let isMounted = true;
     const fetchNotifications = async () => {
       if (document.visibilityState !== 'visible' || (typeof navigator !== 'undefined' && !navigator.onLine)) return
       try {
         const resp = await fetch('/api/notifications/summary')
-        if (resp.ok) {
+        if (resp.ok && isMounted) {
           const data = await resp.json()
           setNotifications(data)
         }
@@ -339,8 +340,8 @@ export default function Sidebar() {
     }
 
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 60000)
-    return () => clearInterval(interval)
+    // v271: Removed aggressive setInterval to prevent 502 Server Exhaustion
+    return () => { isMounted = false; }
   }, [status])
   
   useEffect(() => {

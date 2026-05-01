@@ -1,6 +1,6 @@
 // ============================================================
-// Aquatech CRM — Custom Service Worker v269
-// v269: Added /admin/calendario to critical fast-track routes
+// Aquatech CRM — Custom Service Worker v272
+// v272: Fix Outbox Sync Deadlock
 // ============================================================
 const STATIC_CACHE = 'aquatech-static';
 const PAGES_CACHE  = 'aquatech-pages';
@@ -22,7 +22,7 @@ const PRE_CACHE = [
   '/cotizacion.jpg'
 ];
 
-const VERSION = 'v270';
+const VERSION = 'v272';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -944,14 +944,44 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
 
   return new Promise((resolve, reject) => {
     // Evitar race condition: Si la app está abierta, GlobalSyncWorker se encargará
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
-      // v268: If FORCED, we bypass the "app is focused" check to ensure data goes up NOW.
-      const isAppActivelyUsed = windowClients.some(client => client.visibilityState === 'visible' && client.focused);
-      if (isAppActivelyUsed && !isForced) {
-        console.log('[SW] Pestaña activa y enfocada detectada. Delegando sync a GlobalSyncWorker.');
-        resolve();
-        return;
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (windowClients) => {
+      // v272: Always process outbox items even if app is visible.
+      // The previous "delegate to GlobalSyncWorker" logic caused a deadlock
+      // because GlobalSyncWorker's syncOutbox was blocked by startBulkSync's syncLock.
+      const isAppActive = windowClients.some(client => client.visibilityState === 'visible');
+      if (isAppActive && !isForced) {
+        console.log('[SW] App is visible but processing outbox anyway (v272 fix).');
       }
+
+      // v272: Reset items stuck in 'syncing' for more than 2 minutes (sequential)
+      await new Promise((resolveReset) => {
+        try {
+          const resetTx = db.transaction(['outbox'], 'readwrite');
+          const resetStore = resetTx.objectStore('outbox');
+          const resetGetAll = resetStore.getAll();
+          resetGetAll.onsuccess = () => {
+            const allItems = resetGetAll.result || [];
+            const now = Date.now();
+            let resetCount = 0;
+            for (const item of allItems) {
+              if (item.status === 'syncing') {
+                const stuckTime = now - (item.lastAttemptAt || item.timestamp || 0);
+                if (stuckTime > 120000) { // 2 minutes
+                  console.log(`[SW] Resetting stuck item ${item.id} (${item.type}) from 'syncing' to 'pending'`);
+                  item.status = 'pending';
+                  resetStore.put(item);
+                  resetCount++;
+                }
+              }
+            }
+            if (resetCount > 0) console.log(`[SW] Reset ${resetCount} stuck items`);
+          };
+          resetTx.oncomplete = () => resolveReset();
+          resetTx.onerror = () => resolveReset();
+        } catch (e) {
+          resolveReset();
+        }
+      });
 
       const transaction = db.transaction(['outbox'], 'readwrite');
       const outboxStore = transaction.objectStore('outbox');
@@ -974,6 +1004,9 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           toSync = toSync.filter(i => i.type === specificType);
         }
         
+        // v272: Sort chronologically (FIFO) for dependency order
+        toSync.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        
         // Marcamos todos como 'syncing' en la misma transacción
         for (const item of toSync) {
           const lockedItem = { ...item, status: 'syncing' };
@@ -989,10 +1022,20 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       return;
     }
 
-    console.log(`[SW] Claimed ${pendingItems.length} items for atomic sync`);
+    console.log(`[SW] Claimed ${pendingItems.length} items for atomic sync (FIFO order)`);
 
     const now = Date.now();
+    const failedContexts = new Set(); // v272: Track failed projects
     for (const item of pendingItems) {
+      // v272: Skip items whose project/context already failed
+      const ctx = item.projectId ? `proj-${item.projectId}` : ((item.type === 'DAY_START' || item.type === 'DAY_END') ? 'day-record' : null);
+      if (ctx && failedContexts.has(ctx)) {
+        console.log(`[SW] Skipping ${item.type} — earlier dependency for ${ctx} failed`);
+        // Reset to pending so it retries next cycle
+        await new Promise(r => { const tx = db.transaction(['outbox'], 'readwrite'); tx.objectStore('outbox').put({...item, status: 'pending'}).onsuccess = r; });
+        continue;
+      }
+
       // Re-verificamos el backup de reintentos
       if (item.attempts >= 5) {
         const hoursSinceLastAttempt = (now - (item.lastAttemptAt || item.timestamp)) / 3600000;
@@ -1178,6 +1221,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           }
         } catch (e) {
           console.error(`[SW] Failed to sync item ${item.id}:`, e);
+          // v272: Mark context as failed so dependents are skipped
+          if (ctx) failedContexts.add(ctx);
           await new Promise((res) => {
             const txError = db.transaction(['outbox'], 'readwrite');
             const storeError = txError.objectStore('outbox');
