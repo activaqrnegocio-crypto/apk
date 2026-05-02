@@ -30,7 +30,7 @@ const PRE_CACHE = [
   'https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,300;1,400&display=swap'
 ];
 
-const VERSION = 'v287';
+const VERSION = 'v288';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -44,13 +44,7 @@ function cleanResponse(response) {
 }
 
 // ─── INSTALL ────────────────────────────────────────────────
-// v278: Periodic Sync support for background consistency
-self.addEventListener('periodicsync', (event) => {
-  if (event.tag === 'sync-outbox') {
-    console.log('[SW] Periodic Sync triggered');
-    event.waitUntil(processOutboxSync(false));
-  }
-});
+
 
 self.addEventListener('install', (event) => {
   console.log(`[SW ${VERSION}] Installing...`);
@@ -202,10 +196,14 @@ self.addEventListener('fetch', (event) => {
   if (isRSC) {
     // v286: Use SWR for routes that are role-exclusive or critical for speed.
     // This makes project navigation INSTANT.
-    const isAdminOnlyRoute = url.pathname === '/admin/proyectos' || 
-                             url.pathname === '/admin/calendario' ||
-                             url.pathname.match(/\/admin\/proyectos\/\d+/);
-    const isOperatorOnlyRoute = url.pathname.startsWith('/admin/operador');
+    const isAdminOnlyRoute = url.pathname.startsWith('/admin/proyectos') || 
+                             url.pathname.startsWith('/admin/calendario') ||
+                             url.pathname.startsWith('/admin/inventario') ||
+                             url.pathname.startsWith('/admin/cotizaciones') ||
+                             url.pathname.startsWith('/admin/blog') ||
+                             url.pathname === '/admin';
+    const isOperatorOnlyRoute = url.pathname.startsWith('/admin/operador') || 
+                                url.pathname.startsWith('/operador');
     
     if (isAdminOnlyRoute || isOperatorOnlyRoute) {
       event.respondWith(rscStaleWhileRevalidate(request));
@@ -304,11 +302,11 @@ async function rscNetworkFirst(request) {
       };
 
       if (isAdminProjectRsc) {
-        console.log(`[SW ${VERSION}] RSC Cache miss for admin project, serving Universal RSC Shell...`);
+        // console.log(`[SW ${VERSION}] RSC Cache miss for admin project, serving Universal RSC Shell...`);
         const shellMatch = await findShellInAllCaches('/admin/proyectos/offline-shell');
         if (shellMatch) return shellMatch;
       } else if (isOperatorProjectRsc) {
-        console.log(`[SW ${VERSION}] RSC Cache miss for operator project, serving Universal RSC Shell...`);
+        // console.log(`[SW ${VERSION}] RSC Cache miss for operator project, serving Universal RSC Shell...`);
         const shellMatch = await findShellInAllCaches('/admin/operador/proyecto/offline-shell');
         if (shellMatch) return shellMatch;
       }
@@ -342,7 +340,7 @@ async function rscStaleWhileRevalidate(request) {
   }).catch(() => null);
 
   if (cached) {
-    console.log(`[SW ${VERSION}] Serving RSC from cache (SWR):`, url.pathname);
+    // console.log(`[SW ${VERSION}] Serving RSC from cache (SWR):`, url.pathname);
     return cached;
   }
 
@@ -370,7 +368,7 @@ async function rscStaleWhileRevalidate(request) {
       };
 
       const shellPath = isAdminProjectRsc ? '/admin/proyectos/offline-shell' : '/admin/operador/proyecto/offline-shell';
-      console.log(`[SW ${VERSION}] RSC SWR Cache miss for project, serving Universal RSC Shell...`);
+      // console.log(`[SW ${VERSION}] RSC SWR Cache miss for project, serving Universal RSC Shell...`);
       const shellMatch = await findShellInAllCaches(shellPath);
       if (shellMatch) return shellMatch;
     }
@@ -397,7 +395,7 @@ async function navigationHandler(request) {
     // The 15s timeout below is enough to handle slow network redirects without breaking offline mode.
     const isLoginPage = url.pathname === '/admin/login' || url.pathname === '/admin/login/';
     if (isLoginPage) {
-      console.log(`[SW ${VERSION}] Login detected, bypassing SW completely`);
+      // console.log(`[SW ${VERSION}] Login detected, bypassing SW completely`);
       return fetch(request);
     }
 
@@ -409,7 +407,7 @@ async function navigationHandler(request) {
 
     
     if (isProject || isOperatorDashboard || isCalendar) {
-      console.log(`[SW ${VERSION}] Fast-track route detected, looking for direct cache match...`);
+      // console.log(`[SW ${VERSION}] Fast-track route detected, looking for direct cache match...`);
       // v284: DO NOT force serve shell yet. Just look for specific page cache.
       cached = await findCachedPage(request.url, url.pathname, false); 
     } else {
@@ -420,20 +418,20 @@ async function navigationHandler(request) {
       // Validate: don't serve cached login pages for non-login URLs
       const cachedUrl = cached.url || '';
       if (!url.pathname.includes('/login') && cachedUrl.includes('/login')) {
-        console.log('[SW] Cached response is login redirect, checking network...');
+        // console.log('[SW] Cached response is login redirect, checking network...');
         // If we are online, we skip cache and try network (to get the real page)
         // If we are offline, we MIGHT have to serve it or fallback to a shell
         if (navigator.onLine) {
           cached = null;
         } else {
-          console.log('[SW] Offline and only have redirect, trying shells...');
+          // console.log('[SW] Offline and only have redirect, trying shells...');
           // Fallback to shells before giving up
         }
       }
     }
 
     if (cached) {
-      console.log('[SW] Serving from cache:', url.pathname);
+      // console.log('[SW] Serving from cache:', url.pathname);
       // Update in background (stale-while-revalidate for pages)
       updatePageInBackground(request.clone(), url.pathname);
       return cleanResponse(cached);
@@ -457,7 +455,7 @@ async function navigationHandler(request) {
           if (response.redirected && finalUrl) {
             cache.put(finalUrl, response.clone());
           }
-          console.log('[SW] Cached page:', url.pathname);
+          // console.log('[SW] Cached page:', url.pathname);
           // v222: Increased limit to preserve project shells (300 projects + margin)
           trimCache(PAGES_CACHE, 400);
         }
@@ -474,7 +472,7 @@ async function navigationHandler(request) {
       // If it IS the absolute fallback (contains "Sin Conexión"), we only serve it if offline.
       const isAbsoluteFallback = shell.headers.get('X-SW-Fallback') === 'absolute';
       if (!isAbsoluteFallback || !navigator.onLine) {
-        console.log('[SW] Serving shell or offline fallback');
+        // console.log('[SW] Serving shell or offline fallback');
         return cleanResponse(shell);
       }
     }
@@ -670,8 +668,15 @@ async function findCachedPage(requestUrl, pathname, forceServe = false) {
       : null;
       
   if (shellRedirect) {
-    console.warn(`[SW ${VERSION}] No shell found in cache — redirecting to shell: ${shellRedirect}`);
-    return Response.redirect(shellRedirect, 302);
+    // v288: CRITICAL — STOP PHYSICAL REDIRECTS. Serve the shell content directly
+    // while keeping the original project URL. This allows the client-side recovery
+    // logic to work without losing the project ID in the URL.
+    const shellMatch = await caches.match(shellRedirect, { ignoreVary: true, ignoreSearch: true });
+    if (isValidHTMLResponse(shellMatch)) {
+      // console.log(`[SW v288] Serving shell directly for: ${pathname}`);
+      return shellMatch;
+    }
+    // console.warn(`[SW v288] Shell ${shellRedirect} not in cache, fallback to absolute.`);
   }
   
   console.warn(`[SW ${VERSION}] No shell found in cache, serving absolute memory-fallback for: ${pathname}`);
@@ -891,7 +896,9 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'PRECACHE_URLS') {
     const urls = event.data.urls || [];
     const replyPort = event.data.replyPort || null;
-    console.log('[SW] Warm-up pre-caching request for', urls.length, 'URLs');
+    const projectName = event.data.projectName || '';
+    // Silence garbage logs
+    // console.log('[SW] Warm-up pre-caching request for', urls.length, 'URLs');
     
     event.waitUntil(
       caches.open(PAGES_CACHE).then(async (cache) => {
@@ -938,11 +945,14 @@ self.addEventListener('message', (event) => {
                   
                   const assetsCache = await caches.open(ASSETS_CACHE);
                   const isShell = url.includes('offline-shell');
-                  const maxAssets = isShell ? 999 : 60; 
+                  const isAdminOrOp = url.includes('/admin/proyectos/') || url.includes('/admin/operador/proyecto/');
+                  // v288: Increased limit for heavy admin/op projects to 200 chunks
+                  const maxAssets = isShell ? 999 : (isAdminOrOp ? 200 : 60); 
                   
-                  let assetCount = 0;
+                  let newAssets = 0;
+                  let existingAssets = 0;
                   for (const match of assetMatches) {
-                    if (assetCount >= maxAssets) break;
+                    if ((newAssets + existingAssets) >= maxAssets) break;
                     const assetPath = match[1];
                     const fullAssetUrl = assetPath.startsWith('http') 
                       ? assetPath 
@@ -950,7 +960,12 @@ self.addEventListener('message', (event) => {
                     
                     const hasAsset = await assetsCache.match(fullAssetUrl);
                     if (!hasAsset) {
-                      assetCount++;
+                      newAssets++;
+                      // v user: Log individual chunk download for projects
+                      if (isAdminOrOp) {
+                        const projPrefix = projectName ? `[${projectName}] ` : '';
+                        console.log(`[SW] ${projPrefix}Descargando Chunk (${newAssets}): ${assetPath.split('/').pop()}`);
+                      }
                       // v287: Retry logic for critical assets (up to 2 attempts)
                       let attempts = 0;
                       let success = false;
@@ -966,27 +981,34 @@ self.addEventListener('message', (event) => {
                           if (attempts < 2) await new Promise(r => setTimeout(r, 500));
                         }
                       }
+                    } else {
+                      existingAssets++;
                     }
                   }
-                  if (isShell) console.log(`[SW ${VERSION}] Shell assets cached: ${assetCount}`);
+                  // v user: Show asset count for chunks visibility
+                  if (isShell || isAdminOrOp) {
+                    const projPrefix = projectName ? `[${projectName}] ` : '';
+                    console.log(`[SW v288] ${projPrefix}Chunks listos (${url}): ${newAssets} nuevos, ${existingAssets} ya en caché.`);
+                  }
                 } catch (err) {
                   console.warn('[SW] Asset extraction failed for:', url);
                 }
 
-                console.log(`[SW ${VERSION}] Warm-cached success (+assets):`, url);
+                // Silence success logs per URL to avoid console clutter
+                // console.log(`[SW ${VERSION}] Warm-cached success (+assets):`, url);
               } else if (!isLoginRedirect) {
                 await cache.put(url, response.clone());
               }
             }
             
-            if (replyPort) replyPort.postMessage({ done: true, url });
             await new Promise(r => setTimeout(r, 100)); 
           } catch (e) {
             console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
-            if (replyPort) replyPort.postMessage({ done: true, url, error: true });
           }
         }
-        console.log(`[SW ${VERSION}] Pre-caching sequence finished`);
+        if (replyPort) replyPort.postMessage({ done: true, urls });
+        // Silence garbage logs
+        // console.log(`[SW ${VERSION}] Pre-caching sequence finished`);
         trimCache(PAGES_CACHE, 400); 
       })
     );
@@ -1507,7 +1529,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
             req.onerror = () => r(0);
           });
           if (count > 0) {
-            console.log(`[SW] ${count} items still pending. Scheduling retry in 20s...`);
+            // console.log(`[SW] ${count} items still pending. Scheduling retry in 20s...`);
             setTimeout(() => processOutboxSync(false), 20000);
           }
         } catch (e) {
@@ -1526,8 +1548,29 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
   });
 }
 
+// ─── BACKGROUND SYNC ───────────────────────────────────────
+// v288: The "Robot" — wakes up when internet returns
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-outbox' || event.tag === 'sync-outbox-periodic' || event.tag === 'test-tag-from-devtools') {
+    // console.log('[SW] Background Sync triggered:', event.tag);
+    event.waitUntil(processOutboxSync(false));
+  }
+});
+
+// v288: Periodic Background Sync (requires PWA installation)
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'sync-outbox' || event.tag === 'sync-outbox-periodic') {
+    // console.log('[SW] Periodic Background Sync triggered:', event.tag);
+    event.waitUntil(processOutboxSync(false));
+  }
+});
+
 // ─── PUSH NOTIFICATIONS ────────────────────────────────────
 self.addEventListener('push', (event) => {
+  // v288: Wake up the robot silently when a push arrives
+  // This is a robust way to ensure sync even if the OS throttles 'sync' events
+  event.waitUntil(processOutboxSync(false).catch(() => {}));
+
   let data = {};
   try {
     data = event.data?.json() || {};

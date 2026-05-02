@@ -11,12 +11,12 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   // Standard base64url to base64 conversion
   let base64 = base64Clean.replace(/-/g, '+').replace(/_/g, '/');
   
-  // Add correct padding
+  // Add correct padding (v288: More resilient padding logic)
   const pad = base64.length % 4;
-  if (pad) {
-    if (pad === 1) {
-      throw new Error('Invalid Base64 string: length cannot be 4n + 1');
-    }
+  if (pad === 1) {
+    // Usually caused by an extra character at the end, let's trim and pad
+    base64 = base64.substring(0, base64.length - 1);
+  } else if (pad > 1) {
     base64 += '='.repeat(4 - pad);
   }
 

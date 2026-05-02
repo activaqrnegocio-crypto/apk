@@ -40,9 +40,9 @@ interface OperatorDashboardClientProps {
 export default function OperatorDashboardClient({
   user,
   activeProjects: initialProjects,
-  activeDayRecord,
+  activeDayRecord: initialActiveDayRecord,
   appointments: initialAppointments,
-  userViews
+  userViews: initialUserViews
 }: OperatorDashboardClientProps) {
   const searchParams = useSearchParams()
   const tabParam = searchParams?.get('tab')
@@ -68,62 +68,104 @@ export default function OperatorDashboardClient({
     sessionStorage.setItem('operator_active_tab', activeTab ?? 'null')
   }, [activeTab])
 
+  // v287: Robust User recovery for offline sessions
+  const [localUser, setLocalUser] = useState(user)
+  const [isHydratingAuth, setIsHydratingAuth] = useState(true)
+
   const [appointments, setAppointments] = useState(initialAppointments)
   const [isLoadingData, setIsLoadingData] = useState(true)
+  const [activeDayRecord, setActiveDayRecord] = useState(initialActiveDayRecord)
+  const [userViews, setUserViews] = useState(initialUserViews)
 
-  // v282: CARGA DEL LADO DEL CLIENTE — El servidor solo autentica,
-  // los datos se piden después de que la página ya es visible.
+  // v287: Robust Data Hydration
   useEffect(() => {
     const loadData = async () => {
-      // 1. Intentar primero desde Dexie (datos offline)
-      // La lista de proyectos de la caché local ya se mostrará via useLiveQuery.
-      // Solo necesitamos cargar los appointments desde la API.
-      const cachedAppts = localStorage.getItem('operator_appointments_cache')
-      if (cachedAppts) {
-        try { setAppointments(JSON.parse(cachedAppts)) } catch (e) {}
-      }
-
-      if (!navigator.onLine) {
+      setIsLoadingData(true)
+      
+      // Basic checks
+      if (!user?.id && !localUser?.id) {
         setIsLoadingData(false)
         return
       }
 
+      // v287: Appointments are now handled by useLiveQuery + GlobalSyncWorker
+      // We only fetch activeDayRecord and userViews here as they are small and non-critical for offline shell
       try {
-        const res = await fetch(`/api/appointments?userId=${user.id}`)
-        if (res.ok) {
-          const data = await res.json()
-          setAppointments(data)
-          localStorage.setItem('operator_appointments_cache', JSON.stringify(data))
-        }
+        const [dayRes, viewsRes] = await Promise.all([
+          fetch('/api/day-records/active'),
+          fetch('/api/users/views')
+        ])
+        
+        if (dayRes.ok) setActiveDayRecord(await dayRes.json())
+        if (viewsRes.ok) setUserViews(await viewsRes.json())
       } catch (e) {
-        console.warn('[Operator] Failed to load appointments from API, using cache')
+        console.warn('[Operator] Non-critical data fetch failed (offline?)')
       } finally {
         setIsLoadingData(false)
       }
     }
     loadData()
-  }, [user.id])
+  }, [user.id, localUser?.id])
+
+  useEffect(() => {
+    const recoverAuth = async () => {
+      if (!user?.id) {
+        try {
+          const savedAuth = await db.auth.get('last_session')
+          if (savedAuth) {
+            console.log('[Offline] Recovered user from Dexie:', savedAuth.name)
+            setLocalUser(savedAuth)
+          }
+        } catch (e) {
+          console.error('[Offline] Auth recovery failed:', e)
+        }
+      }
+      setIsHydratingAuth(false)
+    }
+    recoverAuth()
+  }, [user?.id])
 
   // Use Dexie as live source for projects to support offline correctly
   const projectsFromCache = useLiveQuery(
     async () => {
-      if (!user?.id) return []
-      // v228: Only fetch recent projects from cache to keep it snappy
+      const uId = localUser?.id || user?.id
+      if (!uId || isHydratingAuth) return undefined
+
+      const userId = Number(uId)
+      if (isNaN(userId) || userId <= 0) return undefined // v288: Extra safety to prevent "0 projects" flicker during navigation
+
+      // v288: Scann ALL synced projects (up to 500) to find ownership.
+      // This is crucial for operators as they might not have "accessed" the project recently.
       const allProjects = await db.projectsCache
         .orderBy('lastAccessedAt')
         .reverse()
-        .limit(50)
+        .limit(500)
         .toArray()
       
       // Filtrar localmente para asegurar que solo vea los suyos
       return allProjects.filter(p => {
-        const userId = Number(user?.id)
-        if (!userId) return false
         return p.team?.some((m: any) => Number(m.userId) === userId) ||
                Number(p.createdById) === userId
       })
     },
-    [user?.id]
+    [localUser?.id, user?.id, isHydratingAuth]
+  )
+
+  // v287: Live Agenda Cache
+  const appointmentsFromCache = useLiveQuery(
+    async () => {
+      const uId = localUser?.id || user?.id
+      if (!uId || isHydratingAuth) return undefined
+      
+      // Load all cached appointments for this user
+      const appts = await db.appointmentsCache
+        .where('userId')
+        .equals(Number(uId))
+        .toArray()
+      
+      return appts
+    },
+    [localUser?.id, user?.id, isHydratingAuth]
   )
 
   // v264: Delayed unread counts to prevent UI blocking on mobile
@@ -177,14 +219,19 @@ export default function OperatorDashboardClient({
 
   // Merge server projects with cache projects (Smart Merge v224)
   const projects = useMemo(() => {
-    // If cache is still loading, show initial projects
-    if (projectsFromCache === undefined) return initialProjects
+    // v287: If cache is still loading or auth is hydrating, show initialProjects 
+    // but only if they actually contain data. Otherwise keep it as undefined (loading)
+    if (projectsFromCache === undefined || isHydratingAuth) {
+       return initialProjects.length > 0 ? initialProjects : undefined
+    }
 
     // Create a map to merge projects by ID, prioritizing the cache (it's more detailed)
     const projectMap = new Map();
     
     // 1. Start with initial server projects
-    initialProjects.forEach((p: any) => projectMap.set(p.id, p));
+    if (Array.isArray(initialProjects)) {
+      initialProjects.forEach((p: any) => projectMap.set(p.id, p));
+    }
     
     // 2. Overwrite/Add with cache projects (they have more offline data)
     projectsFromCache.forEach((p: any) => {
@@ -198,7 +245,7 @@ export default function OperatorDashboardClient({
     })).sort((a, b) => 
       new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
     );
-  }, [projectsFromCache, initialProjects, unreadCounts])
+  }, [projectsFromCache, initialProjects, unreadCounts, isHydratingAuth])
 
   const [selectedTask, setSelectedTask] = useState<any>(null)
 
@@ -238,7 +285,9 @@ export default function OperatorDashboardClient({
 
   // 3. Merge server appointments + local pending tasks + pending status toggles
   const allAppointments = useMemo(() => {
-    let merged = [...appointments]
+    // Priority: use cached appointments if available, fallback to props
+    let baseAppts = appointmentsFromCache || appointments || []
+    let merged = [...baseAppts]
 
     // Apply pending status toggles
     pendingStatusToggles.forEach(toggle => {
@@ -254,11 +303,13 @@ export default function OperatorDashboardClient({
       status: t.payload.status || 'PENDIENTE',
       startTime: new Date(t.payload.startTime),
       endTime: new Date(t.payload.endTime),
-      project: projects.find((p: any) => p.id === Number(t.payload.projectId)) || null,
+      project: (projects || []).find((p: any) => p.id === Number(t.payload.projectId)) || null,
       isOffline: true // flag for UI
     }))
-    return [...merged, ...pendingMapped]
-  }, [appointments, pendingTasksRaw, pendingStatusToggles, projects, user.id])
+    return [...merged, ...pendingMapped].sort((a, b) => 
+      new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+    )
+  }, [appointments, appointmentsFromCache, pendingTasksRaw, pendingStatusToggles, projects])
 
   const [pushDismissed, setPushDismissed] = useState(true)
   const { 
@@ -283,10 +334,6 @@ export default function OperatorDashboardClient({
     }
   }, [])
 
-  // Redundant polling removed - Handled by GlobalSyncWorker and live queries
-
-  // Redundant sync removed - Handled by GlobalSyncWorker
-
   // Legacy localStorage Cleanup (One-time)
   useEffect(() => {
     const legacy = localStorage.getItem('offlineProjects')
@@ -308,7 +355,7 @@ export default function OperatorDashboardClient({
   }, [])
 
   const totalUnread = useMemo(() => {
-    return projects.reduce((acc, p) => acc + (p.unreadCount || 0), 0)
+    return projects?.reduce((acc, p) => acc + (p.unreadCount || 0), 0) || 0
   }, [projects])
 
   const todayTasks = useMemo(() => {
@@ -323,28 +370,6 @@ export default function OperatorDashboardClient({
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
   }, [allAppointments])
 
-  const fetchAppointments = async () => {
-    if (!navigator.onLine) {
-      const cached = localStorage.getItem('operator_appointments_cache')
-      if (cached) {
-        try { setAppointments(JSON.parse(cached)) } catch (e) {}
-      }
-      return
-    }
-    try {
-      const res = await fetch(`/api/appointments?userId=${user.id}`)
-      if (res.ok) {
-        const data = await res.json()
-        setAppointments(data)
-        localStorage.setItem('operator_appointments_cache', JSON.stringify(data))
-      }
-    } catch (err) {
-      console.warn("Failed to fetch appointments, falling back to cache")
-    }
-  }
-
-
-
   const toggleStatus = async (task: any) => {
     if (task.isOffline) {
       alert('Esta tarea aún no se ha sincronizado con el servidor. Por favor, espera a tener conexión para marcarla como completada.')
@@ -354,37 +379,26 @@ export default function OperatorDashboardClient({
     const newStatus = task.status === 'COMPLETADA' ? 'PENDIENTE' : 'COMPLETADA'
 
     // Actualización optimista local
-    setAppointments(prev => prev.map(a => a.id === task.id ? { ...a, status: newStatus } : a))
-    if (selectedTask && selectedTask.id === task.id) {
-      setSelectedTask({ ...selectedTask, status: newStatus })
-    }
-
-    if (!navigator.onLine) {
-      await db.outbox.add({
-        type: 'TASK_STATUS_TOGGLE',
-        projectId: task.project?.id || 0,
-        payload: { appointmentId: task.id, status: newStatus },
-        timestamp: Date.now(),
-        status: 'pending'
-      })
-      return
-    }
-
+    // Nota: Como usamos LiveQuery, la actualización vendrá de DB si guardamos en outbox o esperamos respuesta
     try {
-      const res = await fetch(`/api/appointments/${task.id}`, {
+      const res = await fetch(`/api/appointments/${task.id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
       })
-      if (res.ok) {
-        await fetchAppointments()
-      } else {
-        // Revertir en caso de error
-        await fetchAppointments() 
-      }
+      if (!res.ok) throw new Error('Network error')
+      
+      // Update local cache for instant feedback if online
+      await db.appointmentsCache.update(task.id, { status: newStatus })
     } catch (e) {
-      // Offline fallback: Revertir si falló
-      await fetchAppointments()
+      console.warn('[Offline] Task status toggle failed or offline, adding to outbox')
+      await db.outbox.add({
+        type: 'TASK_STATUS_TOGGLE',
+        projectId: task.project?.id || task.projectId || 0,
+        payload: { appointmentId: task.id, status: newStatus },
+        timestamp: Date.now(),
+        status: 'pending'
+      })
     }
   }
 
@@ -393,7 +407,7 @@ export default function OperatorDashboardClient({
       <div className="operator-header">
         <div className="operator-welcome" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '15px' }}>
           <div>
-            <h1 className="page-title">Hola, {user.name.split(' ')[0]}</h1>
+            <h1 className="page-title">Hola, {(localUser?.name || user?.name || 'Operador').split(' ')[0]}</h1>
             <p className="page-subtitle">Panel de Control de Operaciones</p>
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -406,24 +420,14 @@ export default function OperatorDashboardClient({
               </Link>
           </div>
         </div>
-        {/* activeDayRecord && (
-          <div className="active-day-badge" style={{ marginTop: '15px' }}>
-            <span className="pulse-dot"></span>
-            Día Iniciado en: {activeDayRecord.project.title}
-          </div>
-        ) */}
       </div>
 
-      {/* iOS Install Guide */}
       <IosInstallBanner />
 
-
-      {/* Sync Manager for Offline (Available for Operators too) */}
       <div style={{ marginTop: '15px' }}>
-        <ProjectCacheManager userId={user?.id} />
+        <ProjectCacheManager userId={localUser?.id || user?.id} />
       </div>
 
-      {/* Notification Onboarding Modal */}
       {showOnboarding && (
         <NotificationOnboarding onDone={() => setShowOnboarding(false)} />
       )}
@@ -557,21 +561,21 @@ export default function OperatorDashboardClient({
         borderBottom: '1px solid rgba(255,255,255,0.1)'
       }}>
         <button 
-          className={`tab ${activeTab === 'TAREAS' ? 'active' : ''}`} 
+          className={`tab-btn ${activeTab === 'TAREAS' ? 'active' : ''}`}
           onClick={() => setActiveTab('TAREAS')}
-          style={{ 
-            flex: 1, 
-            padding: '10px 4px', 
-            fontSize: '0.75rem', 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            gap: '6px'
-          }}
         >
-           <ListTodo size={14} /> 
+           <CheckCircle2 size={14} /> 
            <span style={{ whiteSpace: 'nowrap' }}>
-             Tareas <span className="d-none d-md-inline">de Hoy</span> ({todayTasks.length})
+             Hoy ({allAppointments === undefined ? '...' : todayTasks.length})
+           </span>
+        </button>
+        <button 
+          className={`tab-btn ${activeTab === 'CALENDARIO' ? 'active' : ''}`}
+          onClick={() => setActiveTab('CALENDARIO')}
+        >
+           <CalendarIcon size={14} /> 
+           <span style={{ whiteSpace: 'nowrap' }}>
+             Agenda ({allAppointments === undefined ? '...' : allAppointments.length})
            </span>
         </button>
         <button 
@@ -590,7 +594,7 @@ export default function OperatorDashboardClient({
         >
            <Briefcase size={14} /> 
            <span style={{ whiteSpace: 'nowrap' }}>
-             <span className="d-none d-md-inline">Mis</span> Proyectos ({projects.length})
+            <span className="d-none d-md-inline">Mis</span> Proyectos ({projects === undefined ? '...' : projects.length})
            </span>
            {totalUnread > 0 && (
              <span className="tab-badge" style={{ position: 'static', marginLeft: '4px', transform: 'none' }}>
@@ -666,48 +670,70 @@ export default function OperatorDashboardClient({
 
         {activeTab === 'PROYECTOS' && (
           <div className="grid-responsive">
-            {projects.map(project => {
-              const completedPhases = (project.phases || []).filter((p: any) => p.status === 'COMPLETADA').length
-              const totalPhases = (project.phases || []).length
-              const progress = totalPhases > 0 ? Math.round((completedPhases / totalPhases) * 100) : 0
-              
-              return (
-                <Link 
-                  href={`/admin/operador/proyecto/${project.id}`} 
-                  key={project.id} 
-                  prefetch={false}
-                  className="card interactive" 
-                  style={{ textDecoration: 'none', display: 'flex', flexDirection: 'column' }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '15px' }}>
-                    <span className={`status-badge status-${project.status.toLowerCase()}`}>
-                      {project.status}
-                    </span>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{(project.phases || []).length} fases</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                    <div style={{ flex: 1 }}>
-                      <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text)' }}>{project.title}</h3>
-                      {(project.city || project.client?.city) && (
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                          📍 {project.city || project.client?.city}
-                        </div>
+            {projects === undefined ? (
+               <div style={{ gridColumn: '1 / -1', padding: '60px 20px', textAlign: 'center', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '20px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+                  <div className="loading-spinner" style={{ width: '30px', height: '30px', margin: '0 auto 15px' }} />
+                  <p style={{ color: 'var(--text-muted)' }}>Hidratando proyectos desde memoria local...</p>
+               </div>
+            ) : projects.length > 0 ? (
+              projects.map(project => {
+                const completedPhases = (project.phases || []).filter((p: any) => p.status === 'COMPLETADA').length
+                const totalPhases = (project.phases || []).length
+                const progress = totalPhases > 0 ? Math.round((completedPhases / totalPhases) * 100) : 0
+                
+                return (
+                  <Link 
+                    href={`/admin/operador/proyecto/${project.id}`} 
+                    key={project.id} 
+                    prefetch={false}
+                    className="card interactive" 
+                    style={{ textDecoration: 'none', display: 'flex', flexDirection: 'column' }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '15px' }}>
+                      <span className={`status-badge status-${project.status.toLowerCase()}`}>
+                        {project.status}
+                      </span>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{(project.phases || []).length} fases</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                      <div style={{ flex: 1 }}>
+                        <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text)' }}>{project.title}</h3>
+                        {(project.city || project.client?.city) && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            📍 {project.city || project.client?.city}
+                          </div>
+                        )}
+                      </div>
+                      {project.unreadCount > 0 && (
+                        <span className="unread-dot-badge" title="Mensajes sin leer">
+                          {project.unreadCount}
+                        </span>
                       )}
                     </div>
-                    {project.unreadCount > 0 && (
-                      <span className="unread-dot-badge" title="Mensajes sin leer">
-                        {project.unreadCount}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ marginTop: 'auto' }}>
-                    <div className="progress-bar" style={{ height: '4px' }}>
-                      <div className="progress-fill" style={{ width: `${progress}%` }}></div>
+                    <div style={{ marginTop: 'auto' }}>
+                      <div className="progress-bar" style={{ height: '4px' }}>
+                        <div className="progress-fill" style={{ width: `${progress}%` }}></div>
+                      </div>
                     </div>
-                  </div>
-                </Link>
-              )
-            })}
+                  </Link>
+                )
+              })
+            ) : (
+              <div style={{ gridColumn: '1 / -1', padding: '60px 20px', textAlign: 'center', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '20px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: '20px', opacity: 0.3 }}>📂</div>
+                <h3 style={{ fontSize: '1.1rem', marginBottom: '8px' }}>No hay proyectos disponibles</h3>
+                <p style={{ color: 'var(--text-muted)', maxWidth: '300px', margin: '0 auto', fontSize: '0.9rem' }}>
+                  Si crees que esto es un error, intenta sincronizar manualmente o conectar a internet.
+                </p>
+                <button 
+                  onClick={() => window.dispatchEvent(new CustomEvent('trigger-bulk-sync', { detail: { force: true } }))}
+                  className="btn btn-outline btn-sm"
+                  style={{ marginTop: '20px' }}
+                >
+                  Sincronizar ahora
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -775,7 +801,6 @@ export default function OperatorDashboardClient({
           isOpen={!!selectedTask}
           onClose={() => setSelectedTask(null)}
           onSave={async (data) => {
-            // Reutilizar la lógica de toggleStatus o similar para guardar cambios del operador
             try {
               const res = await fetch(`/api/appointments/${data.id}`, {
                 method: 'PATCH',
@@ -783,18 +808,19 @@ export default function OperatorDashboardClient({
                 body: JSON.stringify(data)
               })
               if (res.ok) {
-                await fetchAppointments()
+                // Update local cache
+                await db.appointmentsCache.put(data)
                 setSelectedTask(null)
               } else {
                 alert('Error al actualizar tarea')
               }
             } catch (e) {
-              alert('Error de conexión')
+              alert('Error de conexión. Las ediciones detalladas requieren internet.')
             }
           }}
           initialData={selectedTask}
           userId={Number(user.id)}
-          projects={projects}
+          projects={projects || []}
           operators={[user]} // El operador solo se ve a sí mismo generalmente
           isAdminView={false}
         />

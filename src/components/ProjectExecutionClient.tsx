@@ -50,12 +50,50 @@ export default function ProjectExecutionClient({
   const [isSyncingOffline, setIsSyncingOffline] = useState(false)
   const [cacheNotFound, setCacheNotFound] = useState(false)
 
+  // v253: Robust ID extraction
+  // v255: Ultra-robust ID extraction for mobile offline-shell
+  // v288: Exclude 'offline-shell' from direct extraction to prevent ghost navigations
+  const idFromUrl = useMemo(() => {
+    if (typeof window === 'undefined') return 0;
+    
+    // 1. Try URL parameters (from search string)
+    const params = new URLSearchParams(window.location.search);
+    const qId = params.get('id');
+    if (qId && /^\d+$/.test(qId)) return Number(qId);
+
+    // 2. Try Regex from path (Only match numeric IDs)
+    const path = window.location.pathname;
+    const match = path.match(/\/proyecto[s]?\/(\d+)/i);
+    if (match) return Number(match[1]);
+
+    // 3. Last segment fallback (Only if numeric)
+    const segments = path.split('/').filter(Boolean);
+    const last = segments[segments.length - 1];
+    if (last && /^\d+$/.test(last)) return Number(last);
+
+    // 4. MOBILE FALLBACK: If we are in the shell, use the last remembered ID
+    const isOp = path.includes('/operador/');
+    const storageKey = isOp ? 'last_op_project_id' : 'last_admin_project_id';
+
+    if (path.includes('offline-shell') && typeof sessionStorage !== 'undefined') {
+      const stored = sessionStorage.getItem(storageKey);
+      if (stored && !isNaN(Number(stored))) return Number(stored);
+    }
+
+    return 0;
+  }, [pathname, searchParams]);
+
   // 3. Project & Data State
   const [localProject, setLocalProject] = useState<any>(null)
   const [localChat, setLocalChat] = useState<any[]>([])
   const [liveChat, setLiveChat] = useState<any[]>(initialChat || [])
   const [localExpenses, setLocalExpenses] = useState<any[]>(expenses || [])
-  const project = localProject || initialProject
+
+  // v288: Critical Identity Check
+  // If the initialProject (from props/RSC) doesn't match the current URL ID, 
+  // we MUST treat it as a skeleton until Dexie hydrates the correct one.
+  const isIdentityMismatch = initialProject && idFromUrl > 0 && Number(initialProject.id) !== idFromUrl;
+  const project = isIdentityMismatch ? { ...initialProject, isSkeleton: true, title: 'Cargando...' } : (localProject || initialProject);
 
   // 4. UI UI State
   const [activeTab, setActiveTab] = useState<'records' | 'chat' | 'gallery'>('records')
@@ -78,39 +116,6 @@ export default function ProjectExecutionClient({
   const saveLockRef = useRef(false)
   const teamLockRef = useRef(false)
 
-
-  // v253: Robust ID extraction
-  // v255: Ultra-robust ID extraction for mobile offline-shell
-  const idFromUrl = useMemo(() => {
-    if (typeof window === 'undefined') return 0;
-    
-    // 1. Try URL parameters (from search string)
-    const params = new URLSearchParams(window.location.search);
-    const qId = params.get('id');
-    if (qId && /^\d+$/.test(qId)) return Number(qId);
-
-    // 2. Try Regex from path
-    const path = window.location.pathname;
-    const match = path.match(/\/proyecto[s]?\/(\d+)/i);
-    if (match) return Number(match[1]);
-
-    // 3. Last segment fallback
-    const segments = path.split('/').filter(Boolean);
-    const last = segments[segments.length - 1];
-    if (last && /^\d+$/.test(last)) return Number(last);
-
-    // 4. MOBILE FALLBACK: If we are in the shell, use the last remembered ID
-    if (path.includes('offline-shell') && typeof sessionStorage !== 'undefined') {
-      const stored = sessionStorage.getItem('last_viewed_project_id');
-      if (stored) {
-        console.log('[Offline] Recuperando ID de sesión para shell:', stored);
-        return Number(stored);
-      }
-    }
-
-    return 0;
-  }, [pathname, searchParams]);
-
   // v261: Helper to wake up SW and register background sync
   const triggerBackgroundSync = async () => {
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
@@ -132,9 +137,21 @@ export default function ProjectExecutionClient({
   // Persist the ID so the shell can find it if Next.js redirects
   useEffect(() => {
     if (idFromUrl > 0 && typeof sessionStorage !== 'undefined') {
-      sessionStorage.setItem('last_viewed_project_id', idFromUrl.toString());
+      const isOp = window.location.pathname.includes('/operador/');
+      const storageKey = isOp ? 'last_op_project_id' : 'last_admin_project_id';
+      sessionStorage.setItem(storageKey, idFromUrl.toString());
     }
-  }, [idFromUrl]);
+    
+    // v288: RESET HYDRATION STATE ON ID CHANGE
+    // This prevents showing data from the previous project when navigating client-side
+    setLocalProject(null);
+    setLocalChat([]);
+    setLocalExpenses(expenses || []);
+    hasRecoveredRef.current = false;
+    liveChatInitialized.current = false;
+    expensesInitialized.current = false;
+    setCacheNotFound(false);
+  }, [idFromUrl, expenses]);
   
   const pendingItems = useLiveQuery(() => db.outbox.where('projectId').equals(idFromUrl).toArray(), [idFromUrl]) || []
 
@@ -156,7 +173,7 @@ export default function ProjectExecutionClient({
     
     const handleSyncSuccess = (e: any) => {
       if (e.detail?.projectId === idFromUrl) {
-        console.log('[UI] Background sync success detected. Refreshing data...');
+        // console.log('[UI] Background sync success detected. Refreshing data...');
         router.refresh()
       }
     }

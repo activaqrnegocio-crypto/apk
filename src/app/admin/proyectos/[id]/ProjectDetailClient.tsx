@@ -60,20 +60,40 @@ export default function ProjectDetailClient({ project: initialProject, available
   // v227: Consistent ID derivation from URL (Primary Source of Truth)
   // v228: Robust ID extraction using regex to handle trailing slashes and Universal Shell
   // v231: Enhanced regex to capture digits even in complex paths
+  // v288: Numeric-only extraction + sessionStorage fallback to avoid ghost navigations
   const idFromUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
     const path = window.location.pathname;
     
-    // v277: Support alphanumeric IDs (UUIDs, etc.)
-    const match = path.match(/\/proyecto[s]?\/([^/?]+)/i);
+    // 1. Regex (Digits only)
+    const match = path.match(/\/proyecto[s]?\/(\d+)/i);
     if (match) return match[1];
     
+    // 2. Last segment (Only if numeric)
     const segments = path.split('/').filter(Boolean);
     const last = segments[segments.length - 1];
-    if (last && !['proyectos', 'operador', 'admin'].includes(last.toLowerCase())) return last;
+    if (last && /^\d+$/.test(last)) return last;
+
+    // 3. MOBILE FALLBACK: Recover from session storage if in shell
+    const isOp = path.includes('/operador/');
+    const storageKey = isOp ? 'last_op_project_id' : 'last_admin_project_id';
+
+    if (path.includes('offline-shell') && typeof sessionStorage !== 'undefined') {
+      const stored = sessionStorage.getItem(storageKey);
+      if (stored) return stored;
+    }
 
     return '';
-  }, []);
+  }, [pathname, searchParams]);
+
+  // Persist current ID for recovery
+  useEffect(() => {
+    if (idFromUrl) {
+      const isOp = window.location.pathname.includes('/operador/');
+      const storageKey = isOp ? 'last_op_project_id' : 'last_admin_project_id';
+      sessionStorage.setItem(storageKey, idFromUrl.toString());
+    }
+  }, [idFromUrl]);
 
   // v261: Helper to wake up SW and register background sync
   const triggerBackgroundSync = useCallback(async () => {
@@ -112,7 +132,7 @@ export default function ProjectDetailClient({ project: initialProject, available
 
       if (needsCacheRecovery) {
         setIsSyncingOffline(true);
-        console.log('[Recovery] No server project or mismatch. ID:', idFromUrl);
+        // console.log('[Recovery] No server project or mismatch. ID:', idFromUrl); // v288: Silenced
         
         // v252: Added safety timeout for recovery
         const timeoutId = setTimeout(() => {
@@ -130,13 +150,13 @@ export default function ProjectDetailClient({ project: initialProject, available
                         (!isNaN(numericId) ? await db.projectsCache.get(numericId) : null);
 
           if (cached) {
-            console.log('[Recovery] Found project in local cache:', idFromUrl);
+            // console.log('[Recovery] Found project in local cache:', idFromUrl); // v288: Silenced
             setLocalProject(cached);
             const chat = await db.chatCache.get(idFromUrl) || 
                         (!isNaN(numericId) ? await db.chatCache.get(numericId) : null);
             setLocalChat(chat?.messages || []);
           } else {
-            console.warn('[Recovery] Project not found in local cache:', idFromUrl);
+            // console.warn('[Recovery] Project not found in local cache:', idFromUrl); // v288: Silenced
             setCacheNotFound(true);
           }
         } catch (err) {

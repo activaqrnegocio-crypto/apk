@@ -21,7 +21,7 @@ export default function GlobalSyncWorker() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) {
-        console.log('[Sync] App returned to focus. Triggering background sync fallback...');
+        // console.log('[Sync] App returned to focus. Triggering background sync fallback...');
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.ready.then(reg => {
             if ('sync' in reg) {
@@ -86,7 +86,7 @@ export default function GlobalSyncWorker() {
       
       if (meta && (Date.now() - meta.lastSync) < FRESHNESS_WINDOW) {
         const minsLeft = Math.round((FRESHNESS_WINDOW - (Date.now() - meta.lastSync)) / 60000);
-        console.log(`[Sync] Datos frescos para usuario ${u?.id}. Siguiente sync automático en ${minsLeft} min.`);
+        // console.log(`[Sync] Datos frescos para usuario ${u?.id}. Siguiente sync automático en ${minsLeft} min.`);
         setIsBulkSyncing(false);
         return;
       }
@@ -100,11 +100,12 @@ export default function GlobalSyncWorker() {
       const userRole = (u?.role || 'OPERATOR').toUpperCase();
       const isAdmin = ['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(userRole);
       
-      // v279: Update metadata with user-specific key
+      // v287: Preserve existing count to avoid UI flicker ("0 projects")
+      const existingMeta = await db.cacheMetadata.get(cacheKey);
       await db.cacheMetadata.put({
         id: cacheKey,
-        lastSync: Date.now(),
-        count: 0,
+        lastSync: existingMeta?.lastSync || Date.now(),
+        count: existingMeta?.count || 0,
         status: 'syncing'
       });
 
@@ -112,8 +113,8 @@ export default function GlobalSyncWorker() {
         detail: { message: `Iniciando sincronización optimizada (${userRole})...` }
       }))
 
-      // 1. SYNC PROJECTS & CHATS (v274: Reduced from 100 to 50 for operators to maximize performance)
-      const limit = isAdmin ? 300 : 50;
+      // 1. SYNC PROJECTS & CHATS (v288: Increased to 500 for ALL to ensure full offline parity)
+      const limit = 500;
       const res = await fetch(`/api/projects/bulk-cache?limit=${limit}`, { priority: 'low' })
       if (res.ok) {
         const fetchedProjects = await res.json()
@@ -170,14 +171,26 @@ export default function GlobalSyncWorker() {
           window.dispatchEvent(new CustomEvent('bulk-cache-sync-progress', { 
             detail: { current: i + 1, total: totalToSync } 
           }));
-          // Artificial Pacing (v273): Increased delay and frequency to keep the main thread free
-          if (i % 3 === 0) {
-            if ('requestIdleCallback' in window) {
-              await new Promise(resolve => (window as any).requestIdleCallback(resolve, { timeout: 1000 }));
-            } else {
-              await new Promise(resolve => setTimeout(resolve, 150)); 
+        }
+
+        // v287: Sync Appointments (Agenda/Tareas)
+        window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
+          detail: { message: `Sincronizando agenda y tareas...` }
+        }))
+        
+        try {
+          const apptsRes = await fetch(`/api/appointments?userId=${u?.id}`)
+          if (apptsRes.ok) {
+            const appointments = await apptsRes.ok ? await apptsRes.json() : []
+            if (Array.isArray(appointments)) {
+              // v287: Clear and replace with fresh data for the user
+              await db.appointmentsCache.clear()
+              await db.appointmentsCache.bulkPut(appointments)
+              // console.log(`[Sync] Cached ${appointments.length} appointments for user ${u?.id}`)
             }
           }
+        } catch (e) {
+          console.error('[Sync] Appointments sync failed:', e)
         }
 
         // v257: SAVE METADATA HERE (After data, before expensive pre-fetches)
@@ -209,7 +222,7 @@ export default function GlobalSyncWorker() {
 
           // v267: Sends a PRECACHE_URLS message and awaits SW confirmation via MessageChannel
           // This converts the fire-and-forget postMessage into a reliable awaitable call.
-          const precacheAndWait = async (urlOrUrls: string | string[]): Promise<void> => {
+          const precacheAndWait = async (urlOrUrls: string | string[], projectName: string = ''): Promise<void> => {
             const controller = await getController();
             const urls = Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls];
             
@@ -225,7 +238,13 @@ export default function GlobalSyncWorker() {
               const { port1, port2 } = new MessageChannel();
               const timeout = setTimeout(() => resolve(), 30000); // v286: 30s timeout for full project bundle
               port1.onmessage = () => { clearTimeout(timeout); resolve(); };
-              controller.postMessage({ type: 'PRECACHE_URLS', urls, replyPort: port2 }, [port2]);
+              // v288: Send project name to SW so it can log which project's chunks it's downloading
+              controller.postMessage({ 
+                type: 'PRECACHE_URLS', 
+                urls, 
+                projectName,
+                replyPort: port2 
+              }, [port2]);
             });
           };
 
@@ -247,35 +266,36 @@ export default function GlobalSyncWorker() {
             fetch(rscUrl, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
           }));
 
-          // 3. Recent Projects — v281: Batched parallel (5 at a time), hard cap per role
-          // Admin & Operator: 15 projects max. Beyond that, they load on demand.
-          // This prevents the 10-minute "infinite sync" on mobile devices.
+          // Admin & Operator: 100 projects max for full pre-cache. 
+          // Beyond that, they hydrate from IndexedDB via the shell.
           if (projectsToProcess.length === 0) {
             projectsToProcess = await db.projectsCache
               .orderBy('lastAccessedAt')
               .reverse()
-              .limit(15)
+              .limit(100)
               .toArray();
           }
 
-          const prefetchLimit = 15;
+          // v288: Increased limit to 300 for full project bundle pre-caching
+          const prefetchLimit = 300;
           const topProjects = projectsToProcess.slice(0, prefetchLimit);
           
           const syncChannelAssets = new BroadcastChannel('aquatech-sync');
           
-          // v286: Strictly sequential caching to avoid server saturation and "Warm-cache failed"
+          // v286: Strictly sequential caching to avoid server saturation
           for (let i = 0; i < topProjects.length; i++) {
             const p = topProjects[i];
             const projectPath = isAdmin ? `/admin/proyectos/${p.id}` : `/admin/operador/proyecto/${p.id}`;
+            // v288: Caching HTML, Chat, and RSC payload as a single atomic project bundle
             const urls = [projectPath, `${projectPath}?view=chat`, `${projectPath}?_rsc=1`];
 
-            const msg = `[Sync] Pre-cacheando: ${p.title || p.id}`;
-            console.log(msg);
+            const msg = `[Sync] Proyecto ${i + 1}/${topProjects.length}: ${p.title || p.id} (Descargando Chunks...)`;
+            console.log(msg); // v288: RESTORED per user request
             window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', { detail: { message: msg } }));
             syncChannelAssets.postMessage({ type: 'ASSET_PRECACHE_PROGRESS', current: i + 1, total: topProjects.length });
 
-            // Wait for all 3 variants of THIS project to be cached before moving to next
-            await precacheAndWait(urls);
+            // v288: Wait for ALL variant assets of THIS project to be 100% cached before moving to next
+            await precacheAndWait(urls, p.title || `Proyecto ${p.id}`);
           }
           
           syncChannelAssets.postMessage({ type: 'ASSET_PRECACHE_FINISHED' });
@@ -337,14 +357,15 @@ export default function GlobalSyncWorker() {
       // 5. SILENT GARBAGE COLLECTION (v278)
       // Keeps the local database small by removing stale projects if we exceed 60
       try {
-        const MAX_KEPT_PROJECTS = 60;
+        // v288: Increased from 60 to 500 to allow full offline operation
+        const MAX_KEPT_PROJECTS = 500;
         const allCachedProjects = await db.projectsCache.orderBy('lastAccessedAt').reverse().toArray();
         if (allCachedProjects.length > MAX_KEPT_PROJECTS) {
           const toDelete = allCachedProjects.slice(MAX_KEPT_PROJECTS).map(p => p.id);
           if (toDelete.length > 0) {
             await db.projectsCache.bulkDelete(toDelete);
             await db.chatCache.bulkDelete(toDelete);
-            console.log(`[GarbageCollector] Limpiados ${toDelete.length} proyectos antiguos de la caché local.`);
+            // console.log(`[GarbageCollector] Limpiados ${toDelete.length} proyectos antiguos de la caché local.`);
           }
         }
       } catch (gcErr) {
@@ -388,7 +409,7 @@ export default function GlobalSyncWorker() {
       for (const item of stuckItems) {
         const stuckTime = now - (item.lastAttemptAt || item.timestamp || 0);
         if (stuckTime > 30000) { // Stuck for more than 30 seconds
-          console.log(`[Sync] Reseteando elemento bloqueado ${item.id} (${item.type}) a 'pending'`);
+          // console.log(`[Sync] Reseteando elemento bloqueado ${item.id} (${item.type}) a 'pending'`);
           await db.outbox.update(item.id!, { status: 'pending' });
         }
       }
@@ -421,7 +442,7 @@ export default function GlobalSyncWorker() {
         return
       }
 
-      console.log(`[Sync] Processing ${items.length} items from outbox...`);
+      // console.log(`[Sync] Processing ${items.length} items from outbox...`);
 
       // v272: Sort chronologically (FIFO) — critical for dependency order
       // DAY_START must sync before EXPENSE/MESSAGE, PROJECT before PHASE_CREATE, etc.
@@ -434,7 +455,7 @@ export default function GlobalSyncWorker() {
         // v272: If a previous item for this project failed, skip dependents
         const ctx = item.projectId ? `proj-${item.projectId}` : (item.type === 'DAY_START' || item.type === 'DAY_END' ? 'day-record' : null);
         if (ctx && failedContexts.has(ctx)) {
-          console.log(`[Sync] Skipping ${item.type} — earlier dependency for ${ctx} failed`);
+          // console.log(`[Sync] Skipping ${item.type} — earlier dependency for ${ctx} failed`);
           continue;
         }
 
@@ -446,7 +467,7 @@ export default function GlobalSyncWorker() {
         if ((currentItem.attempts || 0) >= 5) {
           const minsSinceLastAttempt = (Date.now() - (currentItem.lastAttemptAt || currentItem.timestamp || 0)) / 60000;
           if (minsSinceLastAttempt < 5) {
-            console.warn(`[Sync] Skipping item ${item.id} after 5 failed attempts (cooling down)`);
+            // console.warn(`[Sync] Skipping item ${item.id} after 5 failed attempts (cooling down)`);
             continue;
           }
         }
@@ -555,7 +576,7 @@ export default function GlobalSyncWorker() {
               delete finalPayload.previewBase64;
               if (finalPayload.media) delete finalPayload.media.base64;
             } catch (err) {
-              console.error('Failed single media upload:', err);
+              // console.error('Failed single media upload:', err);
               await db.outbox.update(item.id!, { status: 'pending' });
               continue;
             }
@@ -603,7 +624,7 @@ export default function GlobalSyncWorker() {
               finalPayload.attachments = uploadedFiles.filter(f => f.type !== 'video').map(f => ({ data: f.url, type: f.type, name: f.name }));
               finalPayload.attachmentLinks = uploadedFiles.filter(f => f.type === 'video').map(f => ({ url: f.url, type: f.type, name: f.name }));
             } catch (err) {
-              console.error('Failed task attachments sync:', err);
+              // console.error('Failed task attachments sync:', err);
               await db.outbox.update(item.id!, { status: 'pending' });
               continue;
             }
@@ -688,10 +709,10 @@ export default function GlobalSyncWorker() {
     try {
       const remaining = await db.outbox.where('status').anyOf(['pending', 'failed']).count();
       if (remaining > 0) {
-        console.log(`[Sync] ${remaining} items still pending — scheduling retry in 3s`);
+        // console.log(`[Sync] ${remaining} items still pending — scheduling retry in 3s`);
         setTimeout(() => syncOutbox(), 3000);
       } else {
-        console.log('[Sync] Outbox fully drained ✓');
+        // console.log('[Sync] Outbox fully drained ✓');
       }
     } catch (e) { /* ignore */ }
 
@@ -728,7 +749,7 @@ export default function GlobalSyncWorker() {
           phone: c.phone || ''
         })))
       }
-      console.log('[Offline] Caches refreshed successfully')
+      // console.log('[Offline] Caches refreshed successfully')
     } catch (e) {
       console.error('[Offline] Error refreshing caches:', e)
     }
@@ -742,7 +763,7 @@ export default function GlobalSyncWorker() {
       // 1. Register one-shot background sync (fires when connectivity resumes)
       if ('sync' in reg) {
         await (reg as any).sync.register('sync-outbox');
-        console.log('[Sync] Registered SW background sync: sync-outbox');
+        // console.log('[Sync] Registered SW background sync: sync-outbox');
       }
       // 2. Also trigger immediately via postMessage (SW stays alive to process)
       if (navigator.serviceWorker.controller) {
@@ -750,7 +771,7 @@ export default function GlobalSyncWorker() {
         // v273: Trigger specific sync types
         navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC', specificType: 'MESSAGE' });
         navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC', specificType: 'EXPENSE' });
-        console.log('[Sync] Sent TRIGGER_SYNC types to SW via postMessage');
+        // console.log('[Sync] Sent TRIGGER_SYNC types to SW via postMessage');
       }
     } catch (e) {
       console.warn('[Sync] SW sync registration failed:', e);
@@ -764,16 +785,17 @@ export default function GlobalSyncWorker() {
       try {
         const reg = await navigator.serviceWorker.ready;
         if ('periodicSync' in reg) {
-          const status = await navigator.permissions.query({ name: 'periodic-background-sync' as any });
-          if (status.state === 'granted') {
-            await (reg as any).periodicSync.register('sync-outbox-periodic', {
-              minInterval: 15 * 60 * 1000 // 15 minutes minimum
+          try {
+            await (reg as any).periodicSync.register('global-sync', {
+              minInterval: 15 * 60 * 1000 // 15 minutes
             });
             console.log('[Sync] Periodic background sync registered (15 min interval)');
+          } catch (e) {
+            // Ignore registration errors
           }
         }
       } catch (e) {
-        console.warn('[Sync] Periodic sync not available:', e);
+        // console.warn('[Sync] Periodic sync not available:', e);
       }
     };
     registerPeriodicSync();
@@ -783,7 +805,7 @@ export default function GlobalSyncWorker() {
     const handleStatusChange = () => {
       setIsOnline(navigator.onLine)
       if (navigator.onLine) {
-        console.log('[Sync] Back online, triggering sync...')
+        // console.log('[Sync] Back online, triggering sync...')
         syncOutbox()
         refreshCaches()
         // Also wake SW to sync anything it has
@@ -793,8 +815,7 @@ export default function GlobalSyncWorker() {
     
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible' && typeof navigator !== 'undefined' && navigator.onLine) {
-        // v272: Always call syncOutbox regardless of syncLock (uses its own outboxLock)
-        console.log('[Sync] App visible and online, checking for fresh data...');
+        // console.log('[Sync] App visible and online, checking for fresh data...');
         syncOutbox()
         if (!syncLock.current) {
           startBulkSync()
@@ -804,13 +825,13 @@ export default function GlobalSyncWorker() {
         // Android suspends JS timers when the app is minimized.
         // We must delegate ALL pending sync work to the Service Worker NOW,
         // because our setInterval-based syncOutbox() will stop firing.
-        console.log('[Sync] App going to BACKGROUND — delegating sync to SW');
+        // console.log('[Sync] App going to BACKGROUND — delegating sync to SW');
         
         // Check if there are pending items
         try {
           const pendingCount = await db.outbox.where('status').anyOf(['pending', 'failed']).count();
           if (pendingCount > 0) {
-            console.log(`[Sync] ${pendingCount} pending items — waking SW for background sync`);
+            // console.log(`[Sync] ${pendingCount} pending items — waking SW for background sync`);
             await registerSwSync();
           }
         } catch (e) {
@@ -821,7 +842,7 @@ export default function GlobalSyncWorker() {
     }
     
     const handleManualSync = (e: any) => {
-      console.log('[Sync] Manual sync triggered via event. Force:', e.detail?.force);
+      // console.log('[Sync] Manual sync triggered via event. Force:', e.detail?.force);
       startBulkSync([], undefined, e.detail?.force || false);
     };
 

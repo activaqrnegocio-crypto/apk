@@ -10,7 +10,7 @@ export default function ServiceWorkerRegistration() {
     const swUrl = `/custom-sw.js?v=${new Date().getTime()}`
     navigator.serviceWorker.register(swUrl, { scope: '/' })
       .then((registration) => {
-        console.log('[App] SW registrado:', registration.scope)
+        // console.log('[App] SW registrado:', registration.scope)
 
         navigator.serviceWorker.ready.then((reg) => {
           const isOperador = window.location.pathname.includes('/operador')

@@ -157,6 +157,20 @@ export class OfflineDatabase extends Dexie {
       cacheMetadata: 'id',
       usersCache: 'id, name, role'
     });
+    this.version(14).stores({
+      outbox: '++id, projectId, status, timestamp, type, attempts',
+      auth: 'id',
+      authShadow: 'id',
+      materialsCache: 'id, code, name, category',
+      clientsCache: 'id, name, ruc',
+      quotesCache: 'id, clientName, projectId',
+      projectsCache: 'id, title, lastAccessedAt',
+      appointmentsCache: 'id, projectId, userId', // v289: Added userId for querying
+      chatCache: 'projectId',
+      dashboardCache: 'id',
+      cacheMetadata: 'id',
+      usersCache: 'id, name, role'
+    });
   }
 }
 
