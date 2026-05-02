@@ -114,7 +114,7 @@ export default function GlobalSyncWorker() {
       }))
 
       // 1. SYNC PROJECTS & CHATS (v288: Increased to 500 for ALL to ensure full offline parity)
-      const limit = 500;
+      const limit = 2000;
       const res = await fetch(`/api/projects/bulk-cache?limit=${limit}`, { priority: 'low' })
       if (res.ok) {
         const fetchedProjects = await res.json()

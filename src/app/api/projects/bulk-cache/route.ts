@@ -12,7 +12,7 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url)
     const limit = parseInt(searchParams.get('limit') || '100', 10)
-    const safeLimit = Math.min(limit, 500) // v252: Increased for full Admin coverage
+    const safeLimit = Math.min(limit, 2000) // v289: Increased for full Admin coverage
     
     const rawRole = (session.user as any).role || ''
     const userRole = String(rawRole).toUpperCase().trim()
@@ -27,11 +27,10 @@ export async function GET(request: Request) {
 
     if (!isAdmin) {
       console.log(`[BulkCache] Applying operator filter for user ${userId}`)
-      whereClause.team = {
-        some: {
-          userId: Number(userId)
-        }
-      }
+      whereClause.OR = [
+        { team: { some: { userId: Number(userId) } } },
+        { createdBy: Number(userId) }
+      ]
       // v226: Removed status filter for operators to ensure 100% project parity (e.g. 7/7)
     } else {
       console.log(`[BulkCache] Admin mode: Syncing all projects (no status filter)`)

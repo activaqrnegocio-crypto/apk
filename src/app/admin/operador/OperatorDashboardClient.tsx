@@ -78,34 +78,8 @@ export default function OperatorDashboardClient({
   const [userViews, setUserViews] = useState(initialUserViews)
 
   // v287: Robust Data Hydration
-  useEffect(() => {
-    const loadData = async () => {
-      setIsLoadingData(true)
-      
-      // Basic checks
-      if (!user?.id && !localUser?.id) {
-        setIsLoadingData(false)
-        return
-      }
+  // Removed old loadData block since day-records and userViews are handled differently and throw 401/404 in offline shell.
 
-      // v287: Appointments are now handled by useLiveQuery + GlobalSyncWorker
-      // We only fetch activeDayRecord and userViews here as they are small and non-critical for offline shell
-      try {
-        const [dayRes, viewsRes] = await Promise.all([
-          fetch('/api/day-records/active'),
-          fetch('/api/users/views')
-        ])
-        
-        if (dayRes.ok) setActiveDayRecord(await dayRes.json())
-        if (viewsRes.ok) setUserViews(await viewsRes.json())
-      } catch (e) {
-        console.warn('[Operator] Non-critical data fetch failed (offline?)')
-      } finally {
-        setIsLoadingData(false)
-      }
-    }
-    loadData()
-  }, [user.id, localUser?.id])
 
   useEffect(() => {
     const recoverAuth = async () => {
@@ -306,9 +280,14 @@ export default function OperatorDashboardClient({
       project: (projects || []).find((p: any) => p.id === Number(t.payload.projectId)) || null,
       isOffline: true // flag for UI
     }))
-    return [...merged, ...pendingMapped].sort((a, b) => 
-      new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
-    )
+    return [...merged, ...pendingMapped].sort((a, b) => {
+      const tA = new Date(a.startTime).getTime()
+      const tB = new Date(b.startTime).getTime()
+      if (isNaN(tA) && isNaN(tB)) return 0;
+      if (isNaN(tA)) return 1;
+      if (isNaN(tB)) return -1;
+      return tA - tB;
+    })
   }, [appointments, appointmentsFromCache, pendingTasksRaw, pendingStatusToggles, projects])
 
   const [pushDismissed, setPushDismissed] = useState(true)
@@ -569,15 +548,7 @@ export default function OperatorDashboardClient({
              Hoy ({allAppointments === undefined ? '...' : todayTasks.length})
            </span>
         </button>
-        <button 
-          className={`tab-btn ${activeTab === 'CALENDARIO' ? 'active' : ''}`}
-          onClick={() => setActiveTab('CALENDARIO')}
-        >
-           <CalendarIcon size={14} /> 
-           <span style={{ whiteSpace: 'nowrap' }}>
-             Agenda ({allAppointments === undefined ? '...' : allAppointments.length})
-           </span>
-        </button>
+
         <button 
           className={`tab ${activeTab === 'PROYECTOS' ? 'active' : ''}`} 
           onClick={() => setActiveTab('PROYECTOS')}
@@ -602,26 +573,7 @@ export default function OperatorDashboardClient({
              </span>
            )}
         </button>
-        {canManageCalendar && (
-          <button 
-            className={`tab ${activeTab === 'CALENDARIO' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('CALENDARIO')}
-            style={{ 
-              flex: 1, 
-              padding: '10px 4px', 
-              fontSize: '0.75rem', 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center',
-              gap: '6px'
-            }}
-          >
-             <CalendarIcon size={14} /> 
-             <span style={{ whiteSpace: 'nowrap' }}>
-               Agenda <span className="d-none d-md-inline">Semanal</span>
-             </span>
-          </button>
-        )}
+
       </div>
 
       {/* Action header depending on active tab */}
@@ -754,14 +706,27 @@ export default function OperatorDashboardClient({
                   acc[date].push(curr);
                   return acc;
                 }, {})
-              ).sort((a: any, b: any) => new Date(a[1][0].startTime).getTime() - new Date(b[1][0].startTime).getTime())
-               .map(([date, tasks]: [string, any]) => (
+              ).sort((a: any, b: any) => {
+                const tA = new Date(a[1][0].startTime).getTime();
+                const tB = new Date(b[1][0].startTime).getTime();
+                if (isNaN(tA) && isNaN(tB)) return 0;
+                if (isNaN(tA)) return 1;
+                if (isNaN(tB)) return -1;
+                return tA - tB;
+              }).map(([date, tasks]: [string, any]) => (
                 <div key={date} style={{ marginBottom: '10px' }}>
                   <h4 style={{ fontSize: '0.85rem', color: 'var(--primary)', textTransform: 'capitalize', marginBottom: '8px', paddingLeft: '10px', borderLeft: '3px solid var(--primary)' }}>
                     {date}
                   </h4>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {tasks.sort((a: any, b: any) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime()).map((task: any) => (
+                    {tasks.sort((a: any, b: any) => {
+                      const tA = new Date(a.startTime).getTime();
+                      const tB = new Date(b.startTime).getTime();
+                      if (isNaN(tA) && isNaN(tB)) return 0;
+                      if (isNaN(tA)) return 1;
+                      if (isNaN(tB)) return -1;
+                      return tA - tB;
+                    }).map((task: any) => (
                       <div key={task.id} className="card interactive" style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }} onClick={() => setSelectedTask(task)}>
                         <div style={{ textAlign: 'center', minWidth: '50px' }}>
                           <div style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{formatToEcuador(task.startTime, { hour: '2-digit', minute: '2-digit' })}</div>

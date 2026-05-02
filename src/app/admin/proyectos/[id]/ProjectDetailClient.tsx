@@ -121,51 +121,66 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [isSyncingOffline, setIsSyncingOffline] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+    let pollInterval: NodeJS.Timeout | null = null;
+    let hasRecovered = false;
+
+    const handleSyncDone = () => { 
+      if (!hasRecovered && !cancelled) tryRecover(); 
+    };
+
+    async function tryRecover(): Promise<boolean> {
+      try {
+        const numericId = Number(idFromUrl);
+        const cached = await db.projectsCache.get(idFromUrl) || 
+                      (!isNaN(numericId) ? await db.projectsCache.get(numericId) : null);
+
+        if (cached && !cancelled) {
+          setLocalProject(cached);
+          const chat = await db.chatCache.get(idFromUrl) || 
+                      (!isNaN(numericId) ? await db.chatCache.get(numericId) : null);
+          setLocalChat(chat?.messages || []);
+          setIsSyncingOffline(false);
+          setCacheNotFound(false);
+          hasRecovered = true;
+          return true;
+        }
+      } catch (err) {
+        console.warn('[Recovery] Dexie error:', err);
+      }
+      return false;
+    }
+
     async function initProject() {
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
       setIsOfflineMode(isOffline);
 
-      // Check if we need to recover from cache (either offline OR we got the wrong shell props OR server failed)
-      // v244: Aggressive recovery for Admin mobile experience
-      // v277: Support string IDs for recovery
       const needsCacheRecovery = (!initialProject || String(initialProject?.id) !== String(idFromUrl) || initialProject?.isSkeleton) && idFromUrl;
 
       if (needsCacheRecovery) {
         setIsSyncingOffline(true);
-        // console.log('[Recovery] No server project or mismatch. ID:', idFromUrl); // v288: Silenced
-        
-        // v252: Added safety timeout for recovery
-        const timeoutId = setTimeout(() => {
-          if (setIsSyncingOffline) {
-            console.warn('[Recovery] Timeout reached');
-            setIsSyncingOffline(false);
-            setCacheNotFound(true);
-          }
-        }, 5000);
+        let retries = 0;
+        const MAX_RETRIES = 10;
 
-        try {
-          // v277: Try both string and numeric lookups to ensure compatibility
-          const numericId = Number(idFromUrl);
-          const cached = await db.projectsCache.get(idFromUrl) || 
-                        (!isNaN(numericId) ? await db.projectsCache.get(numericId) : null);
+        tryRecover();
 
-          if (cached) {
-            // console.log('[Recovery] Found project in local cache:', idFromUrl); // v288: Silenced
-            setLocalProject(cached);
-            const chat = await db.chatCache.get(idFromUrl) || 
-                        (!isNaN(numericId) ? await db.chatCache.get(numericId) : null);
-            setLocalChat(chat?.messages || []);
-          } else {
-            // console.warn('[Recovery] Project not found in local cache:', idFromUrl); // v288: Silenced
-            setCacheNotFound(true);
+        pollInterval = setInterval(async () => {
+          if (cancelled || hasRecovered) {
+            if (pollInterval) clearInterval(pollInterval);
+            return;
           }
-        } catch (err) {
-          console.error('[Recovery] Dexie error:', err);
-          setCacheNotFound(true);
-        } finally {
-          clearTimeout(timeoutId);
-          setIsSyncingOffline(false);
-        }
+          retries++;
+          const found = await tryRecover();
+          if (found || retries >= MAX_RETRIES) {
+            if (pollInterval) clearInterval(pollInterval);
+            if (!found && !cancelled) {
+              setIsSyncingOffline(false);
+              setCacheNotFound(true);
+            }
+          }
+        }, 1000);
+
+        window.addEventListener('bulk-cache-sync-finished', handleSyncDone);
       } else if (initialProject) {
         // Online and correct ID: Update local state and refresh cache
         setLocalProject(initialProject);
@@ -178,7 +193,14 @@ export default function ProjectDetailClient({ project: initialProject, available
         }
       }
     }
+    
     initProject();
+
+    return () => {
+      cancelled = true;
+      if (pollInterval) clearInterval(pollInterval);
+      window.removeEventListener('bulk-cache-sync-finished', handleSyncDone);
+    };
   }, [project, idFromUrl, pathname]);
 
   // --- CHAT STATE ---
