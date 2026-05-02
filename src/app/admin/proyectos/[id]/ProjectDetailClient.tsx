@@ -246,7 +246,34 @@ export default function ProjectDetailClient({ project: initialProject, available
   const [isGenerating, setIsGenerating] = useState(false)
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
   const [isEditingTeam, setIsEditingTeam] = useState(false)
+  
+  // v272: Reactive team state and operator caching
+  const cachedOperators = useLiveQuery(() => db.usersCache.toArray()) || [];
+  const operators = useMemo(() => {
+    if (availableOperators && availableOperators.length > 0) return availableOperators;
+    return cachedOperators;
+  }, [availableOperators, cachedOperators]);
+
+  // Sync availableOperators to cache when online
+  useEffect(() => {
+    if (availableOperators && availableOperators.length > 0) {
+      db.usersCache.bulkPut(availableOperators.map((u: any) => ({
+        id: u.id,
+        name: u.name,
+        role: u.role || 'OPERATOR'
+      }))).catch(() => {});
+    }
+  }, [availableOperators]);
+
   const [selectedTeam, setSelectedTeam] = useState<number[]>(() => (project?.team || []).map((t: any) => t.user?.id))
+  
+  // v272: Keep selectedTeam in sync with project.team changes (especially after recovery)
+  useEffect(() => {
+    if (project?.team && project.team.length > 0) {
+      setSelectedTeam(project.team.map((t: any) => t.user?.id));
+    }
+  }, [project?.team]);
+
   const [isSavingTeam, setIsSavingTeam] = useState(false)
   
   const initialGallery = (project?.gallery || []).sort((a: any, b: any) => 
@@ -3353,7 +3380,7 @@ export default function ProjectDetailClient({ project: initialProject, available
                 </>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '300px', overflowY: 'auto' }}>
-                  {availableOperators.map((op: any) => (
+                  {operators.map((op: any) => (
                     <label key={op.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '8px', cursor: 'pointer' }}>
                       <input 
                         type="checkbox" 
@@ -3370,7 +3397,7 @@ export default function ProjectDetailClient({ project: initialProject, available
                       </div>
                     </label>
                   ))}
-                  {availableOperators.length === 0 && (
+                  {operators.length === 0 && (
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No hay operadores registrados en el sistema.</div>
                   )}
                 </div>

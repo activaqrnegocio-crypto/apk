@@ -32,7 +32,19 @@ export async function uploadToBunnyClientSide(
   const path = `/${storageZone}/${folder}/${timestamp}-${randomSuffix}-${safeName}`;
   const uploadUrl = `https://${storageHost}${path}`;
 
-  // 3. Direct PUT to Bunny.net
+  // 3. Direct PUT to Bunny.net (or Chunked if large)
+  if (file.size > 1024 * 1024) {
+     console.log('[Storage] File > 1MB, using chunked upload...');
+     const chunkedResult = await uploadInChunks(file, originalName);
+     // The chunked upload already returns the final URL
+     return {
+       url: chunkedResult.url,
+       filename: originalName,
+       mimeType: file.type || 'application/octet-stream',
+       type: originalName.match(/\.(mp4|mov|webm)$/i) ? 'VIDEO' : (originalName.match(/\.(mp3|wav|m4a)$/i) ? 'AUDIO' : 'IMAGE')
+     };
+  }
+
   const response = await fetch(uploadUrl, {
     method: 'PUT',
     headers: {
@@ -73,4 +85,42 @@ export async function uploadToBunnyClientSide(
     mimeType: mimeType || 'application/octet-stream',
     type
   };
+}
+
+/**
+ * v272: Chunked upload helper for large files (videos, audios)
+ */
+export async function uploadInChunks(
+  file: File | Blob,
+  filename: string
+): Promise<{ url: string }> {
+  const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB chunks
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+  const uploadId = crypto.randomUUID();
+
+  for (let i = 0; i < totalChunks; i++) {
+    const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+    const formData = new FormData();
+    formData.append('chunk', chunk);
+    formData.append('uploadId', uploadId);
+    formData.append('chunkIndex', i.toString());
+    formData.append('totalChunks', totalChunks.toString());
+    formData.append('filename', filename);
+
+    const res = await fetch('/api/upload/chunk', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!res.ok) {
+      throw new Error(`Chunk ${i} failed with status ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.url) {
+      return { url: data.url };
+    }
+  }
+
+  throw new Error('Upload completed but no final URL returned');
 }

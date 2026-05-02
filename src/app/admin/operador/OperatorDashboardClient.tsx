@@ -92,15 +92,25 @@ export default function OperatorDashboardClient({
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({})
   
   useEffect(() => {
-    // Only calculate unread counts after 1.5s of stability
+    // v273: Optimized unread counts with bulk fetching and limited scope
     const timer = setTimeout(async () => {
       const counts: Record<number, number> = {};
       const userId = Number(user?.id);
       if (!userId || !initialProjects.length) return;
 
+      // Only calculate for the 50 most recently updated projects to save battery/CPU
+      const projectsToProcess = [...initialProjects]
+        .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
+        .slice(0, 50);
+
+      const projectIds = projectsToProcess.map(p => p.id);
+      
       await db.transaction('r', [db.chatCache], async () => {
-        for (const p of initialProjects) {
-          const chat = await db.chatCache.get(p.id);
+        // v273: Use bulkGet for massive speed improvement over individual gets
+        const chats = await db.chatCache.bulkGet(projectIds);
+        
+        projectsToProcess.forEach((p, index) => {
+          const chat = chats[index];
           const view = userViews.find(v => v.projectId === p.id);
           const lastSeen = view?.lastSeen ? new Date(view.lastSeen) : new Date(0);
 
@@ -111,10 +121,10 @@ export default function OperatorDashboardClient({
           } else {
             counts[p.id] = p.unreadCount || 0;
           }
-        }
+        });
       });
       setUnreadCounts(counts);
-    }, 1500);
+    }, 2000); // 2s delay to ensure navigation is finished
     return () => clearTimeout(timer);
   }, [initialProjects, userViews, user?.id]);
 
@@ -351,9 +361,18 @@ export default function OperatorDashboardClient({
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
              <ManualSyncButton />
-             <Link href="/admin/operador/nuevo" className="btn btn-secondary">
+             <button 
+               onClick={() => {
+                 if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                   alert('La creación de proyectos no está disponible en modo offline. Por favor, recupera la conexión para crear uno nuevo.');
+                 } else {
+                   window.location.href = '/admin/operador/nuevo';
+                 }
+               }} 
+               className="btn btn-secondary"
+             >
                Crear Proyecto
-             </Link>
+             </button>
           </div>
         </div>
         {/* activeDayRecord && (

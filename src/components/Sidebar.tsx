@@ -6,6 +6,9 @@ import { signOut, useSession } from 'next-auth/react'
 import { useEffect, useState, useMemo } from 'react'
 import { hasModuleAccess } from '@/lib/rbac'
 import { useLocalStorage } from '@/hooks/useLocalStorage'
+import { useLiveQuery } from 'dexie-react-hooks'
+import { db } from '@/lib/db'
+import { formatToEcuador } from '@/lib/date-utils'
 
 type NavItem = {
   label: string
@@ -159,6 +162,10 @@ export default function Sidebar() {
   })
   const [offlineUser, setOfflineUser] = useState<any>(null)
   const [notifications, setNotifications] = useState<any>({ totalUnread: 0, byProject: {} })
+
+  // v273: Sync Status Monitoring
+  const syncMeta = useLiveQuery(() => db.cacheMetadata.get('projects_bulk'))
+  const pendingOutboxCount = useLiveQuery(() => db.outbox.count()) || 0
 
   // Hooks para datos de sesión y permisos (Siempre al principio)
   const effectiveRole = useMemo(() => String(session?.user?.role || offlineUser?.role || 'OPERATOR').toUpperCase(), [session, offlineUser])
@@ -507,6 +514,32 @@ export default function Sidebar() {
             </div>
           ))}
         </nav>
+
+        {/* v273: Global Sync Status */}
+        <div style={{ 
+          padding: '12px 20px', 
+          borderTop: '1px solid rgba(255,255,255,0.05)',
+          fontSize: '0.75rem',
+          color: 'var(--text-muted)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <div style={{ 
+              width: '8px', 
+              height: '8px', 
+              borderRadius: '50%', 
+              backgroundColor: pendingOutboxCount > 0 ? '#fbbf24' : '#10b981',
+              boxShadow: pendingOutboxCount > 0 ? '0 0 8px #fbbf24' : '0 0 8px #10b981'
+            }} />
+            <span style={{ fontWeight: 600, color: 'var(--text)' }}>
+              {pendingOutboxCount > 0 ? `Sincronizando (${pendingOutboxCount} pendientes)` : 'Sistema Sincronizado'}
+            </span>
+          </div>
+          {syncMeta?.lastSync && (
+            <div style={{ opacity: 0.7 }}>
+              Última actualización: {formatToEcuador(syncMeta.lastSync, { hour: '2-digit', minute: '2-digit' })}
+            </div>
+          )}
+        </div>
 
         <div className="sidebar-footer">
           <div className={`sidebar-user ${isAdmin ? 'admin-no-profile' : ''}`} onClick={handleLogout}>

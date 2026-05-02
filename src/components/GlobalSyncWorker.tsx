@@ -26,7 +26,13 @@ export default function GlobalSyncWorker() {
           navigator.serviceWorker.ready.then(reg => {
             if ('sync' in reg) {
               // Consolidate to one registration to avoid duplicate SW wakeups
-              (reg as any).sync.register('sync-outbox').catch(() => {});
+              // v273: Register specific tags as well for better reliability
+              const sync = (reg as any).sync;
+              sync.register('sync-outbox').catch(() => {});
+              sync.register('sync-MESSAGE').catch(() => {});
+              sync.register('sync-EXPENSE').catch(() => {});
+              sync.register('sync-TASK').catch(() => {});
+              sync.register('sync-PROJECT').catch(() => {});
             }
           });
         }
@@ -43,10 +49,15 @@ export default function GlobalSyncWorker() {
   // Automatic Trigger: Start sync when session is available and we are online
   useEffect(() => {
     if (session?.user?.id && navigator.onLine && !isBulkSyncing) {
-      // Small delay to let the initial page load settle
+      // v273: Significantly increased delay (5s) to allow navigation to be smooth first
       const timer = setTimeout(() => {
-        startBulkSync();
-      }, 1000);
+        // Use requestIdleCallback if available for ultra-smooth background start
+        if ('requestIdleCallback' in window) {
+          (window as any).requestIdleCallback(() => startBulkSync());
+        } else {
+          startBulkSync();
+        }
+      }, 5000);
       return () => clearTimeout(timer);
     }
   }, [session?.user?.id, isOnline]);
@@ -91,8 +102,9 @@ export default function GlobalSyncWorker() {
         detail: { message: `Iniciando sincronización optimizada (${userRole})...` }
       }))
 
-      // 1. SYNC PROJECTS & CHATS (Smart Merge with Pacing)
-      const res = await fetch('/api/projects/bulk-cache?limit=500', { priority: 'low' })
+      // 1. SYNC PROJECTS & CHATS (v273: Reduced from 500 to 100 for smoother entry)
+      const limit = isAdmin ? 300 : 100;
+      const res = await fetch(`/api/projects/bulk-cache?limit=${limit}`, { priority: 'low' })
       if (res.ok) {
         const fetchedProjects = await res.json()
         projectsToProcess = fetchedProjects;
@@ -131,9 +143,13 @@ export default function GlobalSyncWorker() {
           window.dispatchEvent(new CustomEvent('bulk-cache-sync-progress', { 
             detail: { current: i + 1, total: totalToSync } 
           }));
-          // Artificial Pacing: Small pause every few items to keep the UI snappy
-          if (i % 5 === 0) {
-            await new Promise(resolve => setTimeout(resolve, 50)); 
+          // Artificial Pacing (v273): Increased delay and frequency to keep the main thread free
+          if (i % 3 === 0) {
+            if ('requestIdleCallback' in window) {
+              await new Promise(resolve => (window as any).requestIdleCallback(resolve, { timeout: 1000 }));
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 150)); 
+            }
           }
         }
 
@@ -191,7 +207,8 @@ export default function GlobalSyncWorker() {
           const shells = ['/admin/proyectos/offline-shell', '/admin/operador/proyecto/offline-shell'];
           for (const shell of shells) {
             await precacheAndWait(shell);
-            fetch(`${shell}?_rsc=1`, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
+            // v273: Deterministic RSC shell pre-caching
+            await precacheAndWait(`${shell}?_rsc=1`);
             await new Promise(r => setTimeout(r, 200));
           }
 
@@ -207,30 +224,40 @@ export default function GlobalSyncWorker() {
             await new Promise(resolve => setTimeout(resolve, 300));
           }
 
-          // 3. Top 30 Recent Projects — Sequential, one at a time, SW confirms each one
+          // 3. Recent Projects — Staggered and limited for Operators
           if (projectsToProcess.length === 0) {
             projectsToProcess = await db.projectsCache
               .orderBy('lastAccessedAt')
               .reverse()
-              .limit(30)
+              .limit(isAdmin ? 30 : 10) // v273: Operators only pre-cache top 10 for speed
               .toArray();
           }
 
-          const topProjects = projectsToProcess.slice(0, 30);
+          const limit = isAdmin ? 30 : 10;
+          const topProjects = projectsToProcess.slice(0, limit);
+          
+          // v273: Use Idle Callback for pre-caching to NEVER block the user
           for (let i = 0; i < topProjects.length; i++) {
             const p = topProjects[i];
             const projectPath = isAdmin ? `/admin/proyectos/${p.id}` : `/admin/operador/proyecto/${p.id}`;
+            const urls = [
+              projectPath,
+              `${projectPath}?view=chat`,
+              `${projectPath}?_rsc=1`
+            ];
 
-            const msg = `[Sync] Pre-cacheando ${i + 1}/${topProjects.length}: ${p.title || p.id} -> ${projectPath}`;
+            const msg = `[Sync] Pre-cacheando ${i + 1}/${topProjects.length}: ${p.title || p.id}`;
             console.log(msg);
             window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', { detail: { message: msg } }));
 
-            // v267: AWAIT the SW warm-cache (includes chunk extraction) before moving to next project
-            await precacheAndWait(projectPath);
-
-            // v271: Removed Next.js RSC fetch. Offline relies entirely on Dexie + offline-shell now.
-            // This prevents 502 DB Exhaustion on the VPS.
-            await new Promise(r => setTimeout(r, 200));
+            for (const url of urls) {
+              if ('requestIdleCallback' in window) {
+                await new Promise(resolve => (window as any).requestIdleCallback(resolve, { timeout: 2000 }));
+              } else {
+                await new Promise(resolve => setTimeout(resolve, 500));
+              }
+              await precacheAndWait(url);
+            }
           }
         }
       }
@@ -652,7 +679,10 @@ export default function GlobalSyncWorker() {
       // 2. Also trigger immediately via postMessage (SW stays alive to process)
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC' });
-        console.log('[Sync] Sent TRIGGER_SYNC to SW via postMessage');
+        // v273: Trigger specific sync types
+        navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC', specificType: 'MESSAGE' });
+        navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC', specificType: 'EXPENSE' });
+        console.log('[Sync] Sent TRIGGER_SYNC types to SW via postMessage');
       }
     } catch (e) {
       console.warn('[Sync] SW sync registration failed:', e);

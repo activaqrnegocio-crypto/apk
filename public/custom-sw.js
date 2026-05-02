@@ -1,6 +1,6 @@
 // ============================================================
-// Aquatech CRM — Custom Service Worker v272
-// v272: Fix Outbox Sync Deadlock
+// Aquatech CRM — Custom Service Worker v273
+// v273: Chunked Media Upload & Robust Shell Recovery
 // ============================================================
 const STATIC_CACHE = 'aquatech-static';
 const PAGES_CACHE  = 'aquatech-pages';
@@ -19,10 +19,12 @@ const PRE_CACHE = [
   '/favicon.ico',
   '/favicon.png',
   '/logo.jpg',
-  '/cotizacion.jpg'
+  '/cotizacion.jpg',
+  '/admin/proyectos/offline-shell',
+  '/admin/operador/proyecto/offline-shell'
 ];
 
-const VERSION = 'v272';
+const VERSION = 'v273';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -230,7 +232,13 @@ async function rscNetworkFirst(request) {
   try {
     // v268: Reduced RSC timeout to 8s for snappier mobile feel
     const response = await fetchWithTimeout(request.clone(), 8000);
-    if (response.ok && !response.redirected) {
+    // v272: If server returns error (502, 500, 404), fallback to cache/shell
+    if (!response.ok) {
+      console.warn(`[SW ${VERSION}] RSC Network error ${response.status}, falling back to cache/shell...`);
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    if (!response.redirected) {
       const cache = await caches.open(RSC_CACHE);
       cache.put(cacheKey, response.clone());
       // v222: Increased limit for RSC to preserve project data shells (Admin scale)
@@ -253,18 +261,25 @@ async function rscNetworkFirst(request) {
 
     if (isAdminProjectRsc || isOperatorProjectRsc) {
       const rscCache = await caches.open(RSC_CACHE);
+      const pagesCache = await caches.open(PAGES_CACHE);
+      const staticCache = await caches.open(STATIC_CACHE);
+
+      const findShellInAllCaches = async (path) => {
+        // v273: Aggressive search for shell in all relevant caches
+        return await rscCache.match(path) || 
+               await pagesCache.match(path) || 
+               await staticCache.match(path) ||
+               await caches.match(path + '?_rsc=1', { ignoreVary: true }) ||
+               await caches.match(path, { ignoreVary: true, ignoreSearch: true });
+      };
+
       if (isAdminProjectRsc) {
         console.log(`[SW ${VERSION}] RSC Cache miss for admin project, serving Universal RSC Shell...`);
-        // v263: Prioritize exact RSC shell match from GlobalSyncWorker
-        const shellMatch = await rscCache.match('/admin/proyectos/offline-shell') || 
-                           await caches.match('/admin/proyectos/offline-shell?_rsc=1', { ignoreVary: true }) || 
-                           await caches.match('/admin/proyectos/offline-shell', { ignoreVary: true, ignoreSearch: true });
+        const shellMatch = await findShellInAllCaches('/admin/proyectos/offline-shell');
         if (shellMatch) return shellMatch;
       } else if (isOperatorProjectRsc) {
         console.log(`[SW ${VERSION}] RSC Cache miss for operator project, serving Universal RSC Shell...`);
-        const shellMatch = await rscCache.match('/admin/operador/proyecto/offline-shell') || 
-                           await caches.match('/admin/operador/proyecto/offline-shell?_rsc=1', { ignoreVary: true }) || 
-                           await caches.match('/admin/operador/proyecto/offline-shell', { ignoreVary: true, ignoreSearch: true });
+        const shellMatch = await findShellInAllCaches('/admin/operador/proyecto/offline-shell');
         if (shellMatch) return shellMatch;
       }
     }
@@ -289,6 +304,8 @@ async function rscStaleWhileRevalidate(request) {
       const cacheToUpdate = await caches.open(RSC_CACHE);
       cacheToUpdate.put(cacheKey, response.clone());
     }
+    // v272: If SWR fetch fails with 502/etc, don't return the error to browser if we are in a critical navigation
+    if (!response.ok) return null;
     return response;
   }).catch(() => null);
 
@@ -644,6 +661,11 @@ async function networkFirst(request, cacheName, timeout = 10000) {
   try {
     const response = await fetchWithTimeout(request, timeout);
     
+    // v272: If server returns error (502, 500), try fallback to cache
+    if (!response.ok && response.status >= 500) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
     // v233: NEVER cache errors (500) or redirects
     if (response.ok && !response.redirected) {
       const cache = await caches.open(cacheName);
@@ -782,11 +804,12 @@ self.addEventListener('message', (event) => {
     });
   }
 
-  // v268: Consolidated PRECACHE_URLS and TRIGGER_SYNC handlers
+  // v273: Support specific sync types via postMessage
   if (event.data && (event.data.type === 'TRIGGER_SYNC' || event.data.type === 'FORCE_SYNC_OUTBOX')) {
     const isForced = event.data.type === 'FORCE_SYNC_OUTBOX';
-    console.log(`[SW] Sync triggered via postMessage (Forced: ${isForced})`);
-    event.waitUntil(processOutboxSync(isForced));
+    const specificType = event.data.specificType || null;
+    console.log(`[SW] Sync triggered via postMessage (Forced: ${isForced}, Type: ${specificType})`);
+    event.waitUntil(processOutboxSync(isForced, specificType));
   }
 
   // Warm-up pre-caching — caches responses INCLUDING redirects (except login)
@@ -833,19 +856,20 @@ self.addEventListener('message', (event) => {
                 // v227: Extract and pre-cache JS chunks found in the HTML
                 try {
                   const htmlText = await response.clone().text();
-                  const chunkMatches = htmlText.matchAll(/\/(_next\/static\/[^"'\s>]+)/g);
+                  const chunkMatches = Array.from(htmlText.matchAll(/\/(_next\/static\/[^"'\s>]+)/g));
                   const assetsCache = await caches.open(ASSETS_CACHE);
                   
+                  // v273: Sequential chunk pre-caching to avoid 502/concurrency issues
                   for (const match of chunkMatches) {
                     const chunkPath = match[1];
                     const fullChunkUrl = new URL('/' + chunkPath, self.location.origin).href;
                     
                     const hasChunk = await assetsCache.match(fullChunkUrl);
                     if (!hasChunk) {
-                      fetch(fullChunkUrl, { priority: 'low' })
-                        .then(r => {
-                          if (r.ok) assetsCache.put(fullChunkUrl, r);
-                        }).catch(() => {});
+                      try {
+                        const r = await fetch(fullChunkUrl, { priority: 'low' });
+                        if (r.ok) await assetsCache.put(fullChunkUrl, r);
+                      } catch (e) {}
                     }
                   }
                 } catch (err) {
@@ -862,7 +886,7 @@ self.addEventListener('message', (event) => {
             // v267: Reply to client AFTER processing this URL so precacheAndWait() resolves
             if (replyPort) replyPort.postMessage({ done: true, url });
 
-            await new Promise(r => setTimeout(r, 200)); // v267: Reduced — pacing is now client-side (800ms)
+            await new Promise(r => setTimeout(r, 800)); // v273: Increased to 800ms to give network air
           } catch (e) {
             console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
             // v267: Reply even on failure so the client doesn't hang
@@ -889,7 +913,13 @@ self.addEventListener('sync', (event) => {
     'sync-TASK',
     'sync-EXPENSE',
     'sync-DAY_START',
-    'sync-DAY_END'
+    'sync-DAY_END',
+    'sync-PROJECT',
+    'sync-mensaje',
+    'sync-gasto',
+    'sync-calendario',
+    'sync-imagen',
+    'sync-video'
   ];
 
   if (syncTags.includes(event.tag)) {
@@ -1099,6 +1129,11 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 for (let i = 0; i < raw.length; ++i) { uInt8Array[i] = raw.charCodeAt(i); }
                 const blob = new Blob([uInt8Array], { type: contentType });
                 
+                // v273: Use chunked upload for anything > 1MB
+                if (blob.size > 1024 * 1024) {
+                   return await uploadInChunksSW(blob, name);
+                }
+
                 const timestamp = Date.now();
                 const safeName = (name || `file_${timestamp}`).replace(/[^a-zA-Z0-9.-]/g, '_');
                 const folderPath = item.projectId ? `projects/${item.projectId}` : subfolder;
@@ -1116,6 +1151,33 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 console.error('[SW] Upload failed:', e);
                 return null;
               }
+            };
+
+            const uploadInChunksSW = async (blob, filename) => {
+              console.log(`[SW] Starting chunked upload for ${filename} (${blob.size} bytes)`);
+              const CHUNK_SIZE = 1 * 1024 * 1024; 
+              const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
+              const uploadId = self.crypto.randomUUID();
+
+              for (let i = 0; i < totalChunks; i++) {
+                const chunk = blob.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                const formData = new FormData();
+                formData.append('chunk', chunk);
+                formData.append('uploadId', uploadId);
+                formData.append('chunkIndex', i.toString());
+                formData.append('totalChunks', totalChunks.toString());
+                formData.append('filename', filename);
+
+                const res = await fetch('/api/upload/chunk', {
+                  method: 'POST',
+                  body: formData
+                });
+
+                if (!res.ok) throw new Error(`Chunk ${i} failed`);
+                const data = await res.json();
+                if (data.url) return data.url;
+              }
+              return null;
             };
 
             // 1. Handle MESSAGE / MEDIA_UPLOAD
