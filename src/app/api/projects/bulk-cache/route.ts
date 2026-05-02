@@ -53,6 +53,7 @@ export async function GET(request: Request) {
         city: true,
         startDate: true,
         endDate: true,
+        createdBy: true,
         client: {
           select: { id: true, name: true, phone: true, address: true }
         },

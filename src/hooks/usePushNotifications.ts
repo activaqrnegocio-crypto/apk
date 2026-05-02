@@ -5,10 +5,11 @@ import { useState, useEffect, useCallback } from 'react'
 type PushStatus = 'loading' | 'unsupported' | 'denied' | 'prompt' | 'subscribed' | 'unsubscribed'
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  // 1. Limpieza agresiva: eliminar comillas, espacios y caracteres no base64url
-  const base64Clean = base64String.replace(/['"]/g, '').trim();
+  // v294: Blindaje total contra caracteres invisibles, comillas o espacios
+  // Solo permitimos caracteres válidos de Base64 y Base64URL
+  const base64Clean = base64String.replace(/[^A-Za-z0-9\-_]/g, '');
   
-  // 2. Cálculo de padding estándar
+  // El padding debe calcularse sobre la cadena limpia
   const padding = '='.repeat((4 - (base64Clean.length % 4)) % 4);
   const base64 = (base64Clean + padding)
     .replace(/-/g, '+')
@@ -21,13 +22,12 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
     for (let i = 0; i < rawData.length; ++i) {
       outputArray[i] = rawData.charCodeAt(i);
     }
-    
-    // Log de seguridad para depuración en consola
-    console.log(`[PUSH] VAPID Key decodificada: ${outputArray.length} bytes`);
     return outputArray;
   } catch (err) {
-    console.error('[PUSH] Error crítico decodificando VAPID Key. La llave en el .env podría estar corrupta.');
-    throw err;
+    console.error('[PUSH] Error decodificando VAPID:', err);
+    // Fallback: Si falla atob, intentamos retornar un array vacío para no crashear la UI
+    // pero lanzamos el error para que el catch superior lo capture con un mensaje amigable.
+    throw new Error('La llave VAPID no tiene un formato Base64 válido. Verifica tu .env');
   }
 }
 

@@ -72,7 +72,19 @@ export default function OperatorDashboardClient({
   const [localUser, setLocalUser] = useState(user)
   const [isHydratingAuth, setIsHydratingAuth] = useState(true)
 
-  const [appointments, setAppointments] = useState(initialAppointments)
+  const [appointments, setAppointments] = useState<any[]>(() => {
+    // v293: Recuperación síncrona de tareas para evitar flash de carga
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = sessionStorage.getItem('last_op_tasks_snapshot')
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed
+        }
+      } catch (e) {}
+    }
+    return initialAppointments || []
+  })
   const [isLoadingData, setIsLoadingData] = useState(true)
   const [activeDayRecord, setActiveDayRecord] = useState(initialActiveDayRecord)
   const [userViews, setUserViews] = useState(initialUserViews)
@@ -117,8 +129,10 @@ export default function OperatorDashboardClient({
         .toArray()
       
       return allProjects.filter(p => {
-        return p.team?.some((m: any) => Number(m.userId) === userId) ||
-               Number(p.createdById) === userId
+        // v294: Usar comparación flexible (==) y verificar tanto team como createdBy
+        const isInTeam = p.team?.some((m: any) => Number(m.userId) === userId)
+        const isCreator = Number(p.createdBy || p.createdById) === userId
+        return isInTeam || isCreator
       })
     },
     [localUser?.id, user?.id] // Removed isHydratingAuth to prevent blocking
@@ -140,11 +154,33 @@ export default function OperatorDashboardClient({
     [localUser?.id, user?.id] // Removed isHydratingAuth
   )
 
+  // v293: Persistir tareas cuando cambien en la caché (Snapshot para navegación instantánea)
+  useEffect(() => {
+    if (appointmentsFromCache && appointmentsFromCache.length > 0) {
+      setAppointments(appointmentsFromCache)
+      try { sessionStorage.setItem('last_op_tasks_snapshot', JSON.stringify(appointmentsFromCache)) } catch(e) {}
+    }
+  }, [appointmentsFromCache])
+
   // v292: Emergency Fallback for Offline "DEAD" state
-  const [emergencyProjects, setEmergencyProjects] = useState<any[] | undefined>(undefined)
+  const [emergencyProjects, setEmergencyProjects] = useState<any[] | undefined>(() => {
+    // v293: Recuperación síncrona instantánea desde sessionStorage para evitar el flash de "0" al navegar
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = sessionStorage.getItem('last_op_projects_snapshot')
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed
+        }
+      } catch (e) {}
+    }
+    return undefined
+  })
 
   useEffect(() => {
-    // If after 2s we still have no projects from LiveQuery but we have a user ID, force manual load
+    // v293: Reducido a 400ms para una respuesta instantánea al navegar.
+    // Dexie suele responder en <100ms, así que 400ms es un margen seguro
+    // para evitar el flash de "0 proyectos" si la query tarda un poco.
     const timer = setTimeout(async () => {
       if (projectsFromCache && projectsFromCache.length > 0) return 
       
@@ -156,22 +192,32 @@ export default function OperatorDashboardClient({
         const allProjects = await db.projectsCache
           .orderBy('lastAccessedAt').reverse().limit(500).toArray()
         
-        const myProjects = allProjects.filter(p =>
-          p.team?.some((m: any) => Number(m.userId) === userId) ||
-          Number(p.createdById) === userId
-        )
+        const myProjects = allProjects.filter(p => {
+          const isInTeam = p.team?.some((m: any) => Number(m.userId) === userId)
+          const isCreator = Number(p.createdBy || p.createdById) === userId
+          return isInTeam || isCreator
+        })
         
         if (myProjects.length > 0) {
-          console.log(`[EmergencyLoad] Loaded ${myProjects.length} projects directly from Dexie`)
+          // console.log(`[EmergencyLoad] Loaded ${myProjects.length} projects directly from Dexie`)
           setEmergencyProjects(myProjects)
+          // v293: Persistir para la próxima navegación
+          try { sessionStorage.setItem('last_op_projects_snapshot', JSON.stringify(myProjects)) } catch(e) {}
         }
       } catch (e) {
         console.error('[EmergencyLoad] Failed:', e)
       }
-    }, 2000)
+    }, 400)
     
     return () => clearTimeout(timer)
   }, [projectsFromCache, user?.id, localUser?.id])
+
+  // v293: Efecto adicional para persistir cuando el LiveQuery cambie (siempre mantener el snapshot fresco)
+  useEffect(() => {
+    if (projectsFromCache && projectsFromCache.length > 0) {
+      try { sessionStorage.setItem('last_op_projects_snapshot', JSON.stringify(projectsFromCache)) } catch(e) {}
+    }
+  }, [projectsFromCache])
 
   // v264: Delayed unread counts to prevent UI blocking on mobile
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({})
@@ -238,8 +284,11 @@ export default function OperatorDashboardClient({
       (projectsFromCache === undefined && emergencyProjects === undefined) ? undefined :
       initialProjects; // Last resort (usually [] from server)
 
+    // v293: Si estamos cargando (undefined), NO caer a initialProjects todavía
+    // initialProjects es [] por diseño para carga rápida, pero si lo mostramos
+    // el usuario ve "0 proyectos" durante la hidratación.
     if (sourceProjects === undefined) {
-       return undefined // Show loading state
+       return undefined // Mantiene el estado de carga (skeletons/spinner)
     }
 
     // Create a map to merge projects by ID
