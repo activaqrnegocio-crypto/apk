@@ -26,10 +26,11 @@ const PRE_CACHE = [
   '/logo.jpg',
   '/cotizacion.jpg',
   '/admin/proyectos/offline-shell',
-  '/admin/operador/proyecto/offline-shell'
+  '/admin/operador/proyecto/offline-shell',
+  'https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,300;1,400&display=swap'
 ];
 
-const VERSION = 'v285';
+const VERSION = 'v287';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -894,11 +895,7 @@ self.addEventListener('message', (event) => {
     
     event.waitUntil(
       caches.open(PAGES_CACHE).then(async (cache) => {
-        let current = 0;
-        const total = urls.length;
-
         for (const url of urls) {
-          current++;
           try {
             const existing = await cache.match(url);
             if (existing && existing.ok && !existing.redirected) {
@@ -919,7 +916,7 @@ self.addEventListener('message', (event) => {
                 'Accept': isRsc ? 'text/x-component, text/html' : 'text/html',
                 ...(isRsc ? { 'RSC': '1' } : {})
               }
-            }), 20000); // v286: Increased to 20s for slow dev servers
+            }), 20000);
 
             if (response.ok) {
               const contentType = response.headers.get('Content-Type') || '';
@@ -935,40 +932,54 @@ self.addEventListener('message', (event) => {
                 
                 try {
                   const htmlText = await response.clone().text();
-                  const chunkMatches = Array.from(htmlText.matchAll(/\/(_next\/static\/[^"'\s>]+)/g));
-                  const assetsCache = await caches.open(ASSETS_CACHE);
+                  const assetRegex = /([\/a-zA-Z0-9._-]+\.(js|css|woff2|png|jpg|webp))/g;
+                  const assetMatches = Array.from(htmlText.matchAll(assetRegex))
+                    .filter(m => m[1].includes('_next/static/') || m[1].includes('/fonts/'));
                   
-                  // v286: Balanced limit - 12 chunks is enough for the main UI structure without saturating mobile
-                  const maxChunks = 12; 
-                  let chunkCount = 0;
-                  for (const match of chunkMatches) {
-                    if (chunkCount >= maxChunks) break;
-                    chunkCount++;
-                    const chunkPath = match[1];
-                    const fullChunkUrl = new URL('/' + chunkPath, self.location.origin).href;
+                  const assetsCache = await caches.open(ASSETS_CACHE);
+                  const isShell = url.includes('offline-shell');
+                  const maxAssets = isShell ? 999 : 60; 
+                  
+                  let assetCount = 0;
+                  for (const match of assetMatches) {
+                    if (assetCount >= maxAssets) break;
+                    const assetPath = match[1];
+                    const fullAssetUrl = assetPath.startsWith('http') 
+                      ? assetPath 
+                      : new URL(assetPath.startsWith('/') ? assetPath : '/' + assetPath, self.location.origin).href;
                     
-                    // Removed syncChannel chunk reporting to avoid UI flicker
-
-                    const hasChunk = await assetsCache.match(fullChunkUrl);
-                    if (!hasChunk) {
-                      try {
-                        const r = await fetch(fullChunkUrl, { priority: 'low' });
-                        if (r.ok) await assetsCache.put(fullChunkUrl, r);
-                      } catch (e) {}
+                    const hasAsset = await assetsCache.match(fullAssetUrl);
+                    if (!hasAsset) {
+                      assetCount++;
+                      // v287: Retry logic for critical assets (up to 2 attempts)
+                      let attempts = 0;
+                      let success = false;
+                      while (attempts < 2 && !success) {
+                        attempts++;
+                        try {
+                          const r = await fetchWithTimeout(new Request(fullAssetUrl), 15000);
+                          if (r.ok) {
+                            await assetsCache.put(fullAssetUrl, r);
+                            success = true;
+                          }
+                        } catch (e) {
+                          if (attempts < 2) await new Promise(r => setTimeout(r, 500));
+                        }
+                      }
                     }
                   }
+                  if (isShell) console.log(`[SW ${VERSION}] Shell assets cached: ${assetCount}`);
                 } catch (err) {
-                  console.warn('[SW] Chunk extraction failed for:', url);
+                  console.warn('[SW] Asset extraction failed for:', url);
                 }
 
-                console.log(`[SW ${VERSION}] Warm-cached success (+chunks):`, url);
+                console.log(`[SW ${VERSION}] Warm-cached success (+assets):`, url);
               } else if (!isLoginRedirect) {
                 await cache.put(url, response.clone());
               }
             }
             
             if (replyPort) replyPort.postMessage({ done: true, url });
-            // v286: Minimal 100ms delay to keep the process fast but safe
             await new Promise(r => setTimeout(r, 100)); 
           } catch (e) {
             console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
@@ -1100,15 +1111,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       const getAllRequest = outboxStore.getAll();
 
     getAllRequest.onsuccess = async () => {
-    // v262: Captura atómica de items pendientes. 
-    // Usamos una transacción de escritura para marcar todos los pendientes como 'syncing' 
-    // de un solo golpe, evitando que otra instancia los reclame.
-    const pendingItems = await new Promise((res) => {
-      const tx = db.transaction(['outbox'], 'readwrite');
-      const store = tx.objectStore('outbox');
-      const getAll = store.getAll();
-      getAll.onsuccess = () => {
-        let allItems = getAll.result || [];
+      try {
+        const allItems = getAllRequest.result || [];
         
         // Filtrar por tipo si se especificó una etiqueta de sync
         let toSync = allItems.filter(i => (i.status === 'pending' || i.status === 'failed'));
@@ -1119,15 +1123,13 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
         // v272: Sort chronologically (FIFO) for dependency order
         toSync.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
         
-        // Marcamos todos como 'syncing' en la misma transacción
+        // Marcamos todos como 'syncing' en la misma transacción original
         for (const item of toSync) {
           const lockedItem = { ...item, status: 'syncing' };
-          store.put(lockedItem);
+          outboxStore.put(lockedItem);
         }
-        res(toSync);
-      };
-      getAll.onerror = () => res([]);
-    });
+
+        const pendingItems = toSync;
 
     if (pendingItems.length === 0) {
       resolve();
@@ -1156,7 +1158,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
     // v278: Pre-fetch storage config once per cycle for better performance
     let storageConfig = null;
     try {
-      const configResp = await fetch('/api/storage/config');
+      // v286: Use fetchWithTimeout for config retrieval
+      const configResp = await fetchWithTimeout(new Request('/api/storage/config'), 10000);
       if (configResp.ok) storageConfig = await configResp.json();
     } catch (e) {
       console.warn('[SW] Could not pre-fetch storage config');
@@ -1245,7 +1248,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                   for (let i = 0; i < raw.length; ++i) { uInt8Array[i] = raw.charCodeAt(i); }
                   blob = new Blob([uInt8Array], { type: contentType });
                 } else if (typeof source === 'string' && source.startsWith('blob:')) {
-                  const res = await fetch(source);
+                  // v286: Use fetchWithTimeout for local blob retrieval
+                  const res = await fetchWithTimeout(new Request(source), 5000);
                   blob = await res.blob();
                 } else {
                   return source; // Already a URL or unknown
@@ -1264,14 +1268,15 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 const path = `/${config.storageZone}/${folderPath}/${timestamp}-${safeName}`;
                 const uploadUrl = `https://${config.storageHost}${path}`;
                 
-                const res = await fetch(uploadUrl, {
+                // v286: Use fetchWithTimeout for Bunny storage upload
+                const res = await fetchWithTimeout(new Request(uploadUrl, {
                   method: 'PUT',
                   headers: { 
                     'AccessKey': config.accessKey, 
                     'Content-Type': blob.type || 'application/octet-stream' 
                   },
                   body: blob
-                });
+                }), 90000); // 90s for large files
                 if (!res.ok) throw new Error(`Bunny upload failed with status ${res.status}`);
                 return `${config.pullZoneUrl}/${folderPath}/${timestamp}-${safeName}`;
               } catch (e) {
@@ -1296,10 +1301,11 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 formData.append('totalChunks', totalChunks.toString());
                 formData.append('filename', filename);
 
-                const res = await fetch('/api/upload/chunk', {
+                // v286: Use fetchWithTimeout for chunked uploads
+                const res = await fetchWithTimeout(new Request('/api/upload/chunk', {
                   method: 'POST',
                   body: formData
-                });
+                }), 45000); // 45s for chunk
 
                 if (!res.ok) throw new Error(`Chunk ${i} failed`);
                 const data = await res.json();
@@ -1404,7 +1410,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           }
 
           if (endpoint) {
-            const res = await fetch(endpoint, {
+            // v286: Use fetchWithTimeout for main sync request
+            const res = await fetchWithTimeout(new Request(endpoint, {
               method,
               headers: { 
                 'Content-Type': 'application/json',
@@ -1418,7 +1425,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 createdAt: new Date(item.timestamp).toISOString(),
                 isOfflineSync: true
               })
-            });
+            }), 30000); // 30s timeout for API
 
             if (res.ok) {
                await new Promise((deleteRes) => {
@@ -1477,12 +1484,37 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       // Even if some or all items failed, if there are still items pending in the outbox,
       // we schedule another check soon. This fixes the issue where a "half-working" 
       // connection causes the SW to give up until the next OS-triggered sync event.
-      const stillPendingCount = pendingItems.length;
-      if (stillPendingCount > 0) {
-        console.log(`[SW] ${stillPendingCount} items still pending. Scheduling retry in 10s...`);
-        setTimeout(() => {
-          processOutboxSync(false);
-        }, 10000);
+      } catch (fatal) {
+        console.error('[SW] Fatal error in outbox sync loop:', fatal);
+      } finally {
+        try {
+          const allNotifications = await self.registration.getNotifications();
+          allNotifications.forEach(n => {
+            if (n.tag === 'sync-progress' || n.title.includes('Sincronizando')) {
+              n.close();
+            }
+          });
+        } catch (e) {
+          console.error('[SW] Notification cleanup failed:', e);
+        }
+        // v286: Improved retry check - check if there are still items to sync
+        try {
+          const dbRetry = await openAquatechDB();
+          const count = await new Promise(r => {
+            const tx = dbRetry.transaction(['outbox'], 'readonly');
+            const req = tx.objectStore('outbox').count();
+            req.onsuccess = () => r(req.result);
+            req.onerror = () => r(0);
+          });
+          if (count > 0) {
+            console.log(`[SW] ${count} items still pending. Scheduling retry in 20s...`);
+            setTimeout(() => processOutboxSync(false), 20000);
+          }
+        } catch (e) {
+          console.warn('[SW] Retry check failed:', e);
+        }
+        
+        resolve();
       }
     };
 

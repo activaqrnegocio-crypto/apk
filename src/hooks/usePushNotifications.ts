@@ -5,16 +5,32 @@ import { useState, useEffect, useCallback } from 'react'
 type PushStatus = 'loading' | 'unsupported' | 'denied' | 'prompt' | 'subscribed' | 'unsubscribed'
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  // Strip literally everything that is not a valid base64url character
-  const base64Clean = base64String.replace(/[^A-Za-z0-9\-_]/g, '');
-  const padding = '='.repeat((4 - (base64Clean.length % 4)) % 4)
-  const base64 = (base64Clean + padding).replace(/-/g, '+').replace(/_/g, '/')
-  const rawData = window.atob(base64)
-  const outputArray = new Uint8Array(rawData.length)
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i)
+  // Remove any characters that aren't part of base64url (including quotes or spaces)
+  const base64Clean = base64String.trim().replace(/['"]/g, '').replace(/[^A-Za-z0-9\-_]/g, '');
+  
+  // Standard base64url to base64 conversion
+  let base64 = base64Clean.replace(/-/g, '+').replace(/_/g, '/');
+  
+  // Add correct padding
+  const pad = base64.length % 4;
+  if (pad) {
+    if (pad === 1) {
+      throw new Error('Invalid Base64 string: length cannot be 4n + 1');
+    }
+    base64 += '='.repeat(4 - pad);
   }
-  return outputArray
+
+  try {
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  } catch (err) {
+    console.error('[PUSH] Failed to decode VAPID key:', base64);
+    throw err;
+  }
 }
 
 export function usePushNotifications() {
