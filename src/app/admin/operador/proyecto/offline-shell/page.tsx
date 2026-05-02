@@ -11,26 +11,29 @@ function OperatorOfflineShellContent() {
   const userId = session?.user?.id ? Number(session.user.id) : 0
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      const qId = params.get('id');
-      if (qId && /^\d+$/.test(qId)) {
-        setIdFromUrl(Number(qId));
-        return;
-      }
+    if (typeof window === 'undefined') return;
 
+    const extractId = (): number => {
       const path = window.location.pathname;
-      const match = path.match(/\/proyecto[s]?\/(\d+)/i);
-      if (match) {
-        setIdFromUrl(Number(match[1]))
-      } else {
-        // Fallback: check if the last segment is a number
-        const segments = path.split('/').filter(Boolean);
-        const last = segments[segments.length - 1];
-        if (last && /^\d+$/.test(last)) setIdFromUrl(Number(last));
-      }
-    }
-  }, [])
+      
+      // 1. Extrae directamente del pathname (caso normal: /admin/operador/proyecto/1051)
+      const match = path.match(/\/proyectos?\/(\d+)/i);
+      if (match) return Number(match[1]);
+      
+      // 2. Fallback: último segmento si es número
+      const segments = path.split('/').filter(Boolean);
+      const last = segments[segments.length - 1];
+      if (last && /^\d+$/.test(last)) return Number(last);
+      
+      // 3. Fallback de emergencia: sessionStorage (cuando URL sí cambió a offline-shell)
+      const stored = sessionStorage.getItem('last_op_project_id');
+      if (stored && /^\d+$/.test(stored)) return Number(stored);
+      
+      return 0;
+    };
+
+    setIdFromUrl(extractId());
+  }, []);
 
   const dummyProject = {
     id: idFromUrl,

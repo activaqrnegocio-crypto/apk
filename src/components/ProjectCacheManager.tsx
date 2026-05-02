@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/lib/db'
 
@@ -11,6 +11,10 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
   const [lastSync, setLastSync] = useState<number | null>(null)
   const [projectCount, setProjectCount] = useState(0)
   const [isDismissed, setIsDismissed] = useState(false)
+  const [isOptimizingAssets, setIsOptimizingAssets] = useState(false)
+
+  // v289: Debounce — only declare "done" after 5s of SW silence (no new batch messages)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // v279: Use Live Query scoped to the specific user ID to avoid cross-account contamination
   const cacheKey = `projects_bulk_${userId || 'default'}`;
@@ -18,45 +22,91 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
 
   useEffect(() => {
     if (!meta) return;
-    
     setLastSync(meta.lastSync);
     setProjectCount(meta.count);
-    
-    // v274: Priority check for 'syncing' status
     if (meta.status === 'syncing') {
       setIsSyncing(true);
       setSyncComplete(false);
     } else {
       setIsSyncing(false);
-      // v274: Consider complete if lastSync was within 30 minutes
       const isFresh = meta.lastSync && (Date.now() - meta.lastSync < 30 * 60 * 1000);
       setSyncComplete(!!isFresh);
     }
   }, [meta]);
 
   useEffect(() => {
-    // Keep event listeners for granular progress updates during active sync
     const onProgress = (e: any) => {
       setIsSyncing(true)
       setSyncComplete(false)
       setProgress(e.detail)
     }
-    
+
     const onFinished = (e: any) => {
-      // Logic handled by useLiveQuery above mostly, but we update project count here
       if (e.detail?.count) setProjectCount(e.detail.count);
+      // Data sync done → SW warm-caching is now running in background
+      setIsOptimizingAssets(true);
+      
+      // v291: Immediately ask SW if it's already working on assets
+      if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'GET_PRECACHE_STATUS' });
+      }
+      
+      // Safety timeout: 5 minutes. If SW hasn't finished by then, something is wrong.
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        console.warn('[CacheManager] Asset optimization timed out (5m). Force finishing.');
+        setIsOptimizingAssets(false);
+      }, 300000); 
     }
+
+    const onSwMessage = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'ASSETS_CACHED') {
+        const remaining = e.data.count ?? 0;
+        
+        // As long as there is activity, we reset the safety timeout
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        
+        if (remaining === 0) {
+          console.log('[CacheManager] ✅ SW reports 0 pending assets. Sync complete.');
+          setIsOptimizingAssets(false);
+        } else {
+          // If we receive any count > 0, we MUST stay in optimizing state
+          console.log('[CacheManager] SW working... pending:', remaining);
+          setIsOptimizingAssets(true);
+          setSyncComplete(false); // v291: If SW is still working, we are NOT fully synced
+          
+          // Reset safety timeout for another 5 minutes of silence
+          debounceRef.current = setTimeout(() => {
+            setIsOptimizingAssets(false);
+          }, 300000);
+        }
+      }
+    };
 
     window.addEventListener('bulk-cache-sync-progress', onProgress)
     window.addEventListener('bulk-cache-sync-finished', onFinished)
-    
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener('message', onSwMessage);
+      // v291: Initial check for SW status
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'GET_PRECACHE_STATUS' });
+      }
+    }
+
     return () => {
       window.removeEventListener('bulk-cache-sync-progress', onProgress)
       window.removeEventListener('bulk-cache-sync-finished', onFinished)
+      if (navigator.serviceWorker) {
+        navigator.serviceWorker.removeEventListener('message', onSwMessage);
+      }
+      if (debounceRef.current) clearTimeout(debounceRef.current);
     }
   }, [])
 
   if (isDismissed) return null;
+
+  const isFullyDone = syncComplete && !isOptimizingAssets && !isSyncing;
+  const isWorking = isSyncing || isOptimizingAssets;
 
   // Render Premium Status Badge
   return (
@@ -66,19 +116,19 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
       borderRadius: '16px',
       overflow: 'hidden',
       transition: 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)',
-      background: syncComplete 
-        ? 'rgba(16, 185, 129, 0.05)' 
-        : isSyncing 
+      background: isFullyDone
+        ? 'rgba(16, 185, 129, 0.05)'
+        : isWorking
           ? 'rgba(56, 189, 248, 0.05)'
           : 'rgba(255, 255, 255, 0.03)',
-      border: `1px solid ${syncComplete ? 'rgba(16, 185, 129, 0.2)' : isSyncing ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.08)'}`,
+      border: `1px solid ${isFullyDone ? 'rgba(16, 185, 129, 0.2)' : isWorking ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.08)'}`,
       padding: '12px 20px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: '16px',
       backdropFilter: 'blur(10px)',
-      boxShadow: syncComplete ? '0 4px 20px rgba(16, 185, 129, 0.1)' : 'none'
+      boxShadow: isFullyDone ? '0 4px 20px rgba(16, 185, 129, 0.1)' : 'none'
     }}>
       {/* Background Progress Glow */}
       {isSyncing && (
@@ -97,18 +147,18 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
           width: '36px',
           height: '36px',
           borderRadius: '10px',
-          background: syncComplete ? 'rgba(16, 185, 129, 0.15)' : isSyncing ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.1)',
+          background: isFullyDone ? 'rgba(16, 185, 129, 0.15)' : isWorking ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.1)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: syncComplete ? '#10b981' : isSyncing ? '#38bdf8' : 'rgba(255,255,255,0.4)',
+          color: isFullyDone ? '#10b981' : isWorking ? '#38bdf8' : 'rgba(255,255,255,0.4)',
           transition: 'all 0.3s ease'
         }}>
-          {isSyncing ? (
+          {isWorking ? (
             <svg style={{ animation: 'spin 2s linear infinite' }} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M21 12a9 9 0 1 1-6.219-8.56" />
             </svg>
-          ) : syncComplete ? (
+          ) : isFullyDone ? (
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
               <polyline points="20 6 9 17 4 12" />
             </svg>
@@ -121,16 +171,22 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
         </div>
 
         <div>
-          <h4 style={{ 
-            margin: 0, 
-            fontSize: '0.9rem', 
-            fontWeight: '600', 
-            color: syncComplete ? '#10b981' : 'white',
+          <h4 style={{
+            margin: 0,
+            fontSize: '0.9rem',
+            fontWeight: '600',
+            color: isFullyDone ? '#10b981' : 'white',
             display: 'flex',
             alignItems: 'center',
             gap: '8px'
           }}>
-            {isSyncing ? 'Sincronizando...' : syncComplete ? 'Sincronizado Offline' : 'Estado Offline'}
+            {isSyncing
+              ? 'Sincronizando Datos...'
+              : isOptimizingAssets
+                ? 'Optimizando interfaz...'
+                : isFullyDone
+                  ? 'Sincronizado Offline'
+                  : 'Estado Offline'}
             {isSyncing && progress.total > 0 && (
               <span style={{ fontSize: '0.75rem', opacity: 0.6, fontWeight: 'normal' }}>
                 ({progress.current}/{progress.total})
@@ -138,17 +194,19 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
             )}
           </h4>
           <p style={{ margin: '2px 0 0 0', fontSize: '0.75rem', color: 'rgba(255,255,255,0.5)' }}>
-            {isSyncing 
-              ? 'Preparando acceso sin conexión para tus proyectos.' 
-              : syncComplete 
-                ? `${projectCount} proyectos listos para trabajar sin internet.` 
-                : 'Iniciando descarga de datos necesarios...'}
+            {isSyncing
+              ? 'Descargando chats y tareas en base de datos local.'
+              : isOptimizingAssets
+                ? 'Preparando archivos de interfaz para acceso sin internet...'
+                : isFullyDone
+                  ? `${projectCount} proyectos completamente listos sin internet.`
+                  : 'Iniciando descarga de datos necesarios...'}
           </p>
         </div>
       </div>
 
       <div style={{ position: 'relative', zIndex: 1 }}>
-        {syncComplete ? (
+        {isFullyDone ? (
            <div style={{
              display: 'flex',
              alignItems: 'center',
@@ -177,8 +235,8 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
           to { transform: rotate(360deg); }
         }
         .project-cache-status:hover {
-          background: ${syncComplete ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255,255,255,0.05)'};
-          border-color: ${syncComplete ? 'rgba(16, 185, 129, 0.4)' : 'rgba(255,255,255,0.15)'};
+          background: ${isFullyDone ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255,255,255,0.05)'};
+          border-color: ${isFullyDone ? 'rgba(16, 185, 129, 0.4)' : 'rgba(255,255,255,0.15)'};
         }
       `}</style>
     </div>

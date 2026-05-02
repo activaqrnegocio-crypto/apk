@@ -191,6 +191,10 @@ export default function OperatorDashboardClient({
   }, [projectsFromCache, user?.id]);
 
 
+  // v291: Search and Status Filtering
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'TODOS' | 'EN PROCESO' | 'FINALIZADO' | 'DETENIDO'>('TODOS')
+
   // Merge server projects with cache projects (Smart Merge v224)
   const projects = useMemo(() => {
     // v287: If cache is still loading or auth is hydrating, show initialProjects 
@@ -213,13 +217,25 @@ export default function OperatorDashboardClient({
       projectMap.set(p.id, { ...(existing || {}), ...p });
     });
 
-    return Array.from(projectMap.values()).map(p => ({
-      ...p,
-      unreadCount: unreadCounts?.[p.id] ?? p.unreadCount ?? 0
-    })).sort((a, b) => 
-      new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
-    );
-  }, [projectsFromCache, initialProjects, unreadCounts, isHydratingAuth])
+    return Array.from(projectMap.values())
+      .map(p => ({
+        ...p,
+        unreadCount: unreadCounts?.[p.id] ?? p.unreadCount ?? 0
+      }))
+      .filter(p => {
+        const matchesSearch = !searchTerm || 
+          p.title?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.client?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          p.city?.toLowerCase().includes(searchTerm.toLowerCase());
+        
+        const matchesStatus = statusFilter === 'TODOS' || p.status === statusFilter;
+        
+        return matchesSearch && matchesStatus;
+      })
+      .sort((a, b) => 
+        new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
+      );
+  }, [projectsFromCache, initialProjects, unreadCounts, isHydratingAuth, searchTerm, statusFilter])
 
   const [selectedTask, setSelectedTask] = useState<any>(null)
 
@@ -227,6 +243,35 @@ export default function OperatorDashboardClient({
 
   // 1. Initial hydration and offline cache for appointments
   const syncTriggeredRef = useRef(false);
+
+  // v289: Stable warm-cache logic (Only fire when project IDs change, not on unread updates)
+  const warmedProjectIdsRef = useRef<Set<number>>(new Set());
+  
+  useEffect(() => {
+    if (!projects || projects.length === 0 || !navigator.onLine) return;
+    
+    // Extract only stable IDs to compare
+    const currentIds = projects.slice(0, 20)
+      .filter(p => p.id && !String(p.id).startsWith('pending'))
+      .map(p => Number(p.id));
+    
+    // Check if we have any new projects to warm
+    const newIds = currentIds.filter(id => !warmedProjectIdsRef.current.has(id));
+    
+    if (newIds.length > 0) {
+      const urls = newIds.map(id => `/admin/operador/proyecto/${id}`);
+      console.log(`[WarmCache] Messaging SW to pre-cache ${urls.length} NEW operator projects`);
+      
+      if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'PRECACHE_URLS',
+          urls
+        });
+        // Mark as warmed
+        newIds.forEach(id => warmedProjectIdsRef.current.add(id));
+      }
+    }
+  }, [projects?.length]); // Only depend on the length or a stable property, not the whole array object if it's memoized with unreads
 
   // v264: Instant Outbox Kick - Force sync when returning to focus or online
   useEffect(() => {
@@ -576,10 +621,43 @@ export default function OperatorDashboardClient({
 
       </div>
 
+      {activeTab === 'PROYECTOS' && (
+        <div style={{ marginTop: '15px' }}>
+          <div className="search-container" style={{ marginBottom: '15px' }}>
+            <div className="input-group">
+              <span className="input-group-text bg-transparent border-end-0">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              </span>
+              <input 
+                type="text" 
+                className="form-control border-start-0 ps-0" 
+                placeholder="Buscar por proyecto, cliente o ciudad..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ fontSize: '0.9rem' }}
+              />
+            </div>
+          </div>
+          
+          <div className="status-filters" style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '15px' }}>
+            {['TODOS', 'EN PROCESO', 'FINALIZADO', 'DETENIDO'].map((status) => (
+              <button
+                key={status}
+                onClick={() => setStatusFilter(status as any)}
+                className={`btn btn-xs ${statusFilter === status ? 'btn-primary' : 'btn-ghost'}`}
+                style={{ fontSize: '0.7rem', textTransform: 'capitalize' }}
+              >
+                {status.toLowerCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Action header depending on active tab */}
 
 
-      <div className="tab-content" style={{ marginTop: 'var(--space-md)' }}>
+      <div className="tab-content" style={{ marginTop: 'var(--space-sm)' }}>
         {activeTab === 'TAREAS' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
             {todayTasks.length > 0 ? todayTasks.map(task => (
@@ -638,6 +716,18 @@ export default function OperatorDashboardClient({
                     href={`/admin/operador/proyecto/${project.id}`} 
                     key={project.id} 
                     prefetch={false}
+                    onClick={(e) => {
+                      if (!project.id) return;
+                      // v289: Store ID in sessionStorage as emergency fallback for offline-shell
+                      sessionStorage.setItem('last_op_project_id', String(project.id));
+                      console.log('[OpNav] Navigating to project:', project.id);
+                      
+                      // v289: If offline, force full-page navigation to keep the URL correct for the shell
+                      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                        e.preventDefault();
+                        window.location.href = `/admin/operador/proyecto/${project.id}`;
+                      }
+                    }}
                     className="card interactive" 
                     style={{ textDecoration: 'none', display: 'flex', flexDirection: 'column' }}
                   >

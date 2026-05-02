@@ -67,7 +67,7 @@ export async function GET(request: Request) {
             user: { select: { id: true, name: true } }
           }
         },
-        // v280: Only 5 latest messages for the unread badge count. Full chat loads on-demand.
+        // v289: Increased to 50 messages for better offline chat context.
         chatMessages: {
           select: {
             id: true,
@@ -77,7 +77,7 @@ export async function GET(request: Request) {
             type: true,
           },
           orderBy: { createdAt: 'desc' },
-          take: 5
+          take: 50
         }
       },
       orderBy: { updatedAt: 'desc' }

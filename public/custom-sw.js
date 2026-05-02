@@ -30,7 +30,8 @@ const PRE_CACHE = [
   'https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,300;1,400&display=swap'
 ];
 
-const VERSION = 'v288';
+const VERSION = 'v289';
+let precacheQueueCount = 0; // v289: Global counter for pending asset caching
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -290,26 +291,13 @@ async function rscNetworkFirst(request) {
                                  url.pathname.includes('/operador/proyecto/');
 
     if (isAdminProjectRsc || isOperatorProjectRsc) {
-      const staticCache = await caches.open(STATIC_CACHE);
-
-      const findShellInAllCaches = async (path) => {
-        // v273: Aggressive search for shell in all relevant caches
-        return await rscCache.match(path) || 
-               await pagesCache.match(path) || 
-               await staticCache.match(path) ||
-               await caches.match(path + '?_rsc=1', { ignoreVary: true }) ||
-               await caches.match(path, { ignoreVary: true, ignoreSearch: true });
-      };
-
-      if (isAdminProjectRsc) {
-        // console.log(`[SW ${VERSION}] RSC Cache miss for admin project, serving Universal RSC Shell...`);
-        const shellMatch = await findShellInAllCaches('/admin/proyectos/offline-shell');
-        if (shellMatch) return shellMatch;
-      } else if (isOperatorProjectRsc) {
-        // console.log(`[SW ${VERSION}] RSC Cache miss for operator project, serving Universal RSC Shell...`);
-        const shellMatch = await findShellInAllCaches('/admin/operador/proyecto/offline-shell');
-        if (shellMatch) return shellMatch;
-      }
+      // v289: CRITICAL FIX — Do NOT return the shell RSC for specific project URLs.
+      // Returning shell RSC causes Next.js router to change the URL to /offline-shell,
+      // which breaks idFromUrl extraction and prevents IndexedDB hydration.
+      // The navigationHandler already serves the shell HTML while keeping the original URL.
+      // ProjectDetailClient polling logic then hydrates from IndexedDB correctly.
+      console.log(`[SW v289] RSC cache miss for project — returning error so router stays on original URL.`);
+      return Response.error();
     }
     console.warn(`[SW ${VERSION}] RSC Network First failed completely for:`, url.pathname);
     return Response.error(); // v251: Prevent TypeError by returning a valid error response
@@ -355,22 +343,11 @@ async function rscStaleWhileRevalidate(request) {
                                  url.pathname.includes('/operador/proyecto/');
 
     if (isAdminProjectRsc || isOperatorProjectRsc) {
-      const rscCache = await caches.open(RSC_CACHE);
-      const pagesCache = await caches.open(PAGES_CACHE);
-      const staticCache = await caches.open(STATIC_CACHE);
-
-      const findShellInAllCaches = async (path) => {
-        return await rscCache.match(path) || 
-               await pagesCache.match(path) || 
-               await staticCache.match(path) ||
-               await caches.match(path + '?_rsc=1', { ignoreVary: true }) ||
-               await caches.match(path, { ignoreVary: true, ignoreSearch: true });
-      };
-
-      const shellPath = isAdminProjectRsc ? '/admin/proyectos/offline-shell' : '/admin/operador/proyecto/offline-shell';
-      // console.log(`[SW ${VERSION}] RSC SWR Cache miss for project, serving Universal RSC Shell...`);
-      const shellMatch = await findShellInAllCaches(shellPath);
-      if (shellMatch) return shellMatch;
+      // v289: CRITICAL FIX — Same as rscNetworkFirst: do NOT return shell RSC for
+      // specific project RSC requests. Let the router fail here so the URL stays intact.
+      // The ProjectDetailClient useEffect polls IndexedDB to hydrate the data.
+      console.log(`[SW v289] RSC SWR cache miss for project — returning error to preserve URL.`);
+      return Response.error();
     }
 
     return Response.error();
@@ -462,7 +439,21 @@ async function navigationHandler(request) {
       }
       return response;
     } catch (e) {
-      console.warn('[SW] Navigation network failed:', url.pathname);
+    }
+
+    // ── STEP 2.5: v289 — Project URL offline? Serve the correct shell immediately.
+    // This is faster than findCachedPage() because it goes direct, no scanning.
+    const isAdminProjectNav = url.pathname.match(/\/admin\/proyectos\/\d+/);
+    const isOperatorProjectNav = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/);
+    if (isAdminProjectNav || isOperatorProjectNav) {
+      const shellUrl = isOperatorProjectNav
+        ? '/admin/operador/proyecto/offline-shell'
+        : '/admin/proyectos/offline-shell';
+      const directShell = await caches.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
+      if (directShell && directShell.ok) {
+        console.log(`[SW v289] Serving shell directly for offline project: ${url.pathname}`);
+        return cleanResponse(directShell);
+      }
     }
 
     // ── STEP 3: Last chance — Try shells if network failed or we are offline
@@ -897,8 +888,14 @@ self.addEventListener('message', (event) => {
     const urls = event.data.urls || [];
     const replyPort = event.data.replyPort || null;
     const projectName = event.data.projectName || '';
-    // Silence garbage logs
-    // console.log('[SW] Warm-up pre-caching request for', urls.length, 'URLs');
+    
+    // v289: Increment global pending count
+    precacheQueueCount += urls.length;
+    
+    // Notify clients immediately that work started
+    self.clients.matchAll().then(clients => {
+      clients.forEach(c => c.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueCount }));
+    });
     
     event.waitUntil(
       caches.open(PAGES_CACHE).then(async (cache) => {
@@ -907,11 +904,13 @@ self.addEventListener('message', (event) => {
             const existing = await cache.match(url);
             if (existing && existing.ok && !existing.redirected) {
                if (replyPort) replyPort.postMessage({ done: true, url, cached: true });
+               precacheQueueCount = Math.max(0, precacheQueueCount - 1);
                continue;
             }
 
             if (url.startsWith('data:')) {
               if (replyPort) replyPort.postMessage({ done: true, url, skipped: true });
+              precacheQueueCount = Math.max(0, precacheQueueCount - 1);
               continue;
             }
 
@@ -988,7 +987,7 @@ self.addEventListener('message', (event) => {
                   // v user: Show asset count for chunks visibility
                   if (isShell || isAdminOrOp) {
                     const projPrefix = projectName ? `[${projectName}] ` : '';
-                    console.log(`[SW v288] ${projPrefix}Chunks listos (${url}): ${newAssets} nuevos, ${existingAssets} ya en caché.`);
+                    console.log(`[SW ${VERSION}] ${projPrefix}Chunks listos (${url}): ${newAssets} nuevos, ${existingAssets} ya en caché.`);
                   }
                 } catch (err) {
                   console.warn('[SW] Asset extraction failed for:', url);
@@ -1001,17 +1000,35 @@ self.addEventListener('message', (event) => {
               }
             }
             
+            precacheQueueCount = Math.max(0, precacheQueueCount - 1); // Finished one URL
+            
+            // v289: Broadcast count AFTER EVERY URL for constant UI heartbeat
+            try {
+              const allClients = await self.clients.matchAll();
+              allClients.forEach(client => {
+                client.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueCount });
+              });
+            } catch (e) {}
+
             await new Promise(r => setTimeout(r, 100)); 
           } catch (e) {
+            precacheQueueCount = Math.max(0, precacheQueueCount - 1); // Count even if failed
             console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
+            // v291: Notify error too so heartbeat continues
+            self.clients.matchAll().then(clients => {
+              clients.forEach(c => c.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueCount }));
+            });
           }
         }
         if (replyPort) replyPort.postMessage({ done: true, urls });
-        // Silence garbage logs
-        // console.log(`[SW ${VERSION}] Pre-caching sequence finished`);
+        
         trimCache(PAGES_CACHE, 400); 
       })
     );
+  }
+
+  if (event.data && event.data.type === 'GET_PRECACHE_STATUS') {
+    event.source?.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueCount });
   }
 });
 

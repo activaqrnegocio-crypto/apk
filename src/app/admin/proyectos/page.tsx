@@ -104,6 +104,11 @@ export default function ProyectosPage() {
       if (Array.isArray(data)) {
         setProjects(data)
         
+        // v289: Warm cache for the first batch of projects
+        if (data.length > 0) {
+          warmCache(data.slice(0, 15));
+        }
+
         // Cache to Dexie when online (passive cache for list fields only)
         if (typeof navigator !== 'undefined' && navigator.onLine) {
           // Only update items that already exist in cache to not overwrite full offline data with partial list data
@@ -134,6 +139,23 @@ export default function ProyectosPage() {
       setLoading(false)
     }
   }
+
+  // v289: Incremental warm-cache for projects
+  const warmCache = (projectList: any[]) => {
+    if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller && navigator.onLine) {
+      const urls = projectList
+        .filter(p => p.id && !String(p.id).startsWith('pending'))
+        .map(p => `/admin/proyectos/${p.id}`);
+      
+      if (urls.length > 0) {
+        console.log(`[WarmCache] Messaging SW to pre-cache ${urls.length} projects`);
+        navigator.serviceWorker.controller.postMessage({
+          type: 'PRECACHE_URLS',
+          urls
+        });
+      }
+    }
+  };
 
   // --- OFFLINE SUPPORT ---
   const pendingProjects = useLiveQuery(
@@ -378,9 +400,19 @@ export default function ProyectosPage() {
           return (
             <div key={p.id} style={{ position: 'relative', opacity: p.isPending ? 0.8 : 1 }}>
               <Link href={p.isPending || !p.id ? '#' : `/admin/proyectos/${p.id}`} 
-                onClick={() => {
+                onClick={(e) => {
                   if (!p.id || p.isPending) return;
+                  // v289: Store ID in sessionStorage as emergency fallback for offline-shell
+                  sessionStorage.setItem('last_admin_project_id', String(p.id));
                   console.log('[AdminNav] Navigating to project:', p.id);
+                  
+                  // v289: If offline, bypass Next.js RSC router and do a full-page navigation
+                  // This makes the SW's navigationHandler serve the shell at the correct URL
+                  // so idFromUrl can extract the project ID from window.location.pathname
+                  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+                    e.preventDefault();
+                    window.location.href = `/admin/proyectos/${p.id}`;
+                  }
                 }}
                 style={{ textDecoration: 'none', color: 'inherit', cursor: p.isPending ? 'default' : 'pointer' }}>
                 <div className="card h-full" style={{ 
@@ -569,7 +601,12 @@ export default function ProyectosPage() {
       {hasMore && (
         <div style={{ display: 'flex', justifyContent: 'center', marginTop: '32px' }}>
           <button
-            onClick={() => setVisibleCount(prev => prev + PAGE_SIZE)}
+            onClick={() => {
+              const nextBatch = filteredProjects.slice(visibleCount, visibleCount + PAGE_SIZE);
+              setVisibleCount(prev => prev + PAGE_SIZE);
+              // v289: Warm cache for the new visible projects
+              warmCache(nextBatch);
+            }}
             style={{
               padding: '14px 40px',
               borderRadius: '14px',

@@ -136,10 +136,26 @@ export default function ProjectDetailClient({ project: initialProject, available
                       (!isNaN(numericId) ? await db.projectsCache.get(numericId) : null);
 
         if (cached && !cancelled) {
-          setLocalProject(cached);
+          // v289: Normalize cached project and chat data — IndexedDB may store older structures
+          // that lack the 'user' object or 'userName' field, causing crashes offline
+          const normalizedProject = {
+            ...cached,
+            team: (cached.team || []).map((m: any) => ({
+              ...m,
+              user: m.user || { name: 'Operador', id: m.id || 0, phone: '' }
+            }))
+          };
+          setLocalProject(normalizedProject);
+
           const chat = await db.chatCache.get(idFromUrl) || 
                       (!isNaN(numericId) ? await db.chatCache.get(numericId) : null);
-          setLocalChat(chat?.messages || []);
+
+          const rawMessages = chat?.messages || [];
+          const normalizedMessages = rawMessages.map((m: any) => ({
+            ...m,
+            userName: m.userName || m.user?.name || 'Usuario',
+          }));
+          setLocalChat(normalizedMessages);
           setIsSyncingOffline(false);
           setCacheNotFound(false);
           hasRecovered = true;
@@ -635,16 +651,20 @@ export default function ProjectDetailClient({ project: initialProject, available
     }
     markAsSeen()
 
-    // Immediate full fetch on mount
-    fetchMessages().then(msgs => {
-      if (msgs.length > 0) {
-        setChatMessages(msgs)
-        markAsSeen()
-      }
-    })
+    // Immediate full fetch on mount — only when online
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      fetchMessages().then(msgs => {
+        if (msgs.length > 0) {
+          setChatMessages(msgs)
+          markAsSeen()
+        }
+      })
+    }
 
     const pollInterval = setInterval(async () => {
       if (document.hidden) return
+      // v289: Skip polling when offline to avoid console spam and wasted requests
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return
       
       const current = chatMessagesRef.current
       const lastMsg = current[current.length - 1]
@@ -3477,11 +3497,11 @@ export default function ProjectDetailClient({ project: initialProject, available
                   {project.team.map((member: any) => (
                     <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px', backgroundColor: 'var(--bg-surface)', borderRadius: '8px' }}>
                       <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontWeight: 'bold' }}>
-                        {member.user.name.substring(0,2).toUpperCase()}
+                        {(member.user?.name || 'OP').substring(0,2).toUpperCase()}
                       </div>
                       <div>
-                        <div style={{ fontSize: '0.95rem', color: 'var(--text)' }}>{member.user.name}</div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{member.user.phone || 'Sin número'}</div>
+                        <div style={{ fontSize: '0.95rem', color: 'var(--text)' }}>{member.user?.name || 'Operador'}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{member.user?.phone || 'Sin número'}</div>
                       </div>
                     </div>
                   ))}

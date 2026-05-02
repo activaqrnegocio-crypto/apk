@@ -197,62 +197,50 @@ export default function GlobalSyncWorker() {
         // This ensures that if the user closes the app during pre-fetching, 
         // we don't restart the whole process immediately next time.
         // v274: Removed premature metadata update. Now we only save at the very end.
-
         // v267: INTELLIGENT PRE-FETCHING — Sequential chunk-by-chunk, SW-aware
-        if (true) {
+        // v267: Helper — waits up to 10s for the SW controller to be available
+        const getController = async (): Promise<ServiceWorker | null> => {
+          if (!('serviceWorker' in navigator)) return null;
+          if (navigator.serviceWorker.controller) return navigator.serviceWorker.controller;
+          await navigator.serviceWorker.ready;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            if (navigator.serviceWorker.controller) return navigator.serviceWorker.controller;
+            await new Promise(r => setTimeout(r, 500));
+          }
+          return navigator.serviceWorker.controller;
+        };
+
+        // v267: Sends a PRECACHE_URLS message and awaits SW confirmation via MessageChannel
+        const precacheAndWait = async (urlOrUrls: string | string[], projectName: string = ''): Promise<void> => {
+          const controller = await getController();
+          const urls = Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls];
+          if (!controller) {
+            await Promise.all(urls.map(url => 
+              fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'text/html' } }).catch(() => {})
+            ));
+            return;
+          }
+          await new Promise<void>((resolve) => {
+            const { port1, port2 } = new MessageChannel();
+            const timeout = setTimeout(() => resolve(), 30000);
+            port1.onmessage = () => { clearTimeout(timeout); resolve(); };
+            controller.postMessage({ type: 'PRECACHE_URLS', urls, projectName, replyPort: port2 }, [port2]);
+          });
+        };
+
+        // v289: Shell-First Strategy — Only precache the 2 universal shells.
+          // Individual project URLs are NOT needed because findCachedPage() in the SW
+          // automatically serves the correct shell when the specific URL is missing.
+          // This reduces sync from 3 minutes to ~15 seconds.
           window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
-            detail: { message: `Preparando entorno offline inteligente...` }
+            detail: { message: `Preparando entorno offline inteligente (Shell-First)...` }
           }))
 
-          // v267: Helper — waits up to 10s for the SW controller to be available
-          // This is crucial on first load where the SW installs DURING the sync loop.
-          const getController = async (): Promise<ServiceWorker | null> => {
-            if (!('serviceWorker' in navigator)) return null;
-            // If controller is already there, return it immediately
-            if (navigator.serviceWorker.controller) return navigator.serviceWorker.controller;
-            // Wait for the SW to be ready (installed + activated)
-            await navigator.serviceWorker.ready;
-            // Poll for controller with timeout (handles the "installed but not yet controlling" case)
-            for (let attempt = 0; attempt < 20; attempt++) {
-              if (navigator.serviceWorker.controller) return navigator.serviceWorker.controller;
-              await new Promise(r => setTimeout(r, 500));
-            }
-            return navigator.serviceWorker.controller;
-          };
-
-          // v267: Sends a PRECACHE_URLS message and awaits SW confirmation via MessageChannel
-          // This converts the fire-and-forget postMessage into a reliable awaitable call.
-          const precacheAndWait = async (urlOrUrls: string | string[], projectName: string = ''): Promise<void> => {
-            const controller = await getController();
-            const urls = Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls];
-            
-            if (!controller) {
-              // SW not available — fall back to direct fetch
-              await Promise.all(urls.map(url => 
-                fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'text/html' } }).catch(() => {})
-              ));
-              return;
-            }
-            // Use MessageChannel so we can await the SW's reply
-            await new Promise<void>((resolve) => {
-              const { port1, port2 } = new MessageChannel();
-              const timeout = setTimeout(() => resolve(), 30000); // v286: 30s timeout for full project bundle
-              port1.onmessage = () => { clearTimeout(timeout); resolve(); };
-              // v288: Send project name to SW so it can log which project's chunks it's downloading
-              controller.postMessage({ 
-                type: 'PRECACHE_URLS', 
-                urls, 
-                projectName,
-                replyPort: port2 
-              }, [port2]);
-            });
-          };
-
-          // 1. Shells — v282: Only pre-cache the shell relevant to the user's role
-          const shell = isAdmin ? '/admin/proyectos/offline-shell' : '/admin/operador/proyecto/offline-shell';
           await Promise.all([
-            precacheAndWait(shell),
-            precacheAndWait(`${shell}?_rsc=1`)
+            precacheAndWait('/admin/proyectos/offline-shell'),
+            precacheAndWait('/admin/operador/proyecto/offline-shell'),
+            precacheAndWait('/admin/proyectos/offline-shell?_rsc=1'),
+            precacheAndWait('/admin/operador/proyecto/offline-shell?_rsc=1'),
           ]);
 
           // 2. Main Sections (Role-Aware) — v280: All parallel, no delays
@@ -265,43 +253,7 @@ export default function GlobalSyncWorker() {
             const rscUrl = section.includes('?') ? `${section}&_rsc=prefetch` : `${section}?_rsc=prefetch`;
             fetch(rscUrl, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
           }));
-
-          // Admin & Operator: 100 projects max for full pre-cache. 
-          // Beyond that, they hydrate from IndexedDB via the shell.
-          if (projectsToProcess.length === 0) {
-            projectsToProcess = await db.projectsCache
-              .orderBy('lastAccessedAt')
-              .reverse()
-              .limit(100)
-              .toArray();
-          }
-
-          // v288: Increased limit to 300 for full project bundle pre-caching
-          const prefetchLimit = 300;
-          const topProjects = projectsToProcess.slice(0, prefetchLimit);
-          
-          const syncChannelAssets = new BroadcastChannel('aquatech-sync');
-          
-          // v286: Strictly sequential caching to avoid server saturation
-          for (let i = 0; i < topProjects.length; i++) {
-            const p = topProjects[i];
-            const projectPath = isAdmin ? `/admin/proyectos/${p.id}` : `/admin/operador/proyecto/${p.id}`;
-            // v288: Caching HTML, Chat, and RSC payload as a single atomic project bundle
-            const urls = [projectPath, `${projectPath}?view=chat`, `${projectPath}?_rsc=1`];
-
-            const msg = `[Sync] Proyecto ${i + 1}/${topProjects.length}: ${p.title || p.id} (Descargando Chunks...)`;
-            console.log(msg); // v288: RESTORED per user request
-            window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', { detail: { message: msg } }));
-            syncChannelAssets.postMessage({ type: 'ASSET_PRECACHE_PROGRESS', current: i + 1, total: topProjects.length });
-
-            // v288: Wait for ALL variant assets of THIS project to be 100% cached before moving to next
-            await precacheAndWait(urls, p.title || `Proyecto ${p.id}`);
-          }
-          
-          syncChannelAssets.postMessage({ type: 'ASSET_PRECACHE_FINISHED' });
-          syncChannelAssets.close();
         }
-      }
 
       // 3. SYNC USERS — v281: Removed artificial 500ms delay
       window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {

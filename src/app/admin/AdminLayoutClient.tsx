@@ -16,7 +16,11 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pathname = usePathname()
   const router = useRouter()
   const isLoginPage = pathname === '/admin/login'
-  const isDashboard = pathname === '/admin' || pathname === '/admin/' || pathname === '/admin/operador' || pathname === '/admin/operador/'
+  const isDashboard = 
+    pathname === '/admin' || pathname === '/admin/' || 
+    pathname === '/admin/operador' || pathname === '/admin/operador/' ||
+    pathname === '/admin/subcontratista' || pathname === '/admin/subcontratista/' ||
+    pathname === '/admin/proyectos' || pathname === '/admin/proyectos/'
 
   const [isOnline, setIsOnline] = useState(true)
 
@@ -39,7 +43,8 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
     const isOp = role === 'OPERATOR' || role === 'OPERADOR' || role === 'SUBCONTRATISTA'
     
     if (isOp) {
-      return ['/admin/operador', '/admin/operador/nuevo', '/admin/operador/proyecto/offline-shell', '/admin/inventario', '/admin/cotizaciones', '/admin/calendario']
+      const base = role === 'SUBCONTRATISTA' ? '/admin/subcontratista' : '/admin/operador'
+      return [base, `${base}/nuevo`, `${base}/proyecto/offline-shell`, '/admin/inventario', '/admin/cotizaciones', '/admin/calendario']
     }
     return ['/admin', '/admin/proyectos', '/admin/proyectos/offline-shell', '/admin/proyectos/nuevo', '/admin/inventario', '/admin/cotizaciones', '/admin/calendario']
   }
@@ -84,15 +89,23 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
             <div style={{ padding: '10px 20px 0 20px', marginBottom: '-10px' }}>
               <button 
                 onClick={() => {
-                  // v233: Explicit back navigation to prevent getting stuck offline
+                  // v291: Robust role-aware navigation for Offline/Shell environments
                   if (pathname.includes('/operador/proyecto')) {
                     router.push('/admin/operador');
+                  } else if (pathname.includes('/subcontratista/proyecto')) {
+                    router.push('/admin/subcontratista');
                   } else if (pathname.includes('/admin/proyectos/')) {
                     router.push('/admin/proyectos');
                   } else if (pathname.includes('/admin/cotizaciones/')) {
                     router.push('/admin/cotizaciones');
+                  } else if (pathname.includes('/offline-shell')) {
+                    const isOp = pathname.includes('/operador') || pathname.includes('/subcontratista');
+                    router.push(isOp ? (pathname.includes('/subcontratista') ? '/admin/subcontratista' : '/admin/operador') : '/admin/proyectos');
                   } else {
-                    router.back();
+                    // Fallback to back but prioritize explicit routes if available
+                    if (pathname.startsWith('/admin/operador')) router.push('/admin/operador');
+                    else if (pathname.startsWith('/admin/proyectos')) router.push('/admin/proyectos');
+                    else router.back();
                   }
                 }}
                 className="btn btn-ghost btn-sm"
