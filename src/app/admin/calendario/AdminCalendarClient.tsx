@@ -55,24 +55,69 @@ export default function AdminCalendarClient({
     initCache()
   }, [operators, projects])
 
-  // Load cache immediately on mount
+  // v274: Consolidated loading logic to prevent race conditions and empty UI
   useEffect(() => {
-    async function loadInitialCache() {
+    let isMounted = true
+
+    async function loadData() {
+      // 1. Try to load from cache first for instant feedback
       const cached = await db.appointmentsCache.toArray()
-      if (cached.length > 0) {
-        // Map to selected operator if needed
+      if (isMounted && cached.length > 0) {
         const filtered = selectedOperatorId === 'all' 
           ? cached 
           : cached.filter((a: any) => a.userId === Number(selectedOperatorId))
         setAppointments(filtered)
+        setInitialDataLoaded(true)
+        // If we have cache, we can hide the big spinner early, but we'll still fetch fresh data
+        setLoading(false)
       }
-      setInitialDataLoaded(true)
-      // Safety timeout for loading spinner
-      setTimeout(() => setLoading(false), 2000)
+
+      // 2. Fetch fresh data from server
+      await fetchAppointments(cached.length > 0) // silent if we already have cache
+      
+      if (isMounted) {
+        setInitialDataLoaded(true)
+        setLoading(false)
+      }
     }
-    loadInitialCache()
+
+    loadData()
+
+    const handleRefresh = () => fetchAppointments(true)
+    window.addEventListener('calendar-refresh', handleRefresh)
+    
+    return () => {
+      isMounted = false
+      window.removeEventListener('calendar-refresh', handleRefresh)
+    }
   }, [selectedOperatorId])
 
+  // v274: Listen for sync events to refresh data automatically
+  useEffect(() => {
+    const handleSyncFinished = (event: any) => {
+      if (event.data?.type === 'OUTBOX_SYNC_FINISHED') {
+        console.log('[Calendar] Background sync finished, refreshing...')
+        fetchAppointments(true)
+      }
+    }
+
+    const handleSyncSuccess = (event: any) => {
+      if (event.detail?.type === 'TASK') {
+        console.log('[Calendar] Task sync success, refreshing...')
+        fetchAppointments(true)
+      }
+    }
+
+    const syncChannel = new BroadcastChannel('aquatech-sync')
+    syncChannel.addEventListener('message', handleSyncFinished)
+    window.addEventListener('sync-success' as any, handleSyncSuccess)
+
+    return () => {
+      syncChannel.removeEventListener('message', handleSyncFinished)
+      syncChannel.close()
+      window.removeEventListener('sync-success' as any, handleSyncSuccess)
+    }
+  }, [selectedOperatorId])
   const fetchAppointments = async (silent = false, retryCount = 0) => {
     if (!silent && appointments.length === 0) setLoading(true)
     try {
@@ -137,41 +182,6 @@ export default function AdminCalendarClient({
     }))
     return [...appointments, ...pending]
   }, [appointments, pendingTasks])
-
-  useEffect(() => {
-    fetchAppointments()
-
-    const handleRefresh = () => fetchAppointments(true)
-    window.addEventListener('calendar-refresh', handleRefresh)
-    return () => window.removeEventListener('calendar-refresh', handleRefresh)
-  }, [selectedOperatorId])
-
-  // v274: Listen for sync events to refresh data automatically
-  useEffect(() => {
-    const handleSyncFinished = (event: any) => {
-      if (event.data?.type === 'OUTBOX_SYNC_FINISHED') {
-        console.log('[Calendar] Background sync finished, refreshing...')
-        fetchAppointments(true)
-      }
-    }
-
-    const handleSyncSuccess = (event: any) => {
-      if (event.detail?.type === 'TASK') {
-        console.log('[Calendar] Task sync success, refreshing...')
-        fetchAppointments(true)
-      }
-    }
-
-    const syncChannel = new BroadcastChannel('aquatech-sync')
-    syncChannel.addEventListener('message', handleSyncFinished)
-    window.addEventListener('sync-success' as any, handleSyncSuccess)
-
-    return () => {
-      syncChannel.removeEventListener('message', handleSyncFinished)
-      syncChannel.close()
-      window.removeEventListener('sync-success' as any, handleSyncSuccess)
-    }
-  }, [selectedOperatorId])
 
   const handleSaveAppointment = async (data: any) => {
     if (isSaving || saveLockRef.current) return

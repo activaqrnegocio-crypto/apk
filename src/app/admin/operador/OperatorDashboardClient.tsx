@@ -92,39 +92,50 @@ export default function OperatorDashboardClient({
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({})
   
   useEffect(() => {
-    // v273: Optimized unread counts with bulk fetching and limited scope
+    // v274: Highly optimized unread counts (staggered & idle-aware)
     const timer = setTimeout(async () => {
-      const counts: Record<number, number> = {};
       const userId = Number(user?.id);
       if (!userId || !initialProjects.length) return;
 
-      // Only calculate for the 50 most recently updated projects to save battery/CPU
       const projectsToProcess = [...initialProjects]
         .sort((a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
-        .slice(0, 50);
+        .slice(0, 30); // v274: Reduced from 50 to 30 for faster initial mount
 
-      const projectIds = projectsToProcess.map(p => p.id);
+      const counts: Record<number, number> = {};
       
-      await db.transaction('r', [db.chatCache], async () => {
-        // v273: Use bulkGet for massive speed improvement over individual gets
-        const chats = await db.chatCache.bulkGet(projectIds);
+      // Process in small batches of 5 to keep frame rate high
+      for (let i = 0; i < projectsToProcess.length; i += 5) {
+        const batch = projectsToProcess.slice(i, i + 5);
         
-        projectsToProcess.forEach((p, index) => {
-          const chat = chats[index];
-          const view = userViews.find(v => v.projectId === p.id);
-          const lastSeen = view?.lastSeen ? new Date(view.lastSeen) : new Date(0);
+        await db.transaction('r', [db.chatCache], async () => {
+          const projectIds = batch.map(p => p.id);
+          const chats = await db.chatCache.bulkGet(projectIds);
+          
+          batch.forEach((p, index) => {
+            const chat = chats[index];
+            const view = userViews.find(v => v.projectId === p.id);
+            const lastSeen = view?.lastSeen ? new Date(view.lastSeen) : new Date(0);
 
-          if (chat && chat.messages) {
-            counts[p.id] = chat.messages.filter((m: any) => 
-              new Date(m.createdAt) > lastSeen && m.userId !== userId
-            ).length;
-          } else {
-            counts[p.id] = p.unreadCount || 0;
-          }
+            if (chat && chat.messages) {
+              counts[p.id] = chat.messages.filter((m: any) => 
+                new Date(m.createdAt) > lastSeen && m.userId !== userId
+              ).length;
+            } else {
+              counts[p.id] = p.unreadCount || 0;
+            }
+          });
         });
-      });
-      setUnreadCounts(counts);
-    }, 4000); // 4s delay to ensure navigation and layout are completely finished
+
+        setUnreadCounts(prev => ({ ...prev, ...counts }));
+        
+        // v274: Yield to main thread between batches
+        if ('requestIdleCallback' in window) {
+          await new Promise(resolve => (window as any).requestIdleCallback(resolve, { timeout: 1000 }));
+        } else {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    }, 8000); // 8s delay to completely clear the LCP path
     return () => clearTimeout(timer);
   }, [initialProjects, userViews, user?.id]);
 
@@ -383,7 +394,7 @@ export default function OperatorDashboardClient({
 
       {/* Sync Manager for Offline (Available for Operators too) */}
       <div style={{ marginTop: '15px' }}>
-        <ProjectCacheManager />
+        <ProjectCacheManager userId={user?.id} />
       </div>
 
       {/* Notification Onboarding Modal */}

@@ -77,14 +77,16 @@ export default function GlobalSyncWorker() {
     const userRole = (passedUserRole || u?.role || 'OPERATOR').toUpperCase();
     const isAdmin = ['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(userRole);
     
+    const cacheKey = `projects_bulk_${u?.id || 'default'}`;
+    
     if (!force) {
-      const meta = await db.cacheMetadata.get('projects_bulk');
-      // v257: Increased to 30 minutes for Operators to avoid "every time" feeling
-      const FRESHNESS_WINDOW = isAdmin ? 60 * 60 * 1000 : 30 * 60 * 1000;
+      const meta = await db.cacheMetadata.get(cacheKey);
+      // v279: Restored a reasonable 15-minute window for everyone, tied to the USER, not global.
+      const FRESHNESS_WINDOW = 15 * 60 * 1000;
       
       if (meta && (Date.now() - meta.lastSync) < FRESHNESS_WINDOW) {
         const minsLeft = Math.round((FRESHNESS_WINDOW - (Date.now() - meta.lastSync)) / 60000);
-        console.log(`[Sync] Datos frescos. Siguiente sync automático en ${minsLeft} min.`);
+        console.log(`[Sync] Datos frescos para usuario ${u?.id}. Siguiente sync automático en ${minsLeft} min.`);
         setIsBulkSyncing(false);
         return;
       }
@@ -97,13 +99,21 @@ export default function GlobalSyncWorker() {
       const u = session?.user as any;
       const userRole = (u?.role || 'OPERATOR').toUpperCase();
       const isAdmin = ['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(userRole);
+      
+      // v279: Update metadata with user-specific key
+      await db.cacheMetadata.put({
+        id: cacheKey,
+        lastSync: Date.now(),
+        count: 0,
+        status: 'syncing'
+      });
 
       window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
         detail: { message: `Iniciando sincronización optimizada (${userRole})...` }
       }))
 
-      // 1. SYNC PROJECTS & CHATS (v273: Reduced from 500 to 100 for smoother entry)
-      const limit = isAdmin ? 300 : 100;
+      // 1. SYNC PROJECTS & CHATS (v274: Reduced from 100 to 50 for operators to maximize performance)
+      const limit = isAdmin ? 300 : 50;
       const res = await fetch(`/api/projects/bulk-cache?limit=${limit}`, { priority: 'low' })
       if (res.ok) {
         const fetchedProjects = await res.json()
@@ -173,12 +183,7 @@ export default function GlobalSyncWorker() {
         // v257: SAVE METADATA HERE (After data, before expensive pre-fetches)
         // This ensures that if the user closes the app during pre-fetching, 
         // we don't restart the whole process immediately next time.
-        await db.cacheMetadata.put({
-          id: 'projects_bulk',
-          lastSync: Date.now(),
-          count: projectsToProcess.length,
-          status: 'idle'
-        })
+        // v274: Removed premature metadata update. Now we only save at the very end.
 
         // v267: INTELLIGENT PRE-FETCHING — Sequential chunk-by-chunk, SW-aware
         if (true) {
@@ -246,12 +251,14 @@ export default function GlobalSyncWorker() {
             projectsToProcess = await db.projectsCache
               .orderBy('lastAccessedAt')
               .reverse()
-              .limit(isAdmin ? 30 : 10) // v273: Operators only pre-cache top 10 for speed
+              .limit(isAdmin ? 30 : 9) // v273: Operators pre-cache top 9 for speed (Restored per user request)
               .toArray();
           }
 
-          const limit = isAdmin ? 30 : 10;
+          const limit = isAdmin ? 30 : 9;
           const topProjects = projectsToProcess.slice(0, limit);
+          
+          const syncChannelAssets = new BroadcastChannel('aquatech-sync');
           
           // v273: Use Idle Callback for pre-caching to NEVER block the user
           for (let i = 0; i < topProjects.length; i++) {
@@ -266,16 +273,26 @@ export default function GlobalSyncWorker() {
             const msg = `[Sync] Pre-cacheando ${i + 1}/${topProjects.length}: ${p.title || p.id}`;
             console.log(msg);
             window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', { detail: { message: msg } }));
+            
+            syncChannelAssets.postMessage({
+              type: 'ASSET_PRECACHE_PROGRESS',
+              current: i + 1,
+              total: topProjects.length
+            });
 
             for (const url of urls) {
+              // v274: Mandatory 1000ms delay between URLs to keep network free for Calendar
               if ('requestIdleCallback' in window) {
-                await new Promise(resolve => (window as any).requestIdleCallback(resolve, { timeout: 2000 }));
+                await new Promise(resolve => (window as any).requestIdleCallback(resolve, { timeout: 3000 }));
               } else {
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise(resolve => setTimeout(resolve, 1000));
               }
               await precacheAndWait(url);
             }
           }
+          
+          syncChannelAssets.postMessage({ type: 'ASSET_PRECACHE_FINISHED' });
+          syncChannelAssets.close();
         }
       }
 
@@ -315,8 +332,9 @@ export default function GlobalSyncWorker() {
       const now = Date.now()
       const finalCount = projectsToProcess.length;
       
+      const cacheKeyFinal = `projects_bulk_${u?.id || 'default'}`;
       await db.cacheMetadata.put({
-        id: 'projects_bulk',
+        id: cacheKeyFinal,
         lastSync: now,
         count: finalCount,
         status: 'idle'
@@ -330,6 +348,22 @@ export default function GlobalSyncWorker() {
         detail: { count: finalCount } 
       }))
 
+      // 5. SILENT GARBAGE COLLECTION (v278)
+      // Keeps the local database small by removing stale projects if we exceed 60
+      try {
+        const MAX_KEPT_PROJECTS = 60;
+        const allCachedProjects = await db.projectsCache.orderBy('lastAccessedAt').reverse().toArray();
+        if (allCachedProjects.length > MAX_KEPT_PROJECTS) {
+          const toDelete = allCachedProjects.slice(MAX_KEPT_PROJECTS).map(p => p.id);
+          if (toDelete.length > 0) {
+            await db.projectsCache.bulkDelete(toDelete);
+            await db.chatCache.bulkDelete(toDelete);
+            console.log(`[GarbageCollector] Limpiados ${toDelete.length} proyectos antiguos de la caché local.`);
+          }
+        }
+      } catch (gcErr) {
+        console.warn('Error en la barredora de caché:', gcErr);
+      }
     } catch (err) {
       console.error('Skeleton sync error:', err)
       window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
@@ -487,16 +521,19 @@ export default function GlobalSyncWorker() {
           const hasBase64 = finalPayload.media?.base64 || 
                            (item.type === 'GALLERY_UPLOAD' && finalPayload.url?.startsWith('data:')) ||
                            finalPayload.receiptPhoto?.startsWith('data:');
+          const hasBlobUrl = (typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
+                            (typeof finalPayload.url === 'string' && finalPayload.url.startsWith('blob:')) ||
+                            (typeof finalPayload.receiptPhoto === 'string' && finalPayload.receiptPhoto.startsWith('blob:'));
           const hasFileData = finalPayload.fileData?.buffer;
           const hasRawFile = finalPayload.file;
 
-          if (hasBase64 || hasFileData || hasRawFile) {
+          if (hasBase64 || hasBlobUrl || hasFileData || hasRawFile) {
             try {
               let uploadFile: File | Blob;
               let finalFilename: string;
 
-              if (hasBase64) {
-                const b64Url = finalPayload.media?.base64 || finalPayload.url || finalPayload.receiptPhoto;
+              if (hasBase64 || hasBlobUrl) {
+                const b64Url = finalPayload.media?.base64 || finalPayload.media?.url || finalPayload.url || finalPayload.receiptPhoto;
                 const resB64 = await fetch(b64Url);
                 uploadFile = await resB64.blob();
                 finalFilename = finalPayload.media?.filename || finalPayload.filename || `sync_${Date.now()}.jpg`;
@@ -552,14 +589,21 @@ export default function GlobalSyncWorker() {
                 processedIds.add(identifier);
 
                 const sourceData = att.base64 || att.url || att.data;
-                const isBase64 = sourceData?.startsWith('data:');
+                const isBase64 = typeof sourceData === 'string' && sourceData.startsWith('data:');
+                const isBlobUrl = typeof sourceData === 'string' && sourceData.startsWith('blob:');
+                const isRawFile = sourceData instanceof Blob;
 
-                if (isBase64) {
-                  const resB64 = await fetch(sourceData);
-                  const blob = await resB64.blob();
+                if (isBase64 || isBlobUrl || isRawFile) {
+                  let blob: Blob;
+                  if (isRawFile) {
+                    blob = sourceData;
+                  } else {
+                    const res = await fetch(sourceData);
+                    blob = await res.blob();
+                  }
                   const uploadResult = await uploadToBunnyClientSide(blob, att.name, 'appointments');
                   uploadedFiles.push({ url: uploadResult.url, type: att.type, name: att.name });
-                } else if (sourceData?.startsWith('http')) {
+                } else if (typeof sourceData === 'string' && sourceData.startsWith('http')) {
                   // Already uploaded or existing link
                   uploadedFiles.push({ url: sourceData, type: att.type, name: att.name });
                 }
@@ -786,8 +830,16 @@ export default function GlobalSyncWorker() {
     
     // Initial sync and cache refresh
     if (navigator.onLine) {
-      syncOutbox()
-      refreshCaches()
+      // Delay the initial outbox sync to let the main UI hydrate and render smoothly
+      setTimeout(() => {
+        syncOutbox()
+        refreshCaches()
+      }, 5000); // 5s delay for immediate syncs
+
+      // v274: Delayed start for bulk sync to avoid LCP/Hydration contention
+      setTimeout(() => {
+        if (!syncLock.current) startBulkSync()
+      }, 25000) // Increased to 25s for the heavy bulk sync
     }
     
     // v261: Reduced from 60s to 15s — this is the PRIMARY sync path when app is visible.

@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/lib/db'
 
-export default function ProjectCacheManager() {
+export default function ProjectCacheManager({ userId }: { userId?: number | string }) {
   const [isSyncing, setIsSyncing] = useState(false)
   const [syncComplete, setSyncComplete] = useState(false)
   const [progress, setProgress] = useState({ current: 0, total: 0 })
@@ -11,37 +12,39 @@ export default function ProjectCacheManager() {
   const [projectCount, setProjectCount] = useState(0)
   const [isDismissed, setIsDismissed] = useState(false)
 
-  useEffect(() => {
-    // 1. Load initial metadata
-    const loadMetadata = async () => {
-      try {
-        const meta = await db.cacheMetadata.get('projects_bulk')
-        if (meta) {
-          setLastSync(meta.lastSync)
-          setProjectCount(meta.count)
-          
-          // If synced recently (within 30 mins), consider it complete initially
-          if (meta.lastSync && (Date.now() - meta.lastSync < 30 * 60 * 1000)) {
-            setSyncComplete(true)
-          }
-        }
-      } catch (e) {}
-    }
-    loadMetadata()
+  // v279: Use Live Query scoped to the specific user ID to avoid cross-account contamination
+  const cacheKey = `projects_bulk_${userId || 'default'}`;
+  const meta = useLiveQuery(() => db.cacheMetadata.get(cacheKey), [cacheKey]);
 
-    // 2. Listen for global progress
+  useEffect(() => {
+    if (!meta) return;
+    
+    setLastSync(meta.lastSync);
+    setProjectCount(meta.count);
+    
+    // v274: Priority check for 'syncing' status
+    if (meta.status === 'syncing') {
+      setIsSyncing(true);
+      setSyncComplete(false);
+    } else {
+      setIsSyncing(false);
+      // v274: Consider complete if lastSync was within 30 minutes
+      const isFresh = meta.lastSync && (Date.now() - meta.lastSync < 30 * 60 * 1000);
+      setSyncComplete(!!isFresh);
+    }
+  }, [meta]);
+
+  useEffect(() => {
+    // Keep event listeners for granular progress updates during active sync
     const onProgress = (e: any) => {
       setIsSyncing(true)
       setSyncComplete(false)
       setProgress(e.detail)
     }
     
-    // 3. Listen for global finished
     const onFinished = (e: any) => {
-      setIsSyncing(false)
-      setSyncComplete(true)
-      setProjectCount(e.detail.count)
-      setLastSync(Date.now())
+      // Logic handled by useLiveQuery above mostly, but we update project count here
+      if (e.detail?.count) setProjectCount(e.detail.count);
     }
 
     window.addEventListener('bulk-cache-sync-progress', onProgress)

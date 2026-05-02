@@ -24,7 +24,7 @@ const PRE_CACHE = [
   '/admin/operador/proyecto/offline-shell'
 ];
 
-const VERSION = 'v273';
+const VERSION = 'v277';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -830,7 +830,6 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'PRECACHE_URLS') {
     const urls = event.data.urls || [];
     const replyPort = event.data.replyPort || null;
-    const syncChannel = new BroadcastChannel('aquatech-sync');
     console.log('[SW] Warm-up pre-caching request for', urls.length, 'URLs');
     
     event.waitUntil(
@@ -841,14 +840,6 @@ self.addEventListener('message', (event) => {
         for (const url of urls) {
           current++;
           try {
-            // Report progress to the UI
-            syncChannel.postMessage({ 
-              type: 'ASSET_PRECACHE_PROGRESS', 
-              current, 
-              total, 
-              url 
-            });
-
             const existing = await cache.match(url);
             if (existing && existing.ok && !existing.redirected) {
                if (replyPort) replyPort.postMessage({ done: true, url, cached: true });
@@ -881,19 +872,15 @@ self.addEventListener('message', (event) => {
                   const chunkMatches = Array.from(htmlText.matchAll(/\/(_next\/static\/[^"'\s>]+)/g));
                   const assetsCache = await caches.open(ASSETS_CACHE);
                   
+                  const maxChunks = 10; // v274: Only pre-fetch critical chunks to avoid network saturation
                   let chunkCount = 0;
                   for (const match of chunkMatches) {
+                    if (chunkCount >= maxChunks) break;
                     chunkCount++;
                     const chunkPath = match[1];
                     const fullChunkUrl = new URL('/' + chunkPath, self.location.origin).href;
                     
-                    // Small sub-progress for chunks if needed
-                    syncChannel.postMessage({ 
-                      type: 'ASSET_CHUNK_PROGRESS', 
-                      current: chunkCount, 
-                      total: chunkMatches.length,
-                      parentUrl: url
-                    });
+                    // Removed syncChannel chunk reporting to avoid UI flicker
 
                     const hasChunk = await assetsCache.match(fullChunkUrl);
                     if (!hasChunk) {
@@ -914,15 +901,14 @@ self.addEventListener('message', (event) => {
             }
             
             if (replyPort) replyPort.postMessage({ done: true, url });
-            await new Promise(r => setTimeout(r, 800)); 
+            // v274: Increased delay to 1500ms to ensure the SW event loop is free 
+            // to handle 'fetch' events (like the Calendar API) between cache tasks.
+            await new Promise(r => setTimeout(r, 1500)); 
           } catch (e) {
             console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
             if (replyPort) replyPort.postMessage({ done: true, url, error: true });
           }
         }
-        
-        syncChannel.postMessage({ type: 'ASSET_PRECACHE_FINISHED' });
-        syncChannel.close();
         console.log(`[SW ${VERSION}] Pre-caching sequence finished`);
         trimCache(PAGES_CACHE, 400); 
       })
@@ -1150,18 +1136,30 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
             const config = await configResp.json();
             const payload = { ...item.payload };
 
-            const uploadBase64 = async (base64, name, subfolder = 'general') => {
+            const uploadMediaSW = async (source, name, subfolder = 'general') => {
               try {
-                const parts = base64.split(';base64,');
-                const contentType = parts[0].split(':')[1];
-                const raw = atob(parts[1]);
-                const uInt8Array = new Uint8Array(raw.length);
-                for (let i = 0; i < raw.length; ++i) { uInt8Array[i] = raw.charCodeAt(i); }
-                const blob = new Blob([uInt8Array], { type: contentType });
+                let blob;
+                if (source instanceof Blob) {
+                  blob = source;
+                } else if (typeof source === 'string' && source.startsWith('data:')) {
+                  const parts = source.split(';base64,');
+                  const contentType = parts[0].split(':')[1];
+                  const raw = atob(parts[1]);
+                  const uInt8Array = new Uint8Array(raw.length);
+                  for (let i = 0; i < raw.length; ++i) { uInt8Array[i] = raw.charCodeAt(i); }
+                  blob = new Blob([uInt8Array], { type: contentType });
+                } else if (typeof source === 'string' && source.startsWith('blob:')) {
+                  const res = await fetch(source);
+                  blob = await res.blob();
+                } else {
+                  return source; // Already a URL or unknown
+                }
                 
                 // v273: Use chunked upload for anything > 1MB
                 if (blob.size > 1024 * 1024) {
-                   return await uploadInChunksSW(blob, name);
+                   const url = await uploadInChunksSW(blob, name);
+                   if (!url) throw new Error('Chunked upload returned no URL');
+                   return url;
                 }
 
                 const timestamp = Date.now();
@@ -1172,14 +1170,17 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 
                 const res = await fetch(uploadUrl, {
                   method: 'PUT',
-                  headers: { 'AccessKey': config.accessKey, 'Content-Type': 'application/octet-stream' },
+                  headers: { 
+                    'AccessKey': config.accessKey, 
+                    'Content-Type': blob.type || 'application/octet-stream' 
+                  },
                   body: blob
                 });
-                if (!res.ok) throw new Error('Bunny upload failed');
+                if (!res.ok) throw new Error(`Bunny upload failed with status ${res.status}`);
                 return `${config.pullZoneUrl}/${folderPath}/${timestamp}-${safeName}`;
               } catch (e) {
                 console.error('[SW] Upload failed:', e);
-                return null;
+                throw e; // v275: Throw so the caller knows sync failed
               }
             };
 
@@ -1211,52 +1212,75 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
             };
 
             // 1. Handle MESSAGE / MEDIA_UPLOAD
-            if ((item.type === 'MESSAGE' || item.type === 'MEDIA_UPLOAD') && payload.media?.base64) {
-              const url = await uploadBase64(payload.media.base64, payload.media.filename, 'messages');
-              if (url) {
-                payload.media.url = url;
-                delete payload.media.base64;
+            if (item.type === 'MESSAGE' || item.type === 'MEDIA_UPLOAD') {
+              if (payload.media) {
+                const source = payload.media.base64 || payload.media.url;
+                if (source && (source.startsWith('data:') || source.startsWith('blob:'))) {
+                  payload.media.url = await uploadMediaSW(source, payload.media.filename, 'messages');
+                  delete payload.media.base64;
+                }
               }
             }
 
             // 2. Handle EXPENSE
-            if (item.type === 'EXPENSE' && payload.receiptPhoto?.startsWith('data:')) {
-              const url = await uploadBase64(payload.receiptPhoto, 'receipt.jpg', 'expenses');
-              if (url) payload.receiptPhoto = url;
+            if (item.type === 'EXPENSE' && payload.receiptPhoto) {
+              if (payload.receiptPhoto.startsWith('data:') || payload.receiptPhoto.startsWith('blob:')) {
+                payload.receiptPhoto = await uploadMediaSW(payload.receiptPhoto, 'receipt.jpg', 'expenses');
+              }
             }
 
             // 3. Handle GALLERY_UPLOAD
-            if (item.type === 'GALLERY_UPLOAD' && payload.url?.startsWith('data:')) {
-              const url = await uploadBase64(payload.url, payload.filename || 'gallery_item.jpg', 'gallery');
-              if (url) payload.url = url;
+            if (item.type === 'GALLERY_UPLOAD' && payload.url) {
+              if (payload.url.startsWith('data:') || payload.url.startsWith('blob:')) {
+                payload.url = await uploadMediaSW(payload.url, payload.filename || 'gallery_item.jpg', 'gallery');
+              }
             }
 
             // 4. Handle TASK (Attachments & Links)
             if (item.type === 'TASK') {
+              const uploadedMap = {};
               if (payload.attachments) {
                 for (let a of payload.attachments) {
-                  const source = a.base64 || a.data;
-                  if (source && source.startsWith('data:')) {
-                    const url = await uploadBase64(source, a.name, 'appointments');
-                    if (url) { a.data = url; delete a.base64; }
+                  const source = a.base64 || a.data || a.url;
+                  if (source && (typeof source !== 'string' || source.startsWith('data:') || source.startsWith('blob:'))) {
+                    const cacheKey = source.length > 100 ? source.substring(0, 100) : source;
+                    if (!uploadedMap[cacheKey]) {
+                      uploadedMap[cacheKey] = await uploadMediaSW(source, a.name, 'appointments');
+                    }
+                    const finalUrl = uploadedMap[cacheKey];
+                    a.data = finalUrl;
+                    a.url = finalUrl;
+                    delete a.base64;
                   }
                 }
               }
               if (payload.attachmentLinks) {
                 for (let l of payload.attachmentLinks) {
-                  const source = l.base64 || l.url;
-                  if (source && source.startsWith('data:')) {
-                    const url = await uploadBase64(source, l.name, 'appointments');
-                    if (url) { l.url = url; delete l.base64; }
+                  const source = l.base64 || l.url || l.data;
+                  if (source && (typeof source !== 'string' || source.startsWith('data:') || source.startsWith('blob:'))) {
+                    const cacheKey = source.length > 100 ? source.substring(0, 100) : source;
+                    if (!uploadedMap[cacheKey]) {
+                      uploadedMap[cacheKey] = await uploadMediaSW(source, l.name, 'appointments');
+                    }
+                    const finalUrl = uploadedMap[cacheKey];
+                    l.url = finalUrl;
+                    l.data = finalUrl;
+                    delete l.base64;
                   }
                 }
               }
               if (payload.files) {
                 for (let f of payload.files) {
                   const source = f.base64 || f.url || f.data;
-                  if (source && source.startsWith('data:')) {
-                    const url = await uploadBase64(source, f.name, 'appointments');
-                    if (url) { f.url = url; delete f.base64; }
+                  if (source && (typeof source !== 'string' || source.startsWith('data:') || source.startsWith('blob:'))) {
+                    const cacheKey = source.length > 100 ? source.substring(0, 100) : source;
+                    if (!uploadedMap[cacheKey]) {
+                      uploadedMap[cacheKey] = await uploadMediaSW(source, f.name, 'appointments');
+                    }
+                    const finalUrl = uploadedMap[cacheKey];
+                    f.url = finalUrl;
+                    f.data = finalUrl;
+                    delete f.base64;
                   }
                 }
               }

@@ -121,7 +121,7 @@ export default function ProjectExecutionClient({
           console.log('[Sync] Registered SW sync from ProjectExecution');
         }
         if (navigator.serviceWorker.controller) {
-          navigator.serviceWorker.controller.postMessage({ type: 'TRIGGER_SYNC' });
+          navigator.serviceWorker.controller.postMessage({ type: 'FORCE_SYNC_OUTBOX' });
         }
       } catch (e) {
         console.warn('Background sync registration failed:', e);
@@ -687,10 +687,7 @@ export default function ProjectExecutionClient({
 
 
   // Chat State
-  // Instead of trying to find an active phase, default to null ("General")
-  const [activePhase, setActivePhase] = useState<number | null>(null)
   const [message, setMessage, removeMessageDraft] = useLocalStorage(`project_${idFromUrl}_chat_draft`, '')
-  const [notePhase, setNotePhase] = useState<number | null>(activePhase)
   const [note, setNote, removeNoteDraft] = useLocalStorage(`project_${idFromUrl}_note_draft`, '')
   const handleDayRecord = async () => {
     setLoading(true)
@@ -830,8 +827,7 @@ export default function ProjectExecutionClient({
             description, 
             date: new Date().toISOString(),
             isNote,
-            receiptPhoto: processedPhoto,
-            phaseId: activePhase
+            receiptPhoto: processedPhoto
           }
 
           if (!navigator.onLine) {
@@ -903,45 +899,6 @@ export default function ProjectExecutionClient({
     }
   }
 
-  const handleCompletePhase = async (phaseId: number) => {
-    if (!confirm("¿Seguro que deseas marcar esta fase como terminada? Esto desbloqueará la siguiente.")) return
-    setLoading(true)
-    try {
-      const payload = { status: 'COMPLETADA', phaseId }
-      if (!navigator.onLine) {
-        await db.outbox.add({
-          type: 'PHASE_COMPLETE',
-          projectId: project.id,
-          payload,
-          timestamp: Date.now(),
-          lat: undefined,
-          lng: undefined,
-          status: 'pending'
-        })
-        triggerBackgroundSync()
-        if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
-     }
-        setLoading(false)
-        return
-      }
-
-      await fetch(`/api/projects/${project.id}/phases/${phaseId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-      startTransition(() => {
-        if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
-     }
-      })
-    } catch (e) {
-      alert("Error completando fase")
-    } finally {
-      setLoading(false)
-    }
-  }
 
   // --- MANUAL REFRESH: Full reset from server ---
   const [isSyncing, setIsSyncing] = useState(false)
@@ -968,7 +925,7 @@ export default function ProjectExecutionClient({
     if (e) e.preventDefault()
 
     const msgToSend = customMsg || message
-    const phaseIdToSend = customPhase !== undefined ? customPhase : activePhase
+    const phaseIdToSend = customPhase !== undefined ? customPhase : undefined
     
     if (!msgToSend.trim() && !mediaFile && !customMsg) {
       return
@@ -1250,7 +1207,7 @@ export default function ProjectExecutionClient({
         filename: file.filename,
         mimeType: file.mimeType,
         category: file.category || 'EVIDENCE',
-        phaseId: activePhase
+        phaseId: undefined
       }
 
       if (isOffline) {
@@ -1391,9 +1348,7 @@ export default function ProjectExecutionClient({
   }, [liveChat, pendingItems, userId])
 
   const filteredChat = combinedChat.filter((msg: any) => {
-    // ALIGNED WITH ADMIN: If on General (activePhase === null), show ALL messages. 
-    // Otherwise filter by specific phase.
-    if (activePhase !== null && msg.phaseId !== activePhase) return false
+    // ALIGNED WITH ADMIN: Show ALL messages. 
     if (chatFilter === 'media') return msg.media && msg.media.length > 0
     if (chatFilter === 'notes') return msg.type === 'NOTE'
     if (chatFilter === 'text') return msg.type === 'TEXT' && (!msg.media || msg.media.length === 0)
@@ -2582,11 +2537,11 @@ export default function ProjectExecutionClient({
                   /* Session validation removed */
 
                   if (type === 'EXPENSE_LOG') {
-                     handleSendMessage(null as any, content, activePhase || undefined, extraData?.file, extraData, 'EXPENSE_LOG');
+                     handleSendMessage(null as any, content, undefined, extraData?.file, extraData, 'EXPENSE_LOG');
                   } else if (type === 'FILE' || type === 'IMAGE' || type === 'VIDEO' || type === 'AUDIO') {
-                     handleSendMessage(null as any, content || '', activePhase || undefined, extraData?.file, null, type);
+                     handleSendMessage(null as any, content || '', undefined, extraData?.file, null, type);
                   } else {
-                     handleSendMessage(null as any, content, activePhase || undefined, undefined, extraData, type);
+                     handleSendMessage(null as any, content, undefined, undefined, extraData, type);
                   }
                 }}
               />

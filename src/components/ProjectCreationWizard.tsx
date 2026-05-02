@@ -337,6 +337,21 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
           status: 'pending'
         })
         
+        // v268: Aggressive Background Sync Trigger (same as Calendar)
+        if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+          try {
+            const reg = await navigator.serviceWorker.ready;
+            if ('sync' in reg) {
+              await (reg as any).sync.register('sync-outbox');
+            }
+            if (navigator.serviceWorker.controller) {
+              navigator.serviceWorker.controller.postMessage({ type: 'FORCE_SYNC_OUTBOX' });
+            }
+          } catch (e) {
+            console.warn('Background sync registration failed:', e);
+          }
+        }
+        
         // Clear local draft data after successful outbox add
         setStep(1)
         removeProjectData()
