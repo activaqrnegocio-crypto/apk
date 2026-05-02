@@ -52,8 +52,9 @@ export function usePushNotifications() {
     })
   }, [])
 
-  const subscribe = useCallback(async () => {
-    if (status === 'unsupported' || status === 'denied') return false
+  const subscribe = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
+    if (status === 'unsupported') return { success: false, error: 'Tu navegador no soporta notificaciones.' };
+    if (status === 'denied') return { success: false, error: 'Permiso denegado. Habilítalo en los ajustes del navegador.' };
 
     setIsSubscribing(true)
     
@@ -86,30 +87,41 @@ export function usePushNotifications() {
         });
       }
 
-      clearTimeout(safetyTimeout);
       console.log('[PUSH] Permission result:', permission);
       if (permission !== 'granted') {
         setStatus('denied');
-        return finishSub(false);
+        console.warn('[PUSH] Permission denied by user');
+        return { success: false, error: 'Permiso denegado por el usuario.' };
       }
 
       // 2. Get service worker registration
-      const registration = await navigator.serviceWorker.ready
+      console.log('[PUSH] Waiting for Service Worker ready...');
+      const registration = await navigator.serviceWorker.ready;
+      if (!registration.pushManager) {
+        console.error('[PUSH] PushManager not available in this browser');
+        setStatus('unsupported');
+        return { success: false, error: 'Tu navegador no soporta notificaciones Push.' };
+      }
 
       // 3. Subscribe to push
-      const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
-      if (!vapidKey) {
-        console.error('[PUSH] VAPID public key not found')
-        return finishSub(false)
+      const rawVapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+      if (!rawVapidKey) {
+        console.error('[PUSH] NEXT_PUBLIC_VAPID_PUBLIC_KEY is missing in the environment');
+        return { success: false, error: 'Falta configuración en el servidor (VAPID Key).' };
       }
+      
+      const vapidKey = rawVapidKey.trim();
+      console.log('[PUSH] Subscribing with VAPID key (first 10 chars):', vapidKey.substring(0, 10) + '...');
 
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidKey) as any
-      })
+      });
+
+      console.log('[PUSH] Subscription successful, sending to server...');
 
       // 4. Send subscription to server
-      const subJson = subscription.toJSON()
+      const subJson = subscription.toJSON();
       const res = await fetch('/api/push/subscribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,28 +135,33 @@ export function usePushNotifications() {
           },
           deviceName: getDeviceName()
         })
-      })
+      });
 
       if (res.ok) {
-        setStatus('subscribed')
+        console.log('[PUSH] Server registration successful');
+        setStatus('subscribed');
 
         // 5. Send test notification
-        fetch('/api/push/test', { method: 'POST' }).catch(() => {})
+        fetch('/api/push/test', { method: 'POST' }).catch(() => {});
         
         // Trigger onboarding for mobile devices
-        const isMobile = /android|iphone|ipad/i.test(navigator.userAgent)
+        const isMobile = /android|iphone|ipad/i.test(navigator.userAgent);
         if (isMobile) {
-          setShowOnboarding(true)
+          setShowOnboarding(true);
         }
 
-        return finishSub(true)
+        return { success: finishSub(true) };
       } else {
-        console.error('[PUSH] Server rejected subscription')
-        return finishSub(false)
+        const errorData = await res.json().catch(() => ({}));
+        console.error('[PUSH] Server rejected subscription:', res.status, errorData);
+        return { success: finishSub(false), error: `El servidor rechazó la suscripción (${res.status})` };
       }
-    } catch (error) {
-      console.error('[PUSH] Subscription error:', error)
-      return finishSub(false)
+    } catch (error: any) {
+      console.error('[PUSH] Subscription error details:', error);
+      return { 
+        success: finishSub(false), 
+        error: `Error técnico: ${error.message || 'Desconocido'}` 
+      };
     }
   }, [status])
 
@@ -184,6 +201,7 @@ export function usePushNotifications() {
     isSubscribed: status === 'subscribed',
   }
 }
+
 
 function getDeviceName(): string {
   const ua = navigator.userAgent

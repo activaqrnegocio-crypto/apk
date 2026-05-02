@@ -29,7 +29,7 @@ const PRE_CACHE = [
   '/admin/operador/proyecto/offline-shell'
 ];
 
-const VERSION = 'v282';
+const VERSION = 'v285';
 
 // v242: Helper to bypass Chrome's "redirected response" security block
 function cleanResponse(response) {
@@ -402,43 +402,17 @@ async function navigationHandler(request) {
 
     // v269: Added /admin/calendario to the "force shell" list for faster mobile entry.
     const isProject = url.pathname.includes('/proyecto/') || url.pathname.includes('/proyectos/');
-    const isOperatorProject = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/);
     const isOperatorDashboard = url.pathname === '/admin/operador' || url.pathname === '/admin/operador/';
     const isCalendar = url.pathname === '/admin/calendario' || url.pathname === '/admin/calendario/';
     let cached = null;
-    
-    // v282: CRITICAL FIX — When OFFLINE, serve the operator project shell IMMEDIATELY
-    // for any /admin/operador/proyecto/[id] URL that is not individually cached.
-    // This is what prevents the "click does nothing" bug.
-    if (isOperatorProject && !navigator.onLine) {
-      const shellVariants = [
-        '/admin/operador/proyecto/offline-shell',
-        '/admin/operador/proyecto/offline-shell/'
-      ];
-      for (const variant of shellVariants) {
-        const shellMatch = await caches.match(variant, { ignoreVary: true, ignoreSearch: true });
-        if (isValidHTMLResponse(shellMatch)) {
-          console.log(`[SW ${VERSION}] OFFLINE: Serving operator shell immediately for: ${url.pathname}`);
-          return cleanResponse(shellMatch);
-        }
-      }
-      // Search all caches
-      const allCacheNames = await caches.keys();
-      for (const cn of allCacheNames) {
-        const c = await caches.open(cn);
-        const m = await c.match('/admin/operador/proyecto/offline-shell', { ignoreVary: true });
-        if (isValidHTMLResponse(m)) {
-          console.log(`[SW ${VERSION}] OFFLINE: Shell found in ${cn}, serving for: ${url.pathname}`);
-          return cleanResponse(m);
-        }
-      }
-    }
+
     
     if (isProject || isOperatorDashboard || isCalendar) {
-      console.log(`[SW ${VERSION}] Fast-track route detected, forcing shell/cache for instant load...`);
-      cached = await findCachedPage(request.url, url.pathname, true); 
+      console.log(`[SW ${VERSION}] Fast-track route detected, looking for direct cache match...`);
+      // v284: DO NOT force serve shell yet. Just look for specific page cache.
+      cached = await findCachedPage(request.url, url.pathname, false); 
     } else {
-      cached = await findCachedPage(request.url, url.pathname);
+      cached = await findCachedPage(request.url, url.pathname, false);
     }
     
     if (cached) {
@@ -1499,15 +1473,16 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
 
       resolve();
 
-      // v278: AGGRESSIVE SYNC LOOP
-      // If we are still in the background sync period and there are items remaining, 
-      // check again after a short delay if we successfully synced at least one item.
-      const successfulSyncs = pendingItems.length - failedContexts.size;
-      if (successfulSyncs > 0) {
+      // v285: AGGRESSIVE RETRY LOOP
+      // Even if some or all items failed, if there are still items pending in the outbox,
+      // we schedule another check soon. This fixes the issue where a "half-working" 
+      // connection causes the SW to give up until the next OS-triggered sync event.
+      const stillPendingCount = pendingItems.length;
+      if (stillPendingCount > 0) {
+        console.log(`[SW] ${stillPendingCount} items still pending. Scheduling retry in 10s...`);
         setTimeout(() => {
-          console.log('[SW] Success loop: re-checking outbox for new items...');
           processOutboxSync(false);
-        }, 5000);
+        }, 10000);
       }
     };
 

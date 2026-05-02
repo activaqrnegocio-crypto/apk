@@ -484,7 +484,9 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
     setShowClientDropdown(false)
   }
 
-  const filteredClients = clients.filter(c => c.name.toLowerCase().includes(clientSearchText.toLowerCase())).slice(0, 10)
+  const filteredClients = (clients || []).filter(c => 
+    c && c.name && c.name.toLowerCase().includes((clientSearchText || '').toLowerCase())
+  ).slice(0, 10)
 
   // Total amount used in PDF generation
   const { subtotal0, subtotal15, ivaAmount, grandTotal, totalBudget } = budgetCalculations
@@ -779,7 +781,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                     <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '-10px' }}>Selecciona los operadores o subcontratistas para este proyecto.</p>
                     
                     <div className="team-grid">
-                       {availableTeam.map(t => (
+                       {(availableTeam || []).map(t => (
                          <div 
                            key={t.id} 
                            onClick={() => toggleTeamMember(t.id)}
@@ -787,27 +789,42 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                            style={{
                              border: selectedTeam.includes(String(t.id)) ? '2px solid var(--primary)' : '1px solid var(--border)',
                              backgroundColor: selectedTeam.includes(String(t.id)) ? 'rgba(56, 189, 248, 0.1)' : 'var(--bg-deep)',
+                             cursor: 'pointer',
+                             display: 'flex',
+                             alignItems: 'center',
+                             gap: '12px',
+                             padding: '12px',
+                             borderRadius: '12px'
                            }}
                          >
                             <div 
                               className="team-avatar"
                               style={{
+                                width: '40px',
+                                height: '40px',
+                                borderRadius: '50%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 'bold',
+                                color: 'white',
                                 backgroundColor: selectedTeam.includes(String(t.id)) ? 'var(--primary)' : 'var(--bg-card)',
                               }}
                             >
-                               {t.name?.charAt(0).toUpperCase()}
+                               {t.name?.charAt(0).toUpperCase() || '?'}
                             </div>
                             <div>
-                               <div className="team-name" style={{ fontWeight: 'bold', fontSize: '0.95rem', color: 'var(--text)' }}>{t.name}</div>
-                               <div className="team-role" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t.role}</div>
+                               <div className="team-name" style={{ fontWeight: 'bold', fontSize: '0.95rem', color: 'var(--text)' }}>{t.name || 'Usuario'}</div>
+                               <div className="team-role" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t.role || 'Operador'}</div>
                             </div>
                          </div>
                        ))}
-                       {availableTeam.length === 0 && (
+                       {(availableTeam || []).length === 0 && (
                           <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '20px', color: 'var(--text-muted)' }}>
-                             No hay operadores disponibles.
+                             {navigator.onLine ? 'Cargando equipo...' : 'No hay operadores en caché. Conéctate para sincronizar la lista.'}
                           </div>
                        )}
+
                     </div>
                   </div>
                 )}

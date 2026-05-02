@@ -491,11 +491,11 @@ export default function OperatorDashboardClient({
                 onClick={async (e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  const ok = await pushSubscribe()
-                  if (ok) {
+                  const result = await pushSubscribe()
+                  if (result.success) {
                     setPushDismissed(true)
                   } else {
-                    alert('No se pudo activar. Asegúrate de tener internet. En iPhone, instala la app primero.')
+                    alert(result.error || 'No se pudo activar. Asegúrate de tener internet. En iPhone, instala la app primero.')
                   }
                 }}
                 disabled={isSubscribing}
