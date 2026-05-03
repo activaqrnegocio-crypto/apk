@@ -1248,6 +1248,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       console.warn('[SW] Could not pre-fetch storage config');
     }
 
+    for (const item of pendingItems) {
       // v301: PROBLEMA 4 — Items zombie y Backoff exponencial
       if (item.attempts >= 10) {
         console.warn(`[SW] Item ${item.id} (${item.type}) eliminado tras 10 intentos fallidos (zombie)`);
