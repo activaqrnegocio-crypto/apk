@@ -46,14 +46,10 @@ function AdminOfflineShellContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <ProjectDetailClient 
-        project={dummyProject as any}
-        users={[]}
-        initialChat={[]}
-        activeRecord={null}
-      />
-    </div>
+    <ProjectDetailClient 
+      project={dummyProject as any}
+      availableOperators={[]}
+    />
   )
 }
 

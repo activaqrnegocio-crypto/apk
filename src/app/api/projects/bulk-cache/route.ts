@@ -36,39 +36,48 @@ export async function GET(request: Request) {
       console.log(`[BulkCache] Admin mode: Syncing all projects (no status filter)`)
     }
 
-    // v280: RADICAL DIET — Gallery and Expenses removed from bulk payload.
-    // They load lazily when the user opens a specific project.
-    // This is the primary cause of the 5-minute sync on mobile.
+    // v316: COMPLETE TEXT DATA — All project text fields included for full offline parity.
+    // Only gallery items (media URLs) are excluded to keep payload manageable.
     const projects = await prisma.project.findMany({
       where: whereClause,
       take: safeLimit,
       select: {
         id: true,
         title: true,
-        description: true,
+        type: true,
+        subtype: true,
         status: true,
-        updatedAt: true,
-        createdAt: true,
+        description: true,
         address: true,
         city: true,
         startDate: true,
         endDate: true,
+        estimatedBudget: true,
+        realCost: true,
+        leadNotes: true,
+        clientId: true,
+        createdAt: true,
+        updatedAt: true,
+        categoryList: true,
+        technicalSpecs: true,
+        contractTypeList: true,
+        specsTranscription: true,
         createdBy: true,
         client: {
-          select: { id: true, name: true, phone: true, address: true }
+          select: { id: true, name: true, phone: true, address: true, email: true, ruc: true, city: true, notes: true }
         },
         phases: {
-          select: { id: true, title: true, status: true, displayOrder: true },
+          select: { id: true, title: true, description: true, status: true, displayOrder: true, estimatedDays: true, estimatedHours: true, startedAt: true, completedAt: true },
           orderBy: { displayOrder: 'asc' }
         },
         team: {
           select: {
             id: true,
             userId: true,
-            user: { select: { id: true, name: true } }
+            user: { select: { id: true, name: true, role: true, phone: true } }
           }
         },
-        // v289: Increased to 50 messages for better offline chat context.
+        // v316: Enriched chat messages with user info and phase reference for offline display
         chatMessages: {
           select: {
             id: true,
@@ -76,9 +85,41 @@ export async function GET(request: Request) {
             createdAt: true,
             userId: true,
             type: true,
+            extraData: true,
+            user: { select: { id: true, name: true } },
+            phase: { select: { id: true, title: true } },
           },
           orderBy: { createdAt: 'desc' },
           take: 50
+        },
+        // v316: Lightweight expenses (text only, no receipt images)
+        expenses: {
+          select: {
+            id: true,
+            amount: true,
+            description: true,
+            category: true,
+            date: true,
+            createdAt: true,
+            userId: true,
+            isNote: true,
+            user: { select: { id: true, name: true } }
+          },
+          orderBy: { date: 'desc' },
+          take: 30
+        },
+        // v316: Day records for attendance tracking offline
+        dayRecords: {
+          select: {
+            id: true,
+            userId: true,
+            startTime: true,
+            endTime: true,
+            createdAt: true,
+            user: { select: { id: true, name: true } }
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 15
         }
       },
       orderBy: { updatedAt: 'desc' }

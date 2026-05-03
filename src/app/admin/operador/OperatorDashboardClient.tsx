@@ -375,8 +375,8 @@ export default function OperatorDashboardClient({
           // Mark as warmed
           newIds.forEach(id => warmedProjectIdsRef.current.add(id));
           
-          // Update DB status to 'syncing' to notify UI manager
-          db.cacheMetadata.update(cacheKey, { status: 'syncing' }).catch(() => {});
+          // v315: Removed db.cacheMetadata.update(cacheKey, { status: 'syncing' })
+          // Warm caching now happens silently in the background without disturbing the green UI.
         }
       }
     };

@@ -55,7 +55,13 @@ export function usePushNotifications() {
       return
     }
 
-    // Check if already subscribed
+    // If permission is default, they are definitely not subscribed. Show prompt instantly!
+    if (permission === 'default') {
+      setStatus('prompt')
+      return
+    }
+
+    // Only wait for SW ready if permission is already granted
     navigator.serviceWorker.ready.then(registration => {
       registration.pushManager.getSubscription().then(sub => {
         if (sub) {

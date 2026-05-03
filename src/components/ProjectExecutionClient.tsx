@@ -92,6 +92,11 @@ export default function ProjectExecutionClient({
   const [liveChat, setLiveChat] = useState<any[]>(initialChat || [])
   const [localExpenses, setLocalExpenses] = useState<any[]>(expenses || [])
 
+  // v316: Local state for props that need Dexie fallback (offline recovery)
+  const [localClientName, setLocalClientName] = useState(clientName || '')
+  const [localProjectAddress, setLocalProjectAddress] = useState(projectAddress || '')
+  const [localProjectCity, setLocalProjectCity] = useState(projectCity || '')
+
   // v288: Critical Identity Check
   // If the initialProject (from props/RSC) doesn't match the current URL ID, 
   // we MUST treat it as a skeleton until Dexie hydrates the correct one.
@@ -160,6 +165,18 @@ export default function ProjectExecutionClient({
 
   // Sync refs
   useEffect(() => { liveChatRef.current = liveChat }, [liveChat])
+
+  // Sync team state when project updates online
+  useEffect(() => {
+    if (project?.team && project.team.length > 0) {
+      setLocalTeam(project.team.map((t: any) => ({
+        id: t.userId || t.id,
+        name: t.user?.name || t.name || 'Operador',
+        role: t.user?.role || t.role || 'OPERATOR',
+        phone: t.user?.phone || t.phone
+      })));
+    }
+  }, [project?.team])
 
   // Single mount effect
   useEffect(() => {
@@ -360,6 +377,35 @@ export default function ProjectExecutionClient({
           setLocalProject(cached);
           const chat = await db.chatCache.get(idFromUrl);
           setLocalChat(chat?.messages || []);
+
+          // v316: Recover clientName, address, city from cached data
+          if (cached.client) {
+            setLocalClientName(cached.client.name || clientName || '');
+            setLocalProjectAddress(cached.address || cached.client.address || projectAddress || '');
+            setLocalProjectCity(cached.city || cached.client.city || projectCity || '');
+          } else {
+            if (cached.address) setLocalProjectAddress(cached.address);
+            if (cached.city) setLocalProjectCity(cached.city);
+          }
+
+          // v316: Recover expenses from cached data
+          if (cached.expenses && cached.expenses.length > 0 && localExpenses.length === 0) {
+            setLocalExpenses(cached.expenses.map((e: any) => ({
+              id: e.id, description: e.description, amount: Number(e.amount),
+              date: e.date, isNote: e.isNote, userName: e.user?.name || 'Operador'
+            })));
+          }
+
+          // v316: Recover team from cached data
+          if (cached.team && cached.team.length > 0) {
+            setLocalTeam(cached.team.map((t: any) => ({
+              id: t.userId || t.id,
+              name: t.user?.name || t.name || 'Operador',
+              role: t.user?.role || t.role || 'OPERATOR',
+              phone: t.user?.phone || t.phone
+            })));
+          }
+
           hasRecoveredRef.current = true;
           setIsSyncingOffline(false);
           setCacheNotFound(false);
@@ -1865,7 +1911,7 @@ export default function ProjectExecutionClient({
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <h2 style={{ fontSize: '1.2rem', fontWeight: 'bold', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.title}</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{project.clientName || project.client?.name || clientName}</span>
+            <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{project.clientName || project.client?.name || localClientName}</span>
           </div>
         </div>
       </div>
@@ -1922,7 +1968,7 @@ export default function ProjectExecutionClient({
                   {[
                     ['Tipo', translateType(project.type)],
                     ['Contrato', (project.contractTypeList || []).join(', ') || 'N/A'],
-                    ['Ciudad', projectCity || 'N/A'],
+                    ['Ciudad', localProjectCity || 'N/A'],
                     ['Inicio', formatDate(project.startDate)],
                     ['Fin Est.', formatDate(project.endDate)]
                   ].map(([label, val]) => (
@@ -1940,7 +1986,7 @@ export default function ProjectExecutionClient({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Nombre</span>
-                    <span style={{ fontWeight: '500' }}>{clientName || 'N/A'}</span>
+                    <span style={{ fontWeight: '500' }}>{localClientName || 'N/A'}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', alignItems: 'flex-start' }}>
                     <span style={{ color: 'var(--text-muted)', marginTop: '4px' }}>Ubicación</span>
@@ -1953,13 +1999,13 @@ export default function ProjectExecutionClient({
                         }
 
                         const clientLoc = project.locationLink && project.locationLink !== 'N/A' ? project.locationLink : null;
-                        const operatorLoc = findGpsLink(project.technicalSpecs) || findGpsLink(project.specsTranscription) || findGpsLink(projectAddress);
+                        const operatorLoc = findGpsLink(project.technicalSpecs) || findGpsLink(project.specsTranscription) || findGpsLink(localProjectAddress);
                         
                         const hasClient = !!clientLoc;
                         const hasOperator = !!operatorLoc && operatorLoc !== clientLoc;
 
                         if (!hasClient && !hasOperator) {
-                          return <span style={{ fontWeight: '500', textAlign: 'right' }}>{projectAddress || 'N/A'}</span>;
+                          return <span style={{ fontWeight: '500', textAlign: 'right' }}>{localProjectAddress || 'N/A'}</span>;
                         }
 
                         return (
@@ -1994,8 +2040,8 @@ export default function ProjectExecutionClient({
                                 </a>
                               </div>
                             )}
-                            {!hasClient && hasOperator && projectAddress && (
-                               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'right', marginTop: '4px' }}>{projectAddress}</span>
+                            {!hasClient && hasOperator && localProjectAddress && (
+                               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'right', marginTop: '4px' }}>{localProjectAddress}</span>
                             )}
                           </>
                         );
@@ -2056,10 +2102,12 @@ export default function ProjectExecutionClient({
               gap: '8px',
               backdropFilter: 'blur(10px)',
               border: '1px solid rgba(255,255,255,0.1)',
-              animation: isSyncingGlobal ? 'pulse 1.5s infinite' : 'none',
-              pointerEvents: 'auto'
+              animation: isSyncingGlobal && globalPending > 0 ? 'pulse 1.5s infinite' : 'none',
+              pointerEvents: 'auto',
+              opacity: isSyncingGlobal || globalPending > 0 || globalFailed > 0 ? 1 : 0,
+              transition: 'all 0.3s ease'
             }}>
-              {isSyncingGlobal ? (
+              {isSyncingGlobal && globalPending > 0 ? (
                 <>
                   <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
                   Sincronizando...

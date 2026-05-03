@@ -7,7 +7,8 @@ export default function ServiceWorkerRegistration() {
     if (!('serviceWorker' in navigator)) return
     if (!window.location.pathname.startsWith('/admin')) return
 
-    const swUrl = `/custom-sw.js?v=${new Date().getTime()}`
+    const SW_VERSION = 'v314'; // Sync this with custom-sw.js VERSION
+    const swUrl = `/custom-sw.js?v=${SW_VERSION}`
     navigator.serviceWorker.register(swUrl, { scope: '/' })
       .then((registration) => {
         // console.log('[App] SW registrado:', registration.scope)

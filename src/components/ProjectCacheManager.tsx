@@ -12,6 +12,12 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
   const [projectCount, setProjectCount] = useState(0)
   const [isDismissed, setIsDismissed] = useState(false)
   const [isOptimizingAssets, setIsOptimizingAssets] = useState(false)
+  const [isAwaitingData, setIsAwaitingData] = useState(true) // v302: Guard against premature "Done"
+  
+  const isSyncingRef = useRef(false)
+  const isAwaitingDataRef = useRef(true)
+  const hasStartedSyncRef = useRef(false)
+  const isSyncCompleteRef = useRef(false) // v315: Prevent banner from reverting from green
 
   // v289: Debounce — only declare "done" after 5s of SW silence (no new batch messages)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -24,20 +30,53 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
     if (!meta) return;
     setLastSync(meta.lastSync);
     setProjectCount(meta.count);
+    
+    // v302: Sync logic parity with GlobalSyncWorker
+    const FRESHNESS_WINDOW = 15 * 60 * 1000;
+    const isActuallyFresh = meta.lastSync && (Date.now() - meta.lastSync < FRESHNESS_WINDOW);
+
     if (meta.status === 'syncing') {
       setIsSyncing(true);
+      isSyncingRef.current = true;
       setSyncComplete(false);
+      isSyncCompleteRef.current = false;
+      setIsAwaitingData(false);
+      isAwaitingDataRef.current = false;
     } else {
       setIsSyncing(false);
-      const isFresh = meta.lastSync && (Date.now() - meta.lastSync < 30 * 60 * 1000);
-      setSyncComplete(!!isFresh);
+      isSyncingRef.current = false;
+      // If it's NOT fresh, we shouldn't show "Complete" (Green) on mount, 
+      // because GlobalSyncWorker will start in 5s.
+      setSyncComplete(!!isActuallyFresh);
+      isSyncCompleteRef.current = !!isActuallyFresh;
+      
+      if (!isActuallyFresh) {
+        setIsAwaitingData(true);
+        isAwaitingDataRef.current = true;
+      } else {
+        setIsAwaitingData(false);
+        isAwaitingDataRef.current = false;
+      }
     }
   }, [meta]);
 
   useEffect(() => {
+    const onStarted = () => {
+      setIsSyncing(true)
+      isSyncingRef.current = true
+      setSyncComplete(false)
+      isSyncCompleteRef.current = false
+      setIsAwaitingData(false)
+      isAwaitingDataRef.current = false
+    }
+
     const onProgress = (e: any) => {
       setIsSyncing(true)
+      isSyncingRef.current = true
       setSyncComplete(false)
+      isSyncCompleteRef.current = false
+      setIsAwaitingData(false)
+      isAwaitingDataRef.current = false
       setProgress(e.detail)
     }
 
@@ -45,11 +84,13 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
       if (e.detail?.count) setProjectCount(e.detail.count);
       // Data sync done → SW warm-caching is now running in background
       setIsOptimizingAssets(true);
+      setIsSyncing(false); // v302: Data phase done
+      isSyncingRef.current = false;
+      setIsAwaitingData(false); // Data is definitely here now
+      isAwaitingDataRef.current = false;
       
-      // v291: Immediately ask SW if it's already working on assets
-      if (navigator.serviceWorker?.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: 'GET_PRECACHE_STATUS' });
-      }
+      // v316: Do NOT ask for GET_PRECACHE_STATUS. GlobalSyncWorker guarantees 
+      // PRECACHE_URLS is sent, which broadcasts count: 0 naturally if empty.
       
       // Safety timeout: 30s. If SW hasn't finished by then, something is wrong.
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -62,13 +103,24 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
       if (e.data && e.data.type === 'ASSETS_CACHED') {
         const remaining = e.data.count ?? 0;
         
+        // v316: Removed the ignore check for 'remaining > 0'. If SW is working, we MUST show it.
+        // The 30-min throttle in warmCache already prevents unwanted blinking.
+        
         // As long as there is activity, we reset the safety timeout
         if (debounceRef.current) clearTimeout(debounceRef.current);
         
         if (remaining === 0) {
+          // v302: Only accept "0" if we are not awaiting data sync to start or finish
+          // Using REFS here because the listener closure is stale (empty deps array)
+          if (isSyncingRef.current || isAwaitingDataRef.current) {
+            // console.log('[CacheManager] SW reports 0, but still awaiting data sync (Ref check)...');
+            return;
+          }
+
           console.log('[CacheManager] ✅ SW reports 0 pending assets. Sync complete.');
           setIsOptimizingAssets(false);
           setSyncComplete(true);
+          isSyncCompleteRef.current = true;
           
           // v302: Force persistent save to DB using .put (safer than .update)
           db.cacheMetadata.put({
@@ -80,12 +132,22 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
         } else {
           // If we receive any count > 0, we MUST stay in optimizing state
           setIsOptimizingAssets(true);
-          setSyncComplete(false); 
+          setSyncComplete(false);
+          isSyncCompleteRef.current = false;
+          
+          if (debounceRef.current) clearTimeout(debounceRef.current);
           
           // Reset safety timeout for another 15 seconds of silence
+          // v305: ONLY allow silence timeout to finish if we are NOT in the middle of a data sync
+          if (isSyncingRef.current) {
+            // console.log('[CacheManager] Silence detected but data sync still active. Waiting...');
+            return;
+          }
+
           debounceRef.current = setTimeout(() => {
             setIsOptimizingAssets(false);
             setSyncComplete(true);
+            isSyncCompleteRef.current = true;
             db.cacheMetadata.put({
               id: cacheKey,
               lastSync: Date.now(),
@@ -97,6 +159,7 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
       }
     };
 
+    window.addEventListener('bulk-cache-sync-started', onStarted)
     window.addEventListener('bulk-cache-sync-progress', onProgress)
     window.addEventListener('bulk-cache-sync-finished', onFinished)
     if (navigator.serviceWorker) {
@@ -108,6 +171,7 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
     }
 
     return () => {
+      window.removeEventListener('bulk-cache-sync-started', onStarted)
       window.removeEventListener('bulk-cache-sync-progress', onProgress)
       window.removeEventListener('bulk-cache-sync-finished', onFinished)
       if (navigator.serviceWorker) {
@@ -119,8 +183,8 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
 
   if (isDismissed) return null;
 
-  const isFullyDone = syncComplete && !isOptimizingAssets && !isSyncing;
-  const isWorking = isSyncing || isOptimizingAssets;
+  const isFullyDone = syncComplete && !isOptimizingAssets && !isSyncing && !isAwaitingData;
+  const isWorking = isSyncing || isOptimizingAssets || isAwaitingData;
 
   // Render Premium Status Badge
   return (

@@ -173,9 +173,9 @@ export default function Sidebar() {
   const syncMeta = useLiveQuery(() => db.cacheMetadata.get('projects_bulk'))
   const pendingOutboxCount = useLiveQuery(() => db.outbox.count()) || 0
   
-  const [dataSync, setDataSync] = useState<{ current: number, total: number, active: boolean, label?: string }>({ 
-    current: 0, total: 0, active: false 
-  })
+  const [dataSync, setDataSync] = useState<{ current: number, total: number, active: boolean, label?: string, isManual?: boolean }>({ 
+    current: 0, total: 0, active: false, isManual: false 
+  });
   const [assetSync, setAssetSync] = useState<{ current: number, total: number, active: boolean, label?: string }>({ 
     current: 0, total: 0, active: false 
   })
@@ -183,12 +183,12 @@ export default function Sidebar() {
   useEffect(() => {
     const channel = new BroadcastChannel('aquatech-sync');
     channel.onmessage = (event) => {
-      const { type, current, total, projectName, url } = event.data;
+      const { type, current, total, projectName } = event.data;
       
       if (type === 'DATA_SYNC_START') {
-        setDataSync({ current: 0, total, active: true, label: 'Sincronizando Proyectos...' });
+        setDataSync({ current: 0, total, active: true, label: 'Sincronizando Proyectos...', isManual: !!event.data.isManual });
       } else if (type === 'DATA_SYNC_PROGRESS') {
-        setDataSync({ current, total, active: true, label: projectName || 'Actualizando...' });
+        setDataSync(prev => ({ ...prev, current, total, active: true, label: projectName || 'Actualizando...' }));
       } else if (type === 'DATA_SYNC_FINISHED') {
         setDataSync(prev => ({ ...prev, active: false }));
       } else if (type === 'ASSET_PRECACHE_PROGRESS') {
@@ -197,10 +197,43 @@ export default function Sidebar() {
         setAssetSync(prev => ({ ...prev, active: false }));
       }
     };
-    return () => channel.close();
+
+    // v302: Service Worker Heartbeat — Listen for real-time chunk download status
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'ASSETS_CACHED') {
+        const pendingCount = event.data.count || 0;
+        if (pendingCount > 0) {
+          setAssetSync(prev => ({ 
+            ...prev, 
+            active: true, 
+            label: 'Optimizando...', 
+            current: prev.total > 0 ? (prev.total - pendingCount) : 0,
+            total: prev.total || pendingCount 
+          }));
+        } else {
+          // If SW reports 0 pending, and we are not in a broadcast bulk-precache session
+          setAssetSync(prev => ({ ...prev, active: false }));
+        }
+      }
+    };
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+    }
+
+    return () => {
+      channel.close();
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+      }
+    };
   }, []);
 
-  const isActuallySyncing = pendingOutboxCount > 0 || dataSync.active || assetSync.active;
+
+  // v302: Silent Sync Logic — Only show "Sincronizando" (Blue) for heavy Asset Sync, 
+  // Manual Sync (user-triggered), or when there are actual items pending in the outbox.
+  // Regular background data refreshes (JSON) remain "Green" (Ready) to maintain a consistent system state.
+  const isActuallySyncing = assetSync.active || (dataSync.active && (pendingOutboxCount > 0 || dataSync.isManual));
 
   // Hooks para datos de sesión y permisos (Siempre al principio)
   const effectiveRole = useMemo(() => {

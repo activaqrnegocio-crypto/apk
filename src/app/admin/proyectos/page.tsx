@@ -178,8 +178,9 @@ export default function ProyectosPage() {
         // Mark as warmed
         newProjects.forEach(p => warmedProjectIdsRef.current.add(p.id));
         
-        // Update DB status to 'syncing' so the manager shows progress if needed
-        db.cacheMetadata.update(cacheKey, { status: 'syncing' }).catch(() => {});
+        // v315: Removed db.cacheMetadata.update(cacheKey, { status: 'syncing' })
+        // to prevent UI getting stuck at 'Sincronizando 0%' indefinitely. 
+        // Warm caching now happens silently in the background without disturbing the green UI.
       }
     }
   };

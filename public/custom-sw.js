@@ -1,4 +1,4 @@
-const VERSION = 'v301';
+const VERSION = 'v315'; // v315: Silence Warm-cache failed if offline, prevent banner from reverting from green
 const STATIC_CACHE = `aquatech-static-${VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${VERSION}`;
 const ASSETS_CACHE = `aquatech-assets-${VERSION}`;
@@ -48,12 +48,18 @@ let precacheQueueSet = new Set(); // v291: Use a Set for robust pending count de
 function cleanResponse(response) {
   if (!response || !response.redirected) return response;
   const headers = new Headers(response.headers);
-  return new Response(response.body, {
+  
+  // v310: Fix "Response with null body status cannot have body" (204, 304, etc)
+  const nullBodyStatuses = [101, 204, 205, 304];
+  const body = nullBodyStatuses.includes(response.status) ? null : response.body;
+  
+  return new Response(body, {
     status: response.status,
     statusText: response.statusText,
     headers: headers
   });
 }
+
 
 // ─── INSTALL ────────────────────────────────────────────────
 
@@ -63,21 +69,88 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE)
       .then(async (cache) => {
+        const CRITICAL_URLS = [
+          '/admin/proyectos/offline-shell',
+          '/admin/operador/proyecto/offline-shell',
+          '/offline.html',
+          '/favicon.ico',
+          '/logo.jpg'
+        ];
+
+        // 1. First, ENSURE critical shells are cached. If this fails, the SW is useless offline.
+        for (const url of CRITICAL_URLS) {
+          try {
+            const response = await fetch(url, { cache: 'reload' });
+            if (response.ok) {
+              await cache.put(url, response.clone());
+              // Auto-extract assets for critical shells immediately
+              await extractAndCacheAssets(response, url);
+            } else {
+              throw new Error(`Failed to fetch critical ${url}: ${response.status}`);
+            }
+          } catch (err) {
+            console.error(`[SW] CRITICAL Pre-cache FAILED: ${url}`, err);
+            // We don't throw here to allow partial install, but it's dangerous
+          }
+        }
+
+        // 2. Cache the rest of PRE_CACHE
         for (const url of PRE_CACHE) {
+          if (CRITICAL_URLS.includes(url)) continue;
           try {
             const response = await fetch(url);
-            // v239: Allow caching redirected responses for the entry points
             if (response.ok) {
               await cache.put(url, response);
             }
           } catch (err) {
-            console.warn(`[SW] Pre-cache skipped (offline?): ${url}`);
+            console.warn(`[SW] Non-critical pre-cache skipped: ${url}`);
           }
         }
       })
       .then(() => self.skipWaiting())
   );
 });
+
+/**
+ * Helper to extract and cache JS/CSS from an HTML response
+ */
+async function extractAndCacheAssets(htmlResponse, sourceUrl) {
+  try {
+    const text = await htmlResponse.clone().text();
+    const assetRegex = /([\/a-zA-Z0-9._\-\[\]\(\)%@+~]+\.(js|css|woff2))/g;
+    const matches = Array.from(text.matchAll(assetRegex))
+      .filter(m => m[1].includes('_next/static/') || m[1].includes('/fonts/'));
+    
+    // v312: Explicitly extract link and preload tags to catch tricky CSS files
+    const linkRegex = /<link[^>]+href=["']([^"']+\.(css|js))["'][^>]*>/gi;
+    const linkMatches = Array.from(text.matchAll(linkRegex)).map(m => [m[0], m[1]]);
+    for (const lm of linkMatches) {
+        if (!matches.some(m => m[1] === lm[1]) && (lm[1].includes('_next/static/') || lm[1].includes('/fonts/'))) {
+            matches.push([lm[0], lm[1]]);
+        }
+    }
+    
+    const assetsCache = await caches.open(ASSETS_CACHE);
+    const origin = self.location.origin;
+
+    for (const match of matches) {
+      const path = match[1];
+      const fullUrl = path.startsWith('http') ? path : new URL(path.startsWith('/') ? path : '/' + path, origin).href;
+      
+      const hasAsset = await assetsCache.match(fullUrl, { ignoreSearch: true });
+      if (!hasAsset) {
+        try {
+          const r = await fetch(fullUrl, { priority: 'high' });
+          if (r.ok) await assetsCache.put(fullUrl, r);
+        } catch(e) {}
+      }
+    }
+    console.log(`[SW] Extracted assets for ${sourceUrl}`);
+  } catch (err) {
+    console.warn(`[SW] Asset extraction failed for ${sourceUrl}`, err);
+  }
+}
+
 
 // ─── ACTIVATE ───────────────────────────────────────────────
 self.addEventListener('activate', (event) => {
@@ -89,7 +162,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then(keys =>
       Promise.all(
         keys
-          .filter(key => key.startsWith('aquatech-') && key.match(/-v\d+$/))
+          .filter(key => key.startsWith('aquatech-') && key.match(/-v\d+$/) && !key.includes(VERSION))
           .map(key => {
             console.log('[SW] Removing old versioned cache:', key);
             return caches.delete(key);
@@ -185,6 +258,23 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(cacheFirst(request, FONTS_CACHE));
     return;
   }
+  
+  // v312: EXPLICIT CSS CHUNKS HANDLING → CACHE FIRST (Immutable)
+  if (url.pathname.startsWith('/_next/static/css/')) {
+    event.respondWith(
+      caches.match(request, { ignoreVary: true, ignoreSearch: true }).then(cachedResponse => {
+        if (cachedResponse) return cachedResponse;
+        return fetch(request).then(response => {
+          if (response.ok && !response.redirected) {
+             const responseToCache = response.clone();
+             caches.open(ASSETS_CACHE).then(cache => cache.put(request, responseToCache));
+          }
+          return response;
+        }).catch(() => new Response(null, { status: 204 }));
+      })
+    );
+    return;
+  }
 
   // ── Next.js static assets → Cache First with auto-save
   // v226: Use StaleWhileRevalidate for assets to ensure they are always updated 
@@ -268,45 +358,57 @@ async function rscNetworkFirst(request) {
   const cacheKey = url.toString();
 
   try {
-    // v268: Reduced RSC timeout to 8s for snappier mobile feel
-    const response = await fetchWithTimeout(request.clone(), 8000);
-    // v272: If server returns error (502, 500, 404), fallback to cache/shell
-    if (!response.ok) {
-      console.warn(`[SW ${VERSION}] RSC Network error ${response.status}, falling back to cache/shell...`);
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    if (!response.redirected) {
-      const cache = await caches.open(RSC_CACHE);
-      cache.put(cacheKey, response.clone());
-      // v222: Increased limit for RSC to preserve project data shells (Admin scale)
-      trimCache(RSC_CACHE, 400);
-    }
-    return response;
-  } catch (e) {
-    const rscCache = await caches.open(RSC_CACHE);
-    const pagesCache = await caches.open(PAGES_CACHE);
-    
-    // 1. Try exact match in RSC_CACHE and PAGES_CACHE (bulk sync saves here)
-    let cached = await rscCache.match(cacheKey) || 
-                 await rscCache.match(originalUrl) ||
-                 await pagesCache.match(originalUrl);
-                 
-    if (cached) return cached;
-    
-    // 2. v225: Universal RSC Shell for Projects
-    // v268: Improved regex to catch all operator project variants
-    const isAdminProjectRsc = url.pathname.match(/\/admin\/proyectos\/\d+/);
-    const isOperatorProjectRsc = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/) || 
-                                 url.pathname.match(/\/operador\/proyecto\/\d+/) ||
-                                 url.pathname.includes('/operador/proyecto/');
+    // v302: Wrap everything in a secondary try/catch for extreme safety
+    try {
+      // v268: Reduced RSC timeout to 8s for snappier mobile feel
+      const response = await fetchWithTimeout(request.clone(), 8000);
+      // v272: If server returns error (502, 500, 404), fallback to cache/shell
+      if (!response.ok) {
+        console.warn(`[SW ${VERSION}] RSC Network error ${response.status}, falling back to cache/shell...`);
+        throw new Error(`HTTP ${response.status}`);
+      }
+      
+      if (!response.redirected) {
+        const cache = await caches.open(RSC_CACHE);
+        cache.put(cacheKey, response.clone());
+        // v222: Increased limit for RSC to preserve project data shells (Admin scale)
+        trimCache(RSC_CACHE, 400);
+      }
+      return response;
+    } catch (e) {
+      const rscCache = await caches.open(RSC_CACHE);
+      const pagesCache = await caches.open(PAGES_CACHE);
+      
+      // 1. Try exact match in RSC_CACHE and PAGES_CACHE (bulk sync saves here)
+      let cached = await rscCache.match(cacheKey) || 
+                   await rscCache.match(originalUrl) ||
+                   await pagesCache.match(originalUrl);
+                   
+      if (cached) return cached;
+      
+      // 2. v225: Universal RSC Shell for Projects
+      const isAdminProjectRsc = url.pathname.match(/\/admin\/proyectos\/\d+/);
+      const isOperatorProjectRsc = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/) || 
+                                   url.pathname.match(/\/operador\/proyecto\/\d+/) ||
+                                   url.pathname.includes('/operador/proyecto/');
 
-    if (isAdminProjectRsc || isOperatorProjectRsc) {
-      console.log(`[SW ${VERSION}] RSC cache miss for project — returning empty response to preserve URL.`);
-      return new Response('', { status: 204 }); 
+      if (isAdminProjectRsc || isOperatorProjectRsc) {
+        console.log(`[SW ${VERSION}] RSC cache miss for project — trying Universal RSC Shell...`);
+        const shellRscUrl = isOperatorProjectRsc 
+          ? '/admin/operador/proyecto/offline-shell'
+          : '/admin/proyectos/offline-shell';
+        
+        const shellRsc = await rscCache.match(shellRscUrl, { ignoreVary: true, ignoreSearch: true });
+        if (shellRsc) return shellRsc;
+
+        return new Response(null, { status: 204 }); 
+      }
+      console.warn(`[SW ${VERSION}] RSC Network First failed completely for:`, url.pathname);
+      return new Response(null, { status: 204 }); 
     }
-    console.warn(`[SW ${VERSION}] RSC Network First failed completely for:`, url.pathname);
-    return new Response('', { status: 204 }); 
+  } catch (globalErr) {
+    console.error(`[SW ${VERSION}] Critical failure in rscNetworkFirst:`, globalErr);
+    return new Response(null, { status: 204 });
   }
 }
 
@@ -314,48 +416,51 @@ async function rscNetworkFirst(request) {
  * v245: RSC Stale While Revalidate — Instant response for core navigations.
  */
 async function rscStaleWhileRevalidate(request) {
-  const url = new URL(request.url);
-  url.searchParams.delete('_rsc');
-  const cacheKey = url.toString();
-  
-  const cache = await caches.open(RSC_CACHE);
-  const pagesCache = await caches.open(PAGES_CACHE);
-  
-  let cached = await cache.match(cacheKey) || await pagesCache.match(request.url);
-  
-  const fetchPromise = fetchWithTimeout(request.clone(), 8000).then(async (response) => {
-    if (response.ok && !response.redirected) {
-      const cacheToUpdate = await caches.open(RSC_CACHE);
-      cacheToUpdate.put(cacheKey, response.clone());
-    }
-    // v272: If SWR fetch fails with 502/etc, don't return the error to browser if we are in a critical navigation
-    if (!response.ok) return null;
-    return response;
-  }).catch(() => null);
+  try {
+    const url = new URL(request.url);
+    url.searchParams.delete('_rsc');
+    const cacheKey = url.toString();
+    
+    const cache = await caches.open(RSC_CACHE);
+    const pagesCache = await caches.open(PAGES_CACHE);
+    
+    let cached = await cache.match(cacheKey) || await pagesCache.match(request.url);
+    
+    const fetchPromise = fetchWithTimeout(request.clone(), 8000).then(async (response) => {
+      if (response && response.ok && !response.redirected) {
+        const cacheToUpdate = await caches.open(RSC_CACHE);
+        cacheToUpdate.put(cacheKey, response.clone());
+      }
+      if (response && !response.ok) return null;
+      return response;
+    }).catch(() => null);
 
-  if (cached) {
-    // console.log(`[SW ${VERSION}] Serving RSC from cache (SWR):`, url.pathname);
-    return cached;
+    if (cached) {
+      return cached;
+    }
+
+    // v251: Ensure we NEVER return null to respondWith()
+    return fetchPromise.then(async res => {
+      if (res) return res;
+
+      // v287: Fallback to Universal RSC Shell if SWR fails (Network + Cache Miss)
+      const isAdminProjectRsc = url.pathname.match(/\/admin\/proyectos\/\d+/);
+      const isOperatorProjectRsc = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/) || 
+                                   url.pathname.match(/\/operador\/proyecto\/\d+/) ||
+                                   url.pathname.includes('/operador/proyecto/');
+
+      if (isAdminProjectRsc || isOperatorProjectRsc) {
+        return new Response(null, { status: 204 });
+      }
+
+      return new Response(null, { status: 204 });
+    });
+  } catch (globalErr) {
+    console.error(`[SW ${VERSION}] Critical failure in rscStaleWhileRevalidate:`, globalErr);
+    return new Response(null, { status: 204 });
   }
-
-  // v251: Ensure we NEVER return null to respondWith()
-  return fetchPromise.then(async res => {
-    if (res) return res;
-
-    // v287: Fallback to Universal RSC Shell if SWR fails (Network + Cache Miss)
-    const isAdminProjectRsc = url.pathname.match(/\/admin\/proyectos\/\d+/);
-    const isOperatorProjectRsc = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/) || 
-                                 url.pathname.match(/\/operador\/proyecto\/\d+/) ||
-                                 url.pathname.includes('/operador/proyecto/');
-
-    if (isAdminProjectRsc || isOperatorProjectRsc) {
-      console.log(`[SW ${VERSION}] RSC SWR cache miss for project — returning empty to preserve URL.`);
-      return new Response('', { status: 204 });
-    }
-
-    return new Response('', { status: 204 });
-  });
 }
+
 
 /**
  * Navigation handler — CACHE-FIRST for instant offline response.
@@ -379,45 +484,48 @@ async function navigationHandler(request) {
       return fetch(request);
     }
 
-    // v269: Added /admin/calendario to the "force shell" list for faster mobile entry.
-    const isProject = url.pathname.includes('/proyecto/') || url.pathname.includes('/proyectos/');
-    const isOperatorDashboard = url.pathname === '/admin/operador' || url.pathname === '/admin/operador/';
+    const isProjectDetail = url.pathname.match(/\/(proyecto|proyectos)\/\d+/);
+    const isDashboard = url.pathname === '/admin/proyectos' || url.pathname === '/admin/proyectos/' ||
+                        url.pathname === '/admin/operador' || url.pathname === '/admin/operador/';
     const isCalendar = url.pathname === '/admin/calendario' || url.pathname === '/admin/calendario/';
+                        
     let cached = null;
-
     
-    if (isProject || isOperatorDashboard || isCalendar) {
-      // console.log(`[SW ${VERSION}] Fast-track route detected, looking for direct cache match...`);
-      // v284: DO NOT force serve shell yet. Just look for specific page cache.
-      cached = await findCachedPage(request.url, url.pathname, false); 
-    } else {
-      cached = await findCachedPage(request.url, url.pathname, false);
-    }
+    // v311 FIX: For specific project routes (e.g. /admin/proyectos/1094):
+    // ↳ If ONLINE → skip shell and go straight to network (no broken flash)
+    // ↳ If OFFLINE → serve shell immediately (fast offline experience)
+    // Dashboards and calendar still use cache-first (less data-intensive)
+    const isSpecificProjectRoute = isProjectDetail && 
+      url.pathname.match(/\/admin\/(proyectos|operador\/proyecto)\/\d+/);
     
-    if (cached) {
-      // Validate: don't serve cached login pages for non-login URLs
-      const cachedUrl = cached.url || '';
-      if (!url.pathname.includes('/login') && cachedUrl.includes('/login')) {
-        // console.log('[SW] Cached response is login redirect, checking network...');
-        // If we are online, we skip cache and try network (to get the real page)
-        // If we are offline, we MIGHT have to serve it or fallback to a shell
-        if (navigator.onLine) {
-          cached = null;
-        } else {
-          // console.log('[SW] Offline and only have redirect, trying shells...');
-          // Fallback to shells before giving up
+    if (isSpecificProjectRoute && navigator.onLine) {
+      // ONLINE + Project route: Skip shell, go straight to network
+      // The cache update will happen below after network succeeds
+    } else if (isProjectDetail || isDashboard || isCalendar) {
+      // Direct shell search for projects (Fast path - used OFFLINE or for dashboards)
+      if (isProjectDetail) {
+        const shellUrl = url.pathname.includes('/operador/') 
+          ? '/admin/operador/proyecto/offline-shell' 
+          : '/admin/proyectos/offline-shell';
+        cached = await caches.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
+        if (cached && isValidHTMLResponse(cached)) {
+          // console.log(`[SW v311] Offline shell: Serving project shell for ${url.pathname}`);
+          updatePageInBackground(request.clone(), url.pathname);
+          return cleanResponse(cached);
         }
+      }
+
+      // Generic cache search (Dashboards, Calendar, or Project Fallback)
+      cached = await findCachedPage(request.url, url.pathname, false);
+      if (cached && isValidHTMLResponse(cached)) {
+        // console.log(`[SW v311] Cached page: Serving for ${url.pathname}`);
+        updatePageInBackground(request.clone(), url.pathname);
+        return cleanResponse(cached);
       }
     }
 
-    if (cached) {
-      // console.log('[SW] Serving from cache:', url.pathname);
-      // Update in background (stale-while-revalidate for pages)
-      updatePageInBackground(request.clone(), url.pathname);
-      return cleanResponse(cached);
-    }
+    // ── STEP 2: Network first with timeout (v311: 8s)
 
-    // ── STEP 2: Cache miss → try network with tighter timeout for mobile (v268: 8s)
     try {
       const response = await fetchWithTimeout(request.clone(), 8000);
       if (response.ok) {
@@ -447,17 +555,29 @@ async function navigationHandler(request) {
     // ── STEP 2.5: v289 — Project URL offline? Serve the correct shell immediately.
     // This is faster than findCachedPage() because it goes direct, no scanning.
     const isAdminProjectNav = url.pathname.match(/\/admin\/proyectos\/\d+/);
-    const isOperatorProjectNav = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/);
+    const isOperatorProjectNav = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/) || 
+                                url.pathname.match(/\/operador\/proyecto\/\d+/);
+    
     if (isAdminProjectNav || isOperatorProjectNav) {
-      const shellUrl = isOperatorProjectNav
+      const shellUrl = (isOperatorProjectNav || url.pathname.includes('/operador/'))
         ? '/admin/operador/proyecto/offline-shell'
         : '/admin/proyectos/offline-shell';
+        
       const directShell = await caches.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
-      if (directShell && directShell.ok) {
-        console.log(`[SW v289] Serving shell directly for offline project: ${url.pathname}`);
+      if (isValidHTMLResponse(directShell)) {
+        console.log(`[SW ${VERSION}] Emergency shell recovery for: ${url.pathname}`);
         return cleanResponse(directShell);
       }
+      
+      // Secondary fallback — search broadly in all caches for ANY project shell
+      const allCaches = await caches.keys();
+      for (const cName of allCaches) {
+        const c = await caches.open(cName);
+        const match = await c.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
+        if (isValidHTMLResponse(match)) return cleanResponse(match);
+      }
     }
+
 
     // ── STEP 3: Last chance — Try shells if network failed or we are offline
     const shell = await findCachedPage(request.url, url.pathname, true); // true = force serve
@@ -540,8 +660,11 @@ async function findCachedPage(requestUrl, pathname, forceServe = false) {
   // Try exact URL
   let cached = await caches.match(requestUrl, { ignoreVary: true, ignoreSearch: true });
   if (isValidHTMLResponse(cached)) {
-    if (!forceServe && !pathname.includes('/login') && (cached.url || '').includes('/login')) {
-       // skip
+    // v304: Strict check — if we are NOT going to login, but the cache is a login page, skip it.
+    const isLoginPath = pathname.includes('/login');
+    const isCachedLogin = (cached.url || '').includes('/login');
+    if (!forceServe && !isLoginPath && isCachedLogin) {
+       // skip invalid cache pollution from online redirects
     } else {
        return cached;
     }
@@ -789,7 +912,7 @@ async function networkFirst(request, cacheName, timeout = 10000) {
       );
     }
     
-    return new Response('', { status: 204 });
+    return new Response(null, { status: 204 });
   }
 }
 
@@ -797,7 +920,7 @@ async function networkFirst(request, cacheName, timeout = 10000) {
  * Cache First — serve from cache, fetch if miss.
  */
 async function cacheFirst(request, cacheName) {
-  const cached = await caches.match(request, { ignoreVary: true });
+  const cached = await caches.match(request, { ignoreVary: true, ignoreSearch: true });
   if (cached) return cached;
 
   try {
@@ -808,7 +931,7 @@ async function cacheFirst(request, cacheName) {
     }
     return response;
   } catch (e) {
-    return new Response('', { status: 204 });
+    return new Response(null, { status: 204 });
   }
 }
 
@@ -819,7 +942,7 @@ async function staleWhileRevalidate(request, cacheName) {
   if (request.method !== 'GET') return fetch(request);
   const url = new URL(request.url);
   const isNextChunk = url.pathname.includes('/_next/static/') && url.pathname.endsWith('.js');
-  const cached = await caches.match(request, { ignoreVary: true });
+  const cached = await caches.match(request, { ignoreVary: true, ignoreSearch: true });
   
   const fetchPromise = fetch(request).then(response => {
     // v233: Only cache valid, non-redirected responses
@@ -927,6 +1050,7 @@ self.addEventListener('message', (event) => {
     const urls = event.data.urls || [];
     const replyPort = event.data.replyPort || null;
     const projectName = event.data.projectName || '';
+    const options = event.data.options || {};
     
     // v291: Deduplicate URLs and update pending set
     const newUrls = urls.filter(u => !precacheQueueSet.has(u));
@@ -967,32 +1091,33 @@ self.addEventListener('message', (event) => {
               headers: { 
                 'Cache-Control': 'no-cache', 
                 'Accept': isRsc ? 'text/x-component, text/html' : 'text/html',
-                ...(isRsc ? { 'RSC': '1' } : {})
+                ...(isRsc ? { 'RSC': '1' } : {}),
+                ...(options.headers || {})
               }
             }), 20000);
 
             if (response.ok) {
               const contentType = response.headers.get('Content-Type') || '';
               const isHTML = contentType.includes('text/html');
-              const isRscResponse = contentType.includes('text/x-component');
               const finalUrl = response.url || '';
               const isLoginRedirect = finalUrl.includes('/login');
               
-              if ((isHTML || isRscResponse) && !isLoginRedirect) {
+              // v305: Strict validation. Pages MUST be HTML. RSC payloads go to RSC_CACHE if needed.
+              if (isHTML && !isLoginRedirect) {
                 await cache.put(url, response.clone());
                 const alt = url.endsWith('/') ? url.slice(0, -1) : url + '/';
                 await cache.put(alt, response.clone());
                 
+                // Asset extraction for HTML pages
                 try {
                   const htmlText = await response.clone().text();
-                  const assetRegex = /([\/a-zA-Z0-9._-]+\.(js|css|woff2|png|jpg|webp))/g;
+                  const assetRegex = /([\/a-zA-Z0-9._\-\[\]\(\)%@+~]+\.(js|css|woff2|png|jpg|webp))/g;
                   const assetMatches = Array.from(htmlText.matchAll(assetRegex))
                     .filter(m => m[1].includes('_next/static/') || m[1].includes('/fonts/'));
                   
                   const assetsCache = await caches.open(ASSETS_CACHE);
                   const isShell = url.includes('offline-shell');
                   const isAdminOrOp = url.includes('/admin/proyectos/') || url.includes('/admin/operador/proyecto/');
-                  // v288: Increased limit for heavy admin/op projects to 200 chunks
                   const maxAssets = isShell ? 999 : (isAdminOrOp ? 200 : 60); 
                   
                   let newAssets = 0;
@@ -1007,12 +1132,10 @@ self.addEventListener('message', (event) => {
                     const hasAsset = await assetsCache.match(fullAssetUrl);
                     if (!hasAsset) {
                       newAssets++;
-                      // v user: Log individual chunk download for projects
                       if (isAdminOrOp) {
                         const projPrefix = projectName ? `[${projectName}] ` : '';
                         console.log(`[SW] ${projPrefix}Descargando Chunk (${newAssets}): ${assetPath.split('/').pop()}`);
                       }
-                      // v287: Retry logic for critical assets (up to 2 attempts)
                       let attempts = 0;
                       let success = false;
                       while (attempts < 2 && !success) {
@@ -1031,7 +1154,6 @@ self.addEventListener('message', (event) => {
                       existingAssets++;
                     }
                   }
-                  // v user: Show asset count for chunks visibility
                   if (isShell || isAdminOrOp) {
                     const projPrefix = projectName ? `[${projectName}] ` : '';
                     console.log(`[SW ${VERSION}] ${projPrefix}Chunks listos (${url}): ${newAssets} nuevos, ${existingAssets} ya en caché.`);
@@ -1039,11 +1161,6 @@ self.addEventListener('message', (event) => {
                 } catch (err) {
                   console.warn('[SW] Asset extraction failed for:', url);
                 }
-
-                // Silence success logs per URL to avoid console clutter
-                // console.log(`[SW ${VERSION}] Warm-cached success (+assets):`, url);
-              } else if (!isLoginRedirect) {
-                await cache.put(url, response.clone());
               }
             }
             
@@ -1060,7 +1177,12 @@ self.addEventListener('message', (event) => {
             await new Promise(r => setTimeout(r, 100)); 
           } catch (e) {
             precacheQueueSet.delete(url); // Count even if failed
-            console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
+            // v315: Silence Warm-cache failed if offline
+            if (self.navigator && self.navigator.onLine === false) {
+               console.info(`[SW ${VERSION}] Warm-cache skipped (offline) for:`, url);
+            } else {
+               console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
+            }
             // v291: Notify error too so heartbeat continues
             self.clients.matchAll().then(clients => {
               clients.forEach(c => c.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueSet.size }));

@@ -114,19 +114,33 @@ export default function ProjectDetailClient({ project: initialProject, available
   }, []);
   const [localProject, setLocalProject] = useState<any>(null);
   const [cacheNotFound, setCacheNotFound] = useState(false);
-  const project = localProject || initialProject;
+  
+  // Evitar desajustes de ID e hidratación incorrecta
+  const isIdentityMismatch = initialProject && idFromUrl && Number(initialProject.id) !== Number(idFromUrl);
+  const project = isIdentityMismatch ? { ...initialProject, isSkeleton: true, title: 'Cargando...' } : (localProject || initialProject);
   
   const [localChat, setLocalChat] = useState<any[]>([]);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [isSyncingOffline, setIsSyncingOffline] = useState(false);
+  const hasRecoveredRef = useRef(false);
 
+  // Inicialización de Offline Cache / Esqueleto
   useEffect(() => {
+    if (!idFromUrl || Number(idFromUrl) <= 0) return;
+
+    // Si ya tenemos el proyecto correcto y no es un esqueleto, no recuperar
+    if (project && Number(project.id) === Number(idFromUrl) && !project.isSkeleton) {
+      setIsSyncingOffline(false);
+      hasRecoveredRef.current = true;
+      return;
+    }
+
+    setIsSyncingOffline(true);
     let cancelled = false;
     let pollInterval: NodeJS.Timeout | null = null;
-    let hasRecovered = false;
 
     const handleSyncDone = () => { 
-      if (!hasRecovered && !cancelled) tryRecover(); 
+      if (!hasRecoveredRef.current && !cancelled) tryRecover(); 
     };
 
     async function tryRecover(): Promise<boolean> {
@@ -158,7 +172,7 @@ export default function ProjectDetailClient({ project: initialProject, available
           setLocalChat(normalizedMessages);
           setIsSyncingOffline(false);
           setCacheNotFound(false);
-          hasRecovered = true;
+          hasRecoveredRef.current = true;
           return true;
         }
       } catch (err) {
@@ -167,57 +181,51 @@ export default function ProjectDetailClient({ project: initialProject, available
       return false;
     }
 
-    async function initProject() {
-      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
-      setIsOfflineMode(isOffline);
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    setIsOfflineMode(isOffline);
 
-      const needsCacheRecovery = (!initialProject || String(initialProject?.id) !== String(idFromUrl) || initialProject?.isSkeleton) && idFromUrl;
+    let retries = 0;
+    const MAX_RETRIES = 10;
 
-      if (needsCacheRecovery) {
-        setIsSyncingOffline(true);
-        let retries = 0;
-        const MAX_RETRIES = 10;
+    // Intento inmediato
+    tryRecover();
 
-        tryRecover();
-
-        pollInterval = setInterval(async () => {
-          if (cancelled || hasRecovered) {
-            if (pollInterval) clearInterval(pollInterval);
-            return;
-          }
-          retries++;
-          const found = await tryRecover();
-          if (found || retries >= MAX_RETRIES) {
-            if (pollInterval) clearInterval(pollInterval);
-            if (!found && !cancelled) {
-              setIsSyncingOffline(false);
-              setCacheNotFound(true);
-            }
-          }
-        }, 1000);
-
-        window.addEventListener('bulk-cache-sync-finished', handleSyncDone);
-      } else if (initialProject) {
-        // Online and correct ID: Update local state and refresh cache
-        setLocalProject(initialProject);
-        setLocalChat(initialProject.chatMessages || []);
-        
-        // Passive update to cache to keep it fresh
-        db.projectsCache.put({ ...initialProject, lastAccessedAt: Date.now() }).catch(() => {});
-        if (initialProject?.chatMessages?.length > 0) {
-          db.chatCache.put({ projectId: initialProject.id, messages: initialProject.chatMessages }).catch(() => {});
+    pollInterval = setInterval(async () => {
+      if (cancelled || hasRecoveredRef.current) {
+        if (pollInterval) clearInterval(pollInterval);
+        return;
+      }
+      retries++;
+      const found = await tryRecover();
+      if (found || retries >= MAX_RETRIES) {
+        if (pollInterval) clearInterval(pollInterval);
+        if (!found && !cancelled) {
+          setIsSyncingOffline(false);
+          setCacheNotFound(true);
         }
       }
+    }, 1000);
+
+    window.addEventListener('bulk-cache-sync-finished', handleSyncDone);
+
+    if (initialProject && !initialProject.isSkeleton && !isIdentityMismatch) {
+      // Data received from server correctly: update local state and refresh cache
+      setLocalProject(initialProject);
+      setLocalChat(initialProject.chatMessages || []);
+      
+      // Passive update to cache to keep it fresh for offline
+      db.projectsCache.put({ ...initialProject, lastAccessedAt: Date.now() }).catch(() => {});
+      if (initialProject?.chatMessages?.length > 0) {
+        db.chatCache.put({ projectId: initialProject.id, messages: initialProject.chatMessages }).catch(() => {});
+      }
     }
-    
-    initProject();
 
     return () => {
       cancelled = true;
       if (pollInterval) clearInterval(pollInterval);
       window.removeEventListener('bulk-cache-sync-finished', handleSyncDone);
     };
-  }, [project, idFromUrl, pathname]);
+  }, [idFromUrl, initialProject?.id, initialProject?.isSkeleton]); // v315: Fix loop offline shell
 
   // --- CHAT STATE ---
   const [chatMessages, setChatMessages] = useState<any[]>([])
@@ -3159,25 +3167,27 @@ export default function ProjectDetailClient({ project: initialProject, available
                 className="btn btn-ghost btn-sm"
               >
                 Editar Fases
-              </button>
-            ) : (
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button 
-                  onClick={() => setEditingPhases([...editingPhases, { id: 'new_' + Date.now(), title: '', description: '', estimatedDays: 0, status: 'PENDIENTE', isNew: true }])} 
-                  className="btn btn-secondary btn-sm" 
-                  disabled={isSavingPhases}
-                >
-                  + Agregar Fase
-                </button>
-                <button onClick={() => setIsEditingPhases(false)} className="btn btn-ghost btn-sm" disabled={isSavingPhases}>Cancelar</button>
-                <button onClick={handleSavePhases} className="btn btn-primary btn-sm" disabled={isSavingPhases}>{isSavingPhases ? 'Guardando...' : 'Guardar Cambios'}</button>
-              </div>
-            )}
+            {!isEditingPhases && (
+                  <button onClick={() => {
+                    setEditingPhases([...(project?.phases || [])])
+                    setIsEditingPhases(true)
+                  }} className="btn btn-ghost btn-sm" style={{ padding: '4px 8px' }}>
+                    Editar Fases
+                  </button>
+                )}
+                {isEditingPhases && (
+                  <div style={{ display: 'flex', gap: '5px' }}>
+                    <button onClick={() => setIsEditingPhases(false)} className="btn btn-ghost btn-sm" style={{ padding: '4px 8px', color: 'var(--text-muted)' }} disabled={isSavingPhases}>Cancelar</button>
+                    <button onClick={handleSavePhases} className="btn btn-primary btn-sm" style={{ padding: '4px 8px' }} disabled={isSavingPhases}>{isSavingPhases ? '...' : 'Guardar'}</button>
+                  </div>
+                )}
           </div>
-          <div style={{ padding: '20px' }}>
-            {(!isEditingPhases ? project.phases : editingPhases).map((phase: any, idx: number) => (
-              <div key={phase.id} style={{ display: 'flex', gap: '20px', marginBottom: idx === project.phases.length - 1 ? 0 : '30px', position: 'relative' }}>
-                {idx !== project.phases.length - 1 && (
+          <div style={{ padding: '10px 0', position: 'relative' }}>
+            <div style={{ position: 'absolute', left: '16px', top: '20px', bottom: '20px', width: '2px', backgroundColor: 'var(--border-color)', zIndex: 0 }}></div>
+            
+            {(!isEditingPhases ? (project?.phases || []) : editingPhases).map((phase: any, idx: number) => (
+              <div key={phase.id} style={{ display: 'flex', gap: '20px', marginBottom: idx === (project?.phases || []).length - 1 ? 0 : '30px', position: 'relative' }}>
+                {idx !== (project?.phases || []).length - 1 && (
                   <div style={{ position: 'absolute', left: '15px', top: '35px', bottom: '-35px', width: '2px', backgroundColor: phase.status === 'COMPLETADA' ? 'var(--success)' : 'var(--border-color)', zIndex: 0 }} />
                 )}
                 
@@ -3502,7 +3512,7 @@ export default function ProjectDetailClient({ project: initialProject, available
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1 }}>
               {!isEditingTeam ? (
                 <>
-                  {project.team.map((member: any) => (
+                  {(project?.team || []).map((member: any) => (
                     <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px', backgroundColor: 'var(--bg-surface)', borderRadius: '8px' }}>
                       <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontWeight: 'bold' }}>
                         {(member.user?.name || 'OP').substring(0,2).toUpperCase()}
@@ -3513,7 +3523,7 @@ export default function ProjectDetailClient({ project: initialProject, available
                       </div>
                     </div>
                   ))}
-                  {project.team.length === 0 && (
+                  {(!project?.team || project.team.length === 0) && (
                     <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', padding: '10px' }}>No hay operadores asignados.</div>
                   )}
                 </>

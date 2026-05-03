@@ -116,6 +116,9 @@ export default function GlobalSyncWorker() {
 
     // v291: We are actually starting a heavy sync now. Mark state.
     setIsBulkSyncing(true)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('bulk-cache-sync-started'));
+    }
 
     setBulkProgress({ current: 0, total: 0 })
     syncLock.current = true;
@@ -143,14 +146,32 @@ export default function GlobalSyncWorker() {
       const res = await fetch(`/api/projects/bulk-cache?limit=${limit}`, { priority: 'low' })
       if (res.ok) {
         const fetchedProjects = await res.json()
-        projectsToProcess = fetchedProjects;
+        
+        // v316: For operators, filter projects to only those where the user
+        // is a direct team member or creator — matching OperatorDashboardClient's Dexie filter.
+        // This ensures the sync counter (e.g. 12/12) matches the projects tab count.
+        // Admin sees ALL projects unfiltered.
+        if (!isAdmin && u?.id) {
+          const userId = Number(u.id);
+          projectsToProcess = fetchedProjects.filter((p: any) => {
+            const isInTeam = p.team?.some((m: any) => Number(m.userId) === userId);
+            const isCreator = Number(p.createdBy) === userId;
+            return isInTeam || isCreator;
+          });
+          console.log(`[Sync] Operator filter: ${fetchedProjects.length} fetched → ${projectsToProcess.length} owned by user ${userId}`);
+        } else {
+          projectsToProcess = fetchedProjects;
+        }
+        
         const totalToSync = projectsToProcess.length
         const syncChannel = new BroadcastChannel('aquatech-sync');
         
         syncChannel.postMessage({ 
           type: 'DATA_SYNC_START', 
-          total: totalToSync 
+          total: totalToSync,
+          isManual: force 
         });
+
 
         setBulkProgress({ current: 0, total: totalToSync })
         
@@ -236,12 +257,18 @@ export default function GlobalSyncWorker() {
         };
 
         // v267: Sends a PRECACHE_URLS message and awaits SW confirmation via MessageChannel
-        const precacheAndWait = async (urlOrUrls: string | string[], projectName: string = ''): Promise<void> => {
+        const precacheAndWait = async (urlOrUrls: string | string[], projectNameOrOptions: string | any = ''): Promise<void> => {
           const controller = await getController();
           const urls = Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls];
+          const projectName = typeof projectNameOrOptions === 'string' ? projectNameOrOptions : '';
+          const options = typeof projectNameOrOptions === 'object' ? projectNameOrOptions : {};
+          
           if (!controller) {
             await Promise.all(urls.map(url => 
-              fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'text/html' } }).catch(() => {})
+              fetch(url, { 
+                credentials: 'same-origin', 
+                headers: { 'Accept': 'text/html', ...options.headers } 
+              }).catch(() => {})
             ));
             return;
           }
@@ -249,7 +276,7 @@ export default function GlobalSyncWorker() {
             const { port1, port2 } = new MessageChannel();
             const timeout = setTimeout(() => resolve(), 30000);
             port1.onmessage = () => { clearTimeout(timeout); resolve(); };
-            controller.postMessage({ type: 'PRECACHE_URLS', urls, projectName, replyPort: port2 }, [port2]);
+            controller.postMessage({ type: 'PRECACHE_URLS', urls, projectName, options, replyPort: port2 }, [port2]);
           });
         };
 
@@ -262,8 +289,8 @@ export default function GlobalSyncWorker() {
           }))
 
           await Promise.all([
-            precacheAndWait('/admin/proyectos/offline-shell'),
-            precacheAndWait('/admin/operador/proyecto/offline-shell'),
+            precacheAndWait('/admin/proyectos/offline-shell', { headers: { 'Accept': 'text/html' } }),
+            precacheAndWait('/admin/operador/proyecto/offline-shell', { headers: { 'Accept': 'text/html' } }),
             precacheAndWait('/admin/proyectos/offline-shell?_rsc=1'),
             precacheAndWait('/admin/operador/proyecto/offline-shell?_rsc=1'),
           ]);
@@ -278,7 +305,50 @@ export default function GlobalSyncWorker() {
             const rscUrl = section.includes('?') ? `${section}&_rsc=prefetch` : `${section}?_rsc=prefetch`;
             fetch(rscUrl, { priority: 'low', headers: { 'RSC': '1', 'Next-Router-Prefetch': '1' } }).catch(() => {});
           }));
+
+          // 3. v user: Project-Specific Chunks — Pre-cache individual project details
+          // For Admin: First 15 projects (same as list page)
+          // For Operator: ALL projects (usually fewer, and they need them all offline)
+          const projectsForChunks = isAdmin ? projectsToProcess.slice(0, 15) : projectsToProcess;
+          
+          if (projectsForChunks.length > 0) {
+            window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
+              detail: { message: `Sincronizando activos de ${projectsForChunks.length} proyectos...` }
+            }))
+
+            const chunkSyncChannel = new BroadcastChannel('aquatech-sync');
+            chunkSyncChannel.postMessage({ 
+              type: 'ASSET_PRECACHE_PROGRESS', 
+              current: 0, 
+              total: projectsForChunks.length,
+              active: true 
+            });
+
+            // Process in batches of 5 to avoid saturating the SW and network
+            const BATCH_SIZE = 5;
+            for (let i = 0; i < projectsForChunks.length; i += BATCH_SIZE) {
+              const batch = projectsForChunks.slice(i, i + BATCH_SIZE);
+              await Promise.all(batch.map(async (p, idx) => {
+                const projectUrl = isAdmin ? `/admin/proyectos/${p.id}` : `/admin/operador/proyecto/${p.id}`;
+                await precacheAndWait(projectUrl, p.title);
+                
+                // Update progress after each batch member finishes
+                chunkSyncChannel.postMessage({ 
+                  type: 'ASSET_PRECACHE_PROGRESS', 
+                  current: Math.min(i + idx + 1, projectsForChunks.length), 
+                  total: projectsForChunks.length,
+                  active: true
+                });
+              }));
+              // Tiny cooldown between batches
+              await new Promise(r => setTimeout(r, 500));
+            }
+            
+            chunkSyncChannel.postMessage({ type: 'ASSET_PRECACHE_FINISHED' });
+            chunkSyncChannel.close();
+          }
         }
+
 
       // 3. SYNC USERS — v281: Removed artificial 500ms delay
       window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
@@ -315,6 +385,18 @@ export default function GlobalSyncWorker() {
       const now = Date.now()
       const finalCount = projectsToProcess.length;
       
+      // v316: Ensure SW is aware of the exact projects to precache BEFORE we tell the UI we are done.
+      // This solves the race condition where UI turns green prematurely.
+      if (navigator.serviceWorker?.controller) {
+        const urls = projectsToProcess.slice(0, 15).map(p => 
+          isAdmin ? `/admin/proyectos/${p.id}` : `/admin/operador/proyecto/${p.id}`
+        );
+        navigator.serviceWorker.controller.postMessage({
+          type: 'PRECACHE_URLS',
+          urls
+        });
+      }
+
       const cacheKeyFinal = `projects_bulk_${u?.id || 'default'}`;
       await db.cacheMetadata.put({
         id: cacheKeyFinal,
@@ -515,37 +597,57 @@ export default function GlobalSyncWorker() {
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
           
           // 1. Handle single media (MESSAGE, MEDIA_UPLOAD, EXPENSE, GALLERY_UPLOAD)
-          const hasBase64 = finalPayload.media?.base64 || 
-                           finalPayload.media?.fileData || // v302: Added support for Chat Message fileData
-                           (item.type === 'GALLERY_UPLOAD' && finalPayload.url?.startsWith('data:')) ||
-                           finalPayload.receiptPhoto?.startsWith('data:');
-          const hasBlobUrl = (typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
-                            (typeof finalPayload.url === 'string' && finalPayload.url.startsWith('blob:')) ||
-                            (typeof finalPayload.receiptPhoto === 'string' && finalPayload.receiptPhoto.startsWith('blob:'));
-          const hasFileData = finalPayload.fileData?.buffer;
-          const hasRawFile = finalPayload.file;
+          const hasBase64 = !!(finalPayload.media?.base64 || 
+                            (item.type === 'GALLERY_UPLOAD' && finalPayload.url?.startsWith('data:')) ||
+                            finalPayload.receiptPhoto?.startsWith('data:'));
+          
+          const hasBlobUrl = !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
+                             (typeof finalPayload.url === 'string' && finalPayload.url.startsWith('blob:')) ||
+                             (typeof finalPayload.receiptPhoto === 'string' && finalPayload.receiptPhoto.startsWith('blob:')));
 
-          if (hasBase64 || hasBlobUrl || hasFileData || hasRawFile) {
+          const hasBinaryData = !!(finalPayload.media?.fileData || 
+                                 finalPayload.fileData || 
+                                 finalPayload.receiptFileData);
+
+          const hasRawFile = !!finalPayload.file;
+
+          if (hasBase64 || hasBlobUrl || hasBinaryData || hasRawFile) {
             try {
               let uploadFile: File | Blob;
-              let finalFilename: string;
+              let finalFilename: string = '';
 
-              if (hasBase64 || hasBlobUrl) {
-                const source = finalPayload.media?.fileData || finalPayload.media?.base64 || finalPayload.media?.url || finalPayload.url || finalPayload.receiptPhoto;
+              if (hasBase64 || hasBlobUrl || hasBinaryData) {
+                const source = finalPayload.media?.fileData || 
+                               finalPayload.fileData || 
+                               finalPayload.receiptFileData ||
+                               finalPayload.media?.base64 || 
+                               finalPayload.media?.url || 
+                               finalPayload.url || 
+                               finalPayload.receiptPhoto;
                 
-                if (source instanceof ArrayBuffer || source instanceof Uint8Array) {
-                  const mime = finalPayload.media?.mimeType || 'application/octet-stream';
+                if (source && (source instanceof ArrayBuffer || source instanceof Uint8Array)) {
+                  const mime = finalPayload.media?.mimeType || 
+                               finalPayload.fileData?.type || 
+                               finalPayload.receiptFileData?.type || 
+                               'application/octet-stream';
                   uploadFile = new Blob([source as any], { type: mime });
+                } else if (source && typeof source === 'object' && (source as any).buffer) {
+                  // Caso: Estructura { buffer, type, name }
+                  const s = source as any;
+                  uploadFile = new Blob([s.buffer], { type: s.type || 'application/octet-stream' });
+                  if (s.name) finalFilename = s.name;
                 } else {
                   const resB64 = await fetch(source as string);
                   uploadFile = await resB64.blob();
                 }
                 
-                finalFilename = finalPayload.media?.filename || finalPayload.media?.fileName || finalPayload.filename || `sync_${Date.now()}.jpg`;
-              } else if (hasFileData) {
-                const blob = new Blob([finalPayload.fileData.buffer], { type: finalPayload.fileData.type });
-                uploadFile = new File([blob], finalPayload.fileData.name, { type: finalPayload.fileData.type });
-                finalFilename = finalPayload.fileData.name;
+                if (!finalFilename) {
+                  finalFilename = finalPayload.media?.filename || 
+                                  finalPayload.media?.fileName || 
+                                  finalPayload.fileData?.name ||
+                                  finalPayload.filename || 
+                                  `sync_${Date.now()}.jpg`;
+                }
               } else {
                 uploadFile = finalPayload.file;
                 finalFilename = finalPayload.file.name || `sync_legacy_${Date.now()}`;
@@ -568,8 +670,12 @@ export default function GlobalSyncWorker() {
 
               delete finalPayload.file;
               delete finalPayload.fileData;
+              delete finalPayload.receiptFileData;
               delete finalPayload.previewBase64;
-              if (finalPayload.media) delete finalPayload.media.base64;
+              if (finalPayload.media) {
+                delete finalPayload.media.base64;
+                delete finalPayload.media.fileData;
+              }
             } catch (err) {
               // console.error('Failed single media upload:', err);
               await db.outbox.update(item.id!, { status: 'pending' });
