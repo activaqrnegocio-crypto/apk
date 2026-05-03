@@ -1063,7 +1063,7 @@ self.addEventListener('message', (event) => {
             console.warn(`[SW ${VERSION}] Warm-cache failed for:`, url);
             // v291: Notify error too so heartbeat continues
             self.clients.matchAll().then(clients => {
-              clients.forEach(c => c.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueCount }));
+              clients.forEach(c => c.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueSet.size }));
             });
           }
         }
@@ -1075,6 +1075,8 @@ self.addEventListener('message', (event) => {
   }
 
   if (event.data && event.data.type === 'GET_PRECACHE_STATUS') {
+    // Siempre reportar el estado actual, incluso si es 0, para que la UI 
+    // pueda actualizarse correctamente al recuperar el foco.
     event.source?.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueSet.size });
   }
 });

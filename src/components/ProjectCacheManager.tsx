@@ -51,12 +51,11 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
         navigator.serviceWorker.controller.postMessage({ type: 'GET_PRECACHE_STATUS' });
       }
       
-      // Safety timeout: 5 minutes. If SW hasn't finished by then, something is wrong.
+      // Safety timeout: 30s. If SW hasn't finished by then, something is wrong.
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
-        console.warn('[CacheManager] Asset optimization timed out (5m). Force finishing.');
         setIsOptimizingAssets(false);
-      }, 300000); 
+      }, 30000); 
     }
 
     const onSwMessage = (e: MessageEvent) => {
@@ -69,16 +68,31 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
         if (remaining === 0) {
           console.log('[CacheManager] ✅ SW reports 0 pending assets. Sync complete.');
           setIsOptimizingAssets(false);
+          setSyncComplete(true);
+          
+          // v302: Force persistent save to DB using .put (safer than .update)
+          db.cacheMetadata.put({
+            id: cacheKey,
+            lastSync: Date.now(),
+            count: 0,
+            status: 'idle'
+          }).catch(err => console.error('[CacheManager] DB persist failed:', err));
         } else {
           // If we receive any count > 0, we MUST stay in optimizing state
-          console.log('[CacheManager] SW working... pending:', remaining);
           setIsOptimizingAssets(true);
-          setSyncComplete(false); // v291: If SW is still working, we are NOT fully synced
+          setSyncComplete(false); 
           
-          // Reset safety timeout for another 5 minutes of silence
+          // Reset safety timeout for another 15 seconds of silence
           debounceRef.current = setTimeout(() => {
             setIsOptimizingAssets(false);
-          }, 300000);
+            setSyncComplete(true);
+            db.cacheMetadata.put({
+              id: cacheKey,
+              lastSync: Date.now(),
+              count: 0,
+              status: 'idle'
+            }).catch(() => {});
+          }, 15000);
         }
       }
     };
@@ -199,13 +213,13 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
               : isOptimizingAssets
                 ? 'Preparando archivos de interfaz para acceso sin internet...'
                 : isFullyDone
-                  ? `${projectCount} proyectos completamente listos sin internet.`
+                  ? 'Todos los datos y archivos de interfaz están listos para trabajar sin conexión.'
                   : 'Iniciando descarga de datos necesarios...'}
           </p>
         </div>
       </div>
 
-      <div style={{ position: 'relative', zIndex: 1 }}>
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: '12px' }}>
         {isFullyDone ? (
            <div style={{
              display: 'flex',
@@ -227,6 +241,30 @@ export default function ProjectCacheManager({ userId }: { userId?: number | stri
             {Math.round((progress.current / (progress.total || 1)) * 100)}%
           </div>
         ) : null}
+
+        {/* Dismiss Button */}
+        <button 
+          onClick={() => setIsDismissed(true)}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'rgba(255,255,255,0.3)',
+            cursor: 'pointer',
+            padding: '4px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'color 0.2s ease'
+          }}
+          onMouseEnter={(e) => e.currentTarget.style.color = 'white'}
+          onMouseLeave={(e) => e.currentTarget.style.color = 'rgba(255,255,255,0.3)'}
+          title="Cerrar aviso"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
       </div>
 
       <style>{`

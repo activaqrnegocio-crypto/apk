@@ -1073,29 +1073,31 @@ export default function ProjectExecutionClient({
 
       // --- OFFLINE OR UPLOAD ERROR FALLBACK ---
       if (!navigator.onLine || uploadErrorOccurred) {
-         await db.transaction('rw', db.outbox, async () => {
-           if (mediaFile) {
-              try {
-                // v301: PROBLEMA 1 — Binary storage (ArrayBuffer) for large files
-                const prep = await prepareFileForOutbox(mediaFile);
-                payload.media = {
-                  filename: prep.filename,
-                  mimeType: prep.mimeType,
-                  type: determinedType,
-                  category: 'CHAT',
-                  storageType: prep.storageType
-                };
-                
-                if (prep.storageType === 'base64') {
-                  payload.media.base64 = prep.data;
-                } else {
-                  payload.media.fileData = prep.data; // ArrayBuffer saved directly to IndexedDB
-                }
-              } catch (e) {
-                console.warn('[Offline] Media preparation failed:', e);
+         
+         // 1. PREPARAR EL ARCHIVO FUERA DE LA TRANSACCIÓN (Para evitar TransactionInactiveError)
+         if (mediaFile) {
+            try {
+              const prep = await prepareFileForOutbox(mediaFile);
+              payload.media = {
+                filename: prep.filename,
+                mimeType: prep.mimeType,
+                type: determinedType,
+                category: 'CHAT',
+                storageType: prep.storageType
+              };
+              
+              if (prep.storageType === 'base64') {
+                payload.media.base64 = prep.data;
+              } else {
+                payload.media.fileData = prep.data;
               }
+            } catch (e) {
+              console.warn('[Offline] Media preparation failed:', e);
             }
+         }
 
+         // 2. ABRIR LA TRANSACCIÓN Y GUARDAR
+         await db.transaction('rw', db.outbox, async () => {
            await db.outbox.add({
               type: 'MESSAGE',
               projectId: project.id,
@@ -1142,20 +1144,25 @@ export default function ProjectExecutionClient({
           throw new Error('Server error')
         }
       } catch (e) {
-         await db.transaction('rw', db.outbox, async () => {
-           if (mediaFile && !payload.media?.base64) {
-             try {
-               // v294: Garantizar Base64 en el catch de envío online
-               const fileToStore = isCompressibleImage(mediaFile) ? await optimizedCompress(mediaFile) : mediaFile;
-               const base64 = await blobToBase64(fileToStore);
-                payload.media = {
-                  base64: base64,
-                  filename: mediaFile.name,
-                  mimeType: mediaFile.type || (isCompressibleImage(mediaFile) ? 'image/webp' : 'application/octet-stream'),
-                  category: 'CHAT'
-                };
-             } catch (err) { console.warn('[Offline] Serialisation fallback failed:', err); }
+         
+         // 1. PREPARAR FALLBACK FUERA DE LA TRANSACCIÓN
+         if (mediaFile && !payload.media?.base64 && !payload.media?.fileData) {
+           try {
+             const fileToStore = isCompressibleImage(mediaFile) ? await optimizedCompress(mediaFile) : mediaFile;
+             const base64 = await blobToBase64(fileToStore);
+             payload.media = {
+               base64: base64,
+               filename: mediaFile.name,
+               mimeType: mediaFile.type || (isCompressibleImage(mediaFile) ? 'image/webp' : 'application/octet-stream'),
+               category: 'CHAT'
+             };
+           } catch (err) { 
+             console.warn('[Offline] Serialisation fallback failed:', err); 
            }
+         }
+
+         // 2. ABRIR TRANSACCIÓN Y GUARDAR
+         await db.transaction('rw', db.outbox, async () => {
            await db.outbox.add({
               type: 'MESSAGE',
               projectId: project.id,
@@ -1167,6 +1174,7 @@ export default function ProjectExecutionClient({
               syncId
            })
          });
+         
          setLiveChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'pending_sync' } : m))
          triggerBackgroundSync()
       }

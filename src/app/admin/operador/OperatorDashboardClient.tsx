@@ -334,34 +334,55 @@ export default function OperatorDashboardClient({
   // 1. Initial hydration and offline cache for appointments
   const syncTriggeredRef = useRef(false);
 
-  // v289: Stable warm-cache logic (Only fire when project IDs change, not on unread updates)
+  // v289/v302: Stable warm-cache logic with 30min throttling
   const warmedProjectIdsRef = useRef<Set<number>>(new Set());
   
   useEffect(() => {
-    if (!projects || projects.length === 0 || !navigator.onLine) return;
-    
-    // Extract only stable IDs to compare
-    const currentIds = projects.slice(0, 20)
-      .filter(p => p.id && !String(p.id).startsWith('pending'))
-      .map(p => Number(p.id));
-    
-    // Check if we have any new projects to warm
-    const newIds = currentIds.filter(id => !warmedProjectIdsRef.current.has(id));
-    
-    if (newIds.length > 0) {
-      const urls = newIds.map(id => `/admin/operador/proyecto/${id}`);
-      console.log(`[WarmCache] Messaging SW to pre-cache ${urls.length} NEW operator projects`);
+    const triggerWarmCache = async () => {
+      if (!projects || projects.length === 0 || !navigator.onLine) return;
+
+      // v302: Use the same cache key as CacheManager to ensure sync consistency
+      const userId = user?.id || localUser?.id || 'default';
+      const cacheKey = `projects_bulk_${userId}`;
       
-      if (navigator.serviceWorker?.controller) {
-        navigator.serviceWorker.controller.postMessage({
-          type: 'PRECACHE_URLS',
-          urls
-        });
-        // Mark as warmed
-        newIds.forEach(id => warmedProjectIdsRef.current.add(id));
+      // 30min Throttling check
+      const meta = await db.cacheMetadata.get(cacheKey);
+      if (meta?.lastSync) {
+        const minsSinceLastSync = (Date.now() - meta.lastSync) / 60000;
+        if (minsSinceLastSync < 30) {
+          // console.log(`[WarmCache-Op] Skipping. Last sync was ${Math.round(minsSinceLastSync)}m ago.`);
+          return;
+        }
       }
-    }
-  }, [projects?.length]); // Only depend on the length or a stable property, not the whole array object if it's memoized with unreads
+      
+      // Extract only stable IDs to compare
+      const currentIds = projects.slice(0, 20)
+        .filter(p => p.id && !String(p.id).startsWith('pending'))
+        .map(p => Number(p.id));
+      
+      // Check if we have any new projects to warm
+      const newIds = currentIds.filter(id => !warmedProjectIdsRef.current.has(id));
+      
+      if (newIds.length > 0) {
+        const urls = newIds.map(id => `/admin/operador/proyecto/${id}`);
+        console.log(`[WarmCache] Messaging SW to pre-cache ${urls.length} NEW operator projects`);
+        
+        if (navigator.serviceWorker?.controller) {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'PRECACHE_URLS',
+            urls
+          });
+          // Mark as warmed
+          newIds.forEach(id => warmedProjectIdsRef.current.add(id));
+          
+          // Update DB status to 'syncing' to notify UI manager
+          db.cacheMetadata.update(cacheKey, { status: 'syncing' }).catch(() => {});
+        }
+      }
+    };
+
+    triggerWarmCache();
+  }, [projects?.length, user?.id, localUser?.id]);
 
   // v264: Instant Outbox Kick - Force sync when returning to focus or online
   useEffect(() => {

@@ -531,9 +531,16 @@ export default function GlobalSyncWorker() {
               let finalFilename: string;
 
               if (hasBase64 || hasBlobUrl) {
-                const b64Url = finalPayload.media?.fileData || finalPayload.media?.base64 || finalPayload.media?.url || finalPayload.url || finalPayload.receiptPhoto;
-                const resB64 = await fetch(b64Url);
-                uploadFile = await resB64.blob();
+                const source = finalPayload.media?.fileData || finalPayload.media?.base64 || finalPayload.media?.url || finalPayload.url || finalPayload.receiptPhoto;
+                
+                if (source instanceof ArrayBuffer || source instanceof Uint8Array) {
+                  const mime = finalPayload.media?.mimeType || 'application/octet-stream';
+                  uploadFile = new Blob([source as any], { type: mime });
+                } else {
+                  const resB64 = await fetch(source as string);
+                  uploadFile = await resB64.blob();
+                }
+                
                 finalFilename = finalPayload.media?.filename || finalPayload.media?.fileName || finalPayload.filename || `sync_${Date.now()}.jpg`;
               } else if (hasFileData) {
                 const blob = new Blob([finalPayload.fileData.buffer], { type: finalPayload.fileData.type });
@@ -692,15 +699,28 @@ export default function GlobalSyncWorker() {
       router.refresh()
     }
 
-    // v282: After processing, check if there are STILL pending items.
-    // If so, schedule an immediate re-run so the queue drains continuously.
+    // v282/v302: Fix Infinite Sync Loop.
+    // We already iterated through all items in the queue. 
+    // If there are still items left, they are either in cooling down state or blocked by dependencies.
+    // Do NOT schedule an immediate 3s re-run blindly, as this causes the UI to loop infinitely.
     try {
-      const remaining = await db.outbox.where('status').anyOf(['pending', 'failed']).count();
-      if (remaining > 0) {
-        // console.log(`[Sync] ${remaining} items still pending — scheduling retry in 3s`);
-        setTimeout(() => syncOutbox(), 3000);
-      } else {
-        // console.log('[Sync] Outbox fully drained ✓');
+      const remainingEligible = await db.outbox
+        .where('status')
+        .anyOf(['pending', 'failed'])
+        .filter(item => {
+           // Only count items that are NOT in a cooldown
+           const attempts = item.attempts || 0;
+           if (attempts >= 5) {
+             const minsSinceLastAttempt = (Date.now() - (item.lastAttemptAt || item.timestamp || 0)) / 60000;
+             if (minsSinceLastAttempt < 5) return false;
+           }
+           // Only count items that we haven't already tried in this exact run and failed
+           return item.lastAttemptAt ? (Date.now() - item.lastAttemptAt > 10000) : true;
+        })
+        .count();
+
+      if (remainingEligible > 0) {
+        setTimeout(() => syncOutbox(), 5000);
       }
     } catch (e) { /* ignore */ }
 

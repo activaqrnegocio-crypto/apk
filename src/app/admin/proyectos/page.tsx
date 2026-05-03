@@ -143,9 +143,24 @@ export default function ProyectosPage() {
     }
   }
 
-  // v289: Incremental warm-cache for projects
-  const warmCache = (projectList: any[]) => {
+  // v289/v302: Incremental warm-cache for projects with 30min throttling
+  const warmCache = async (projectList: any[], force = false) => {
     if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller && navigator.onLine) {
+      const userId = (session?.user as any)?.id || 'default';
+      const cacheKey = `projects_bulk_${userId}`;
+
+      // Check last sync time from DB
+      if (!force) {
+        const meta = await db.cacheMetadata.get(cacheKey);
+        if (meta?.lastSync) {
+          const minsSinceLastSync = (Date.now() - meta.lastSync) / 60000;
+          if (minsSinceLastSync < 30) {
+            // console.log(`[WarmCache] Skipping auto-sync. Last sync was ${Math.round(minsSinceLastSync)} mins ago (Threshold: 30m)`);
+            return;
+          }
+        }
+      }
+
       // Filter for new projects not yet warmed in this session
       const newProjects = projectList
         .filter(p => p.id && !String(p.id).startsWith('pending'))
@@ -162,6 +177,9 @@ export default function ProyectosPage() {
 
         // Mark as warmed
         newProjects.forEach(p => warmedProjectIdsRef.current.add(p.id));
+        
+        // Update DB status to 'syncing' so the manager shows progress if needed
+        db.cacheMetadata.update(cacheKey, { status: 'syncing' }).catch(() => {});
       }
     }
   };
