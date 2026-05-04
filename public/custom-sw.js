@@ -1,4 +1,4 @@
-const SW_VERSION = 'v317-industrial-sync';
+const SW_VERSION = 'v319-industrial-sync';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -23,11 +23,11 @@ self.addEventListener('activate', (event) => {
 });
 
 function getUploadTimeout(sizeInBytes) {
-  if (sizeInBytes < 1 * 1024 * 1024)    return 120_000;   // <1MB    → 2 min
-  if (sizeInBytes < 10 * 1024 * 1024)   return 300_000;   // <10MB   → 5 min
-  if (sizeInBytes < 50 * 1024 * 1024)   return 600_000;   // <50MB   → 10 min
-  if (sizeInBytes < 100 * 1024 * 1024)  return 1_200_000; // <100MB  → 20 min
-  return 1_800_000;                                        // 200MB+  → 30 min
+  if (sizeInBytes < 1 * 1024 * 1024)    return 60_000;    // <1MB    → 1 min
+  if (sizeInBytes < 10 * 1024 * 1024)   return 120_000;   // <10MB   → 2 min
+  if (sizeInBytes < 50 * 1024 * 1024)   return 300_000;   // <50MB   → 5 min
+  if (sizeInBytes < 100 * 1024 * 1024)  return 600_000;   // <100MB  → 10 min
+  return 1_200_000;                                      // 200MB+  → 20 min
 }
 
 function getChunkSize(fileSizeBytes) {
@@ -1005,17 +1005,24 @@ async function staleWhileRevalidate(request, cacheName) {
 /**
  * Fetch with timeout to avoid hanging on slow networks.
  */
-function fetchWithTimeout(request, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Timeout')), timeoutMs);
-    fetch(request).then(response => {
-      clearTimeout(timer);
-      resolve(response);
-    }).catch(err => {
-      clearTimeout(timer);
-      reject(err);
+/**
+ * Fetch with timeout using AbortController to actually terminate the request.
+ */
+async function fetchWithTimeout(request, timeoutMs) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(request, {
+      ...request,
+      signal: controller.signal
     });
-  });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
 }
 
 /**
@@ -1269,12 +1276,50 @@ self.addEventListener('periodicsync', (event) => {
 
 function openAquatechDB() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('AquatechOfflineDB');
+    const request = indexedDB.open('AquatechOfflineDB', 15);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = () => {};
+    request.onupgradeneeded = (event) => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('syncLogs')) {
+        db.createObjectStore('syncLogs', { keyPath: 'id', autoIncrement: true });
+      }
+    };
   });
 }
+
+/**
+ * v319: Centralized logger for SW to IndexedDB
+ */
+async function logSyncSW(level, message, type = 'general', details = '') {
+  try {
+    const db = await openAquatechDB();
+    const tx = db.transaction(['syncLogs'], 'readwrite');
+    const store = tx.objectStore('syncLogs');
+    store.add({
+      timestamp: Date.now(),
+      level,
+      message,
+      type,
+      details: typeof details === 'string' ? details : JSON.stringify(details)
+    });
+    
+    // Auto-trim logs (keep last 200)
+    const countReq = store.count();
+    countReq.onsuccess = () => {
+      if (countReq.result > 200) {
+        const cursorReq = store.openCursor();
+        cursorReq.onsuccess = () => {
+          const cursor = cursorReq.result;
+          if (cursor) cursor.delete();
+        };
+      }
+    };
+  } catch (e) {
+    console.error('[SW] Logging failed:', e);
+  }
+}
+
 
 let isSyncingGlobal = false;
 // v317: Phase 2 - Web Locks to prevent cross-tab duplication
@@ -1326,15 +1371,9 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
   }
 
   return new Promise((resolve, reject) => {
+    const abortController = new AbortController();
     const GLOBAL_SYNC_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutos máximo por ciclo completo
     const globalSyncTimer = setTimeout(async () => {
-      console.warn('[SW] Timeout global de sync alcanzado. Liberando lock...');
-      isSyncingGlobal = false;
-      try {
-        const notifs = await self.registration.getNotifications();
-        notifs.forEach(n => { if (n.tag === 'sync-progress') n.close(); });
-      } catch(e) {}
-      try {
         const dbT = await openAquatechDB();
         const tx = dbT.transaction(['outbox'], 'readwrite');
         const store = tx.objectStore('outbox');
@@ -1370,7 +1409,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
             for (const item of allItems) {
               if (item.status === 'syncing') {
                 const stuckTime = now - (item.lastAttemptAt || item.timestamp || 0);
-                if (stuckTime > 300000) { // 5 minutes (v317: allow for large file uploads)
+                if (stuckTime > 120000) { // 2 minutes (v317: reduce from 5 min)
                   console.log(`[SW] Resetting stuck item ${item.id} (${item.type}) from 'syncing' to 'pending'`);
                   item.status = 'pending';
                   resetStore.put(item);
@@ -1412,7 +1451,11 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
 
         const pendingItems = toSync;
 
+    await logSyncSW('info', `Iniciando ciclo de sincronización (Forced: ${isForced})`, 'system');
+    
     if (pendingItems.length === 0) {
+      isSyncingGlobal = false;
+      await logSyncSW('info', 'Nada pendiente en la cola.', 'system');
       resolve();
       return;
     }
@@ -1441,14 +1484,38 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
     // v278: Pre-fetch storage config once per cycle for better performance
     let storageConfig = null;
     try {
-      // v286: Use fetchWithTimeout for config retrieval
-      const configResp = await fetchWithTimeout(new Request('/api/storage/config', { credentials: 'same-origin' }), 10000);
+      // v318: Use explicit signal for config fetch
+      const configResp = await fetchWithTimeout(new Request('/api/storage/config', { 
+        credentials: 'same-origin',
+        signal: abortController.signal 
+      }), 10000);
       if (configResp.ok) storageConfig = await configResp.json();
     } catch (e) {
       console.warn('[SW] Could not pre-fetch storage config');
     }
 
+    let processedCount = 0;
+    const totalToSync = pendingItems.length;
+
     for (const item of pendingItems) {
+      processedCount++;
+      await logSyncSW('info', `Procesando item ${processedCount}/${totalToSync}: ${item.type}`, item.type, { itemId: item.id });
+
+      
+      // Actualizar notificación de progreso principal
+      try {
+        if (self.Notification && self.Notification.permission === 'granted') {
+          self.registration.showNotification('Sincronizando (v318)', {
+            body: `Item ${processedCount} de ${totalToSync}: Procesando ${item.type}...`,
+            icon: '/icon-192.png',
+            tag: 'sync-progress',
+            silent: true,
+            // @ts-ignore
+            priority: 'low'
+          });
+        }
+      } catch (e) {}
+
       // v317: Phase 4 - Strict retry limit for production stability
       if (item.attempts >= 5) {
         console.warn(`[SW] Item ${item.id} (${item.type}) permanently failed after 5 attempts.`);
@@ -1585,7 +1652,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
             const persistProgress = async () => {
               try {
                 const tx = db.transaction(['outbox'], 'readwrite');
-                tx.objectStore('outbox').put({ ...item, payload, status: 'syncing' });
+                tx.objectStore('outbox').put({ ...item, payload, status: 'syncing', lastAttemptAt: Date.now() });
                 await new Promise(r => { tx.oncomplete = r; tx.onerror = r; });
               } catch(e) {}
             };
@@ -1655,7 +1722,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                     'AccessKey': config.accessKey, 
                     'Content-Type': blob.type || 'application/octet-stream' 
                   },
-                  body: blob
+                  body: blob,
+                  signal: abortController.signal
                 }), getUploadTimeout(blob.size));
                 if (!res.ok) throw new Error(`Bunny upload failed status ${res.status}`);
                 const finalUrl = `${config.pullZoneUrl}/${folderPath}/${timestamp}-${safeName}`;
@@ -1753,11 +1821,12 @@ self.addEventListener('notificationclick', (event) => {
                     if (!res.ok) throw new Error(`Chunk ${i} HTTP ${res.status}`);
                     const data = await res.json();
 
-                    // Notificar progreso real
+                    // Notificar progreso real integrado en la notificación principal
                     try {
                       if (self.Notification && self.Notification.permission === 'granted') {
-                        await self.registration.showNotification('Aquatech — Subiendo archivo', {
-                          body: `${filename}: parte ${i + 1} de ${totalChunks}`,
+                        const percent = Math.round(((i + 1) / totalChunks) * 100);
+                        await self.registration.showNotification('Sincronizando Aquatech', {
+                          body: `Subiendo ${filename}: ${percent}% (${i + 1}/${totalChunks})`,
                           tag: 'sync-progress',
                           silent: true,
                         });
@@ -1774,6 +1843,9 @@ self.addEventListener('notificationclick', (event) => {
                         percent: Math.round(((i + 1) / totalChunks) * 100)
                       }));
                     });
+
+                    // v317: Update lastAttemptAt so the watchdog knows we are alive
+                    await persistProgress();
 
                     if (data.url) return data.url;
                     chunkSuccess = true;
@@ -1891,6 +1963,7 @@ self.addEventListener('notificationclick', (event) => {
                 'x-sync-id': item.syncId || `sync-${item.id}-${item.timestamp}` // v301: Prioritize explicit syncId
               },
               credentials: 'same-origin',
+              signal: abortController.signal,
               body: JSON.stringify({ 
                 ...finalPayload, 
                 lat: item.lat, 
@@ -1909,12 +1982,14 @@ self.addEventListener('notificationclick', (event) => {
                  req.onerror = deleteRes; // Prevent hang on error
                });
                console.log(`[SW] Successfully synced ${item.type} (ID: ${item.id})`);
+               await logSyncSW('success', `Item completado exitosamente: ${item.type}`, item.type, { itemId: item.id });
             } else {
                throw new Error('Server returned ' + res.status);
             }
           }
         } catch (e) {
           console.error(`[SW] Failed to sync item ${item.id}:`, e);
+          logSyncSW('error', `Error procesando item: ${item.id} (${item.type})`, item.type, { error: e.message });
           // v272: Mark context as failed so dependents are skipped
           if (ctx) failedContexts.add(ctx);
           await new Promise((res) => {

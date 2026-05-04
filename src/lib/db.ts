@@ -56,6 +56,16 @@ export interface UserCache {
   role: string;
 }
 
+export interface SyncLog {
+  id?: number;
+  timestamp: number;
+  level: 'info' | 'warn' | 'error' | 'success';
+  message: string;
+  details?: string;
+  type?: string;
+}
+
+
 export class OfflineDatabase extends Dexie {
   outbox!: Table<OutboxItem>;
   auth!: Table<AuthCache>;
@@ -69,6 +79,8 @@ export class OfflineDatabase extends Dexie {
   dashboardCache!: Table<any>;
   cacheMetadata!: Table<CacheMetadata>;
   usersCache!: Table<UserCache>;
+  syncLogs!: Table<SyncLog>;
+
 
   constructor() {
     super('AquatechOfflineDB');
@@ -157,7 +169,7 @@ export class OfflineDatabase extends Dexie {
       cacheMetadata: 'id',
       usersCache: 'id, name, role'
     });
-    this.version(14).stores({
+    this.version(15).stores({
       outbox: '++id, projectId, status, timestamp, type, attempts',
       auth: 'id',
       authShadow: 'id',
@@ -165,12 +177,14 @@ export class OfflineDatabase extends Dexie {
       clientsCache: 'id, name, ruc',
       quotesCache: 'id, clientName, projectId',
       projectsCache: 'id, title, lastAccessedAt',
-      appointmentsCache: 'id, projectId, userId', // v289: Added userId for querying
+      appointmentsCache: 'id, projectId, userId',
       chatCache: 'projectId',
       dashboardCache: 'id',
       cacheMetadata: 'id',
-      usersCache: 'id, name, role'
+      usersCache: 'id, name, role',
+      syncLogs: '++id, timestamp, level, type'
     });
+
   }
 }
 
