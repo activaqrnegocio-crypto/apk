@@ -115,24 +115,21 @@ export default function OperatorDashboardClient({
   const projectsFromCache = useLiveQuery(
     async () => {
       // v292: Try user prop first (available immediately), fallback to localUser
-      const uId = user?.id || localUser?.id
-      if (!uId) {
-        // v316: Si no tenemos userId todavía, intentar cargar TODOS los proyectos
-        // del cache sin filtro. En offline, si el operador solo tiene sus proyectos
-        // en el cache (porque el backend ya filtró), esto es seguro.
-        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine
-        if (isOffline) {
-          const allProjects = await db.projectsCache
-            .orderBy('lastAccessedAt')
-            .reverse()
-            .limit(500)
-            .toArray()
-          if (allProjects.length > 0) {
-            return allProjects
-          }
-        }
-        return undefined
+      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine
+
+      // v317: En offline, confiar plenamente en lo que hay en cache (ya filtrado por el server).
+      // Esto evita que fallos en la recuperación del userId (localUser.id) oculten proyectos.
+      if (isOffline) {
+        const allProjects = await db.projectsCache
+          .orderBy('lastAccessedAt')
+          .reverse()
+          .limit(500)
+          .toArray()
+        if (allProjects.length > 0) return allProjects
       }
+
+      const uId = user?.id || localUser?.id
+      if (!uId) return undefined
 
       const userId = Number(uId)
       if (isNaN(userId) || userId <= 0) return undefined
@@ -150,12 +147,6 @@ export default function OperatorDashboardClient({
         const isCreator = Number(p.createdBy || p.createdById) === userId
         return isInTeam || isCreator
       })
-
-      // v316: Si el filtro no encontró nada pero hay proyectos en cache Y estamos offline,
-      // devolver todos (el backend ya los filtró al sincronizar)
-      if (filtered.length === 0 && allProjects.length > 0 && !navigator.onLine) {
-        return allProjects
-      }
 
       return filtered
     },

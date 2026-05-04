@@ -147,9 +147,17 @@ export default function GlobalSyncWorker() {
       if (res.ok) {
         const fetchedProjects = await res.json()
         
-        // v316: El backend en /api/projects/bulk-cache ya filtra los proyectos por operador,
-        // así que no necesitamos filtrarlos de nuevo aquí.
-        projectsToProcess = fetchedProjects;
+        // v317: Even if backend filters, we apply local filter for UI consistency (fixes 30/30 vs 12 issue)
+        if (!isAdmin) {
+          const userId = Number(u?.id);
+          projectsToProcess = fetchedProjects.filter((p: any) => {
+            const isInTeam = p.team?.some((m: any) => Number(m.userId) === userId);
+            const isCreator = Number(p.createdBy || p.createdById) === userId;
+            return isInTeam || isCreator;
+          });
+        } else {
+          projectsToProcess = fetchedProjects;
+        }
 
         
         const totalToSync = projectsToProcess.length
