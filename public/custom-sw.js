@@ -1,4 +1,4 @@
-const SW_VERSION = 'v328-robot-fix';
+const SW_VERSION = 'v329-ultra-fix';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -7,6 +7,53 @@ const FONTS_CACHE  = `aquatech-fonts-${SW_VERSION}`;
 const RSC_CACHE    = `aquatech-rsc-${SW_VERSION}`;
 
 // v317: Auto-cleanup sync notifications on activation
+self.addEventListener('install', event => {
+  console.log(`[SW ${VERSION}] Robot v329 instalándose...`);
+  self.skipWaiting();
+  event.waitUntil(
+    caches.open(STATIC_CACHE)
+      .then(async (cache) => {
+        const CRITICAL_URLS = [
+          '/admin/proyectos/offline-shell',
+          '/admin/operador/proyecto/offline-shell',
+          '/offline.html',
+          '/favicon.ico',
+          '/logo.jpg'
+        ];
+
+        // 1. First, ENSURE critical shells are cached. If this fails, the SW is useless offline.
+        for (const url of CRITICAL_URLS) {
+          try {
+            const response = await fetch(url, { cache: 'reload' });
+            if (response.ok) {
+              await cache.put(url, response.clone());
+              // Auto-extract assets for critical shells immediately
+              await extractAndCacheAssets(response, url);
+            } else {
+              throw new Error(`Failed to fetch critical ${url}: ${response.status}`);
+            }
+          } catch (err) {
+            console.error(`[SW] CRITICAL Pre-cache FAILED: ${url}`, err);
+            // We don't throw here to allow partial install, but it's dangerous
+          }
+        }
+
+        // 2. Cache the rest of PRE_CACHE
+        for (const url of PRE_CACHE) {
+          if (CRITICAL_URLS.includes(url)) continue;
+          try {
+            const response = await fetch(url);
+            if (response.ok) {
+              await cache.put(url, response);
+            }
+          } catch (err) {
+            console.warn(`[SW] Non-critical pre-cache skipped: ${url}`);
+          }
+        }
+      })
+  );
+});
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     Promise.all([
@@ -77,57 +124,6 @@ function cleanResponse(response) {
     headers: headers
   });
 }
-
-
-// ─── INSTALL ────────────────────────────────────────────────
-
-
-self.addEventListener('install', (event) => {
-  console.log(`[SW ${VERSION}] Installing...`);
-  event.waitUntil(
-    caches.open(STATIC_CACHE)
-      .then(async (cache) => {
-        const CRITICAL_URLS = [
-          '/admin/proyectos/offline-shell',
-          '/admin/operador/proyecto/offline-shell',
-          '/offline.html',
-          '/favicon.ico',
-          '/logo.jpg'
-        ];
-
-        // 1. First, ENSURE critical shells are cached. If this fails, the SW is useless offline.
-        for (const url of CRITICAL_URLS) {
-          try {
-            const response = await fetch(url, { cache: 'reload' });
-            if (response.ok) {
-              await cache.put(url, response.clone());
-              // Auto-extract assets for critical shells immediately
-              await extractAndCacheAssets(response, url);
-            } else {
-              throw new Error(`Failed to fetch critical ${url}: ${response.status}`);
-            }
-          } catch (err) {
-            console.error(`[SW] CRITICAL Pre-cache FAILED: ${url}`, err);
-            // We don't throw here to allow partial install, but it's dangerous
-          }
-        }
-
-        // 2. Cache the rest of PRE_CACHE
-        for (const url of PRE_CACHE) {
-          if (CRITICAL_URLS.includes(url)) continue;
-          try {
-            const response = await fetch(url);
-            if (response.ok) {
-              await cache.put(url, response);
-            }
-          } catch (err) {
-            console.warn(`[SW] Non-critical pre-cache skipped: ${url}`);
-          }
-        }
-      })
-      .then(() => self.skipWaiting())
-  );
-});
 
 /**
  * Helper to extract and cache JS/CSS from an HTML response
@@ -1073,9 +1069,12 @@ self.addEventListener('message', (event) => {
   // v273: Support specific sync types via postMessage
   if (event.data && (event.data.type === 'TRIGGER_SYNC' || event.data.type === 'FORCE_SYNC_OUTBOX')) {
     const isForced = event.data.type === 'FORCE_SYNC_OUTBOX';
-    const specificType = event.data.specificType || null;
-    console.log(`[SW] Sync triggered via postMessage (Forced: ${isForced}, Type: ${specificType})`);
-    event.waitUntil(processOutboxSync(isForced, specificType));
+    const processOutboxSync = async (isForced = false, specificType = null) => {
+      // v329: Log crítico de arranque
+      console.log('INFO', 'CICLO DE SYNC INICIADO v329');
+      console.log(`[SW] processOutboxSync started. Forced: ${isForced}, Type: ${specificType}`);
+    };
+    event.waitUntil(processOutboxSync(isForced, event.data.specificType));
   }
 
   // Warm-up pre-caching — caches responses INCLUDING redirects (except login)

@@ -5,9 +5,9 @@ import { useEffect } from 'react'
 export default function ServiceWorkerRegistration() {
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
-    const SW_VERSION = 'v328'; 
+    const SW_VERSION = 'v329-ultra-fix'; 
     const swUrl = `/custom-sw.js?v=${SW_VERSION}`
-    console.log('[App] Solicitando registro de Robot v328...');
+    console.log('[App] Solicitando registro de Robot v329...');
     navigator.serviceWorker.register(swUrl, { scope: '/' })
       .then((registration) => {
         // console.log('[App] SW registrado:', registration.scope)

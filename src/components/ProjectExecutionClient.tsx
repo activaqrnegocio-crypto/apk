@@ -780,7 +780,7 @@ export default function ProjectExecutionClient({
         url: objUrl || '/placeholder-image.png',
         filename: p.filename || 'Pendiente...', 
         mimeType: p.mimeType || 'image/jpeg',
-        category: 'EVIDENCE', 
+        category: p.category || 'EVIDENCE', 
         isPending: true
       }
     })
