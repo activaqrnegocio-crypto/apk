@@ -271,12 +271,6 @@ self.addEventListener('fetch', (event) => {
   // v317: Handle Background Fetch dummy trigger
   const requestUrl = new URL(request.url);
   
-  // v338: FETCH TRIGGER — on every navigation, check outbox in background
-  // This catches items when a cached page load re-awakens the SW
-  if (request.mode === 'navigate' || requestUrl.pathname.startsWith('/api/')) {
-    maybeCheckOutboxFromFetch();
-  }
-  
   if (requestUrl.pathname === '/api/sync/background-trigger') {
     event.respondWith(new Response(JSON.stringify({ triggered: true }), {
       headers: { 'Content-Type': 'application/json' }
