@@ -50,6 +50,7 @@ export async function sendPushToUser(userId: number, payload: PushPayload) {
       image: payload.image,
       url: payload.url || '/admin/operador',
       tag: payload.tag || 'general',
+      // @ts-ignore
       vibrate: [300, 100, 300, 100, 400],
       renotify: true
     })

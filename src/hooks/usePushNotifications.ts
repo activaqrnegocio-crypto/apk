@@ -104,11 +104,7 @@ export function usePushNotifications() {
         resolve({ success, error });
       };
 
-      const safetyTimeout = setTimeout(() => {
-        isTimeout = true;
-        console.warn('[PUSH] Subscription timed out after 15s');
-        finishSub(false, 'Tiempo de espera agotado. Verifica tu conexión a internet.');
-      }, 15000);
+      let safetyTimeout: NodeJS.Timeout | undefined;
 
       try {
         // 1. Request notification permission (v286: Robust callback fallback)
@@ -125,13 +121,18 @@ export function usePushNotifications() {
 
         if (isTimeout) return;
 
-        console.log('[PUSH] Permission result:', permission);
         if (permission !== 'granted') {
           setStatus('denied');
           console.warn('[PUSH] Permission denied by user');
-          clearTimeout(safetyTimeout);
           return finishSub(false, 'Permiso denegado por el usuario.');
         }
+
+        // START TIMEOUT HERE: Only after user interacted, we set a 15s limit for the network parts.
+        safetyTimeout = setTimeout(() => {
+          isTimeout = true;
+          console.warn('[PUSH] Subscription network timed out after 15s');
+          finishSub(false, 'Tiempo de espera agotado al contactar con el servidor. Verifica tu conexión a internet.');
+        }, 15000);
 
       // 2. Get service worker registration
       console.log('[PUSH] Waiting for Service Worker ready...');
@@ -201,7 +202,22 @@ export function usePushNotifications() {
         console.log('[PUSH] Server registration successful');
         setStatus('subscribed');
 
-        // 5. Send test notification
+        // 5. Mostrar notificación de confirmación inmediata (Local)
+        try {
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('✅ Notificaciones activadas', {
+              body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
+              icon: '/icon-192.png',
+              badge: '/icon-192.png',
+              // @ts-ignore
+              vibrate: [200, 100, 200]
+            });
+          }
+        } catch(e) {
+          console.warn('[PUSH] Fallo al mostrar notificación local', e);
+        }
+
+        // Enviar la de prueba por si acaso
         fetch('/api/push/test', { method: 'POST' }).catch(() => {});
         
         // Trigger onboarding for mobile devices

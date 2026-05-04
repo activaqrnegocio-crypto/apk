@@ -599,11 +599,20 @@ export default function ProjectExecutionClient({
       if (item.type !== 'MEDIA_UPLOAD' && item.type !== 'GALLERY_UPLOAD') return false
       const cat = (item.payload?.category || 'MASTER').toUpperCase()
       return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO'
-    }).map((item: any) => ({
-      id: `pending-${item.id}`, url: item.payload?.url || item.payload?.base64 || '',
-      filename: item.payload?.filename || 'Pendiente...', mimeType: item.payload?.mimeType || 'image/jpeg',
-      category: item.payload?.category || 'MASTER', isPending: true
-    }))
+    }).map((item: any) => {
+      let objUrl = item.payload?.url || item.payload?.base64 || '';
+      if (!objUrl && item.payload?.fileData) {
+        try {
+          const blob = new Blob([item.payload.fileData.buffer || item.payload.fileData], { type: item.payload.mimeType || item.payload.fileData?.type || 'application/octet-stream' });
+          objUrl = URL.createObjectURL(blob);
+        } catch(e) {}
+      }
+      return {
+        id: `pending-${item.id}`, url: objUrl,
+        filename: item.payload?.filename || 'Pendiente...', mimeType: item.payload?.mimeType || item.payload?.fileData?.type || 'image/jpeg',
+        category: item.payload?.category || 'MASTER', isPending: true
+      }
+    })
     const list = [...baseFiles, ...expenseFiles, ...pendingGallery]
     return list.filter((item: any) => {
       const url = (item.url || '').toLowerCase();
@@ -646,11 +655,20 @@ export default function ProjectExecutionClient({
       const isGalleryType = item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD'
       const isEvidenceCat = (item.payload?.category || '').toUpperCase() === 'EVIDENCE'
       return isGalleryType && isEvidenceCat
-    }).map((item: any) => ({
-      id: `pending-ev-${item.id}`, url: item.payload?.url || item.payload?.base64 || '',
-      filename: item.payload?.filename || 'Subiendo...', mimeType: item.payload?.mimeType || 'image/jpeg',
-      category: 'EVIDENCE', isPending: true
-    }))
+    }).map((item: any) => {
+      let objUrl = item.payload?.url || item.payload?.base64 || '';
+      if (!objUrl && item.payload?.fileData) {
+        try {
+          const blob = new Blob([item.payload.fileData.buffer || item.payload.fileData], { type: item.payload.mimeType || item.payload.fileData?.type || 'application/octet-stream' });
+          objUrl = URL.createObjectURL(blob);
+        } catch(e) {}
+      }
+      return {
+        id: `pending-ev-${item.id}`, url: objUrl,
+        filename: item.payload?.filename || 'Pendiente...', mimeType: item.payload?.mimeType || item.payload?.fileData?.type || 'image/jpeg',
+        category: 'EVIDENCE', isPending: true
+      }
+    })
     const combinedList = [...list, ...pendingEvidence]
     if (evidenceFilter === 'ALL') return combinedList
     return combinedList.filter((item: any) => {
@@ -1967,7 +1985,12 @@ export default function ProjectExecutionClient({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {[
                     ['Tipo', translateType(project.type)],
-                    ['Contrato', (project.contractTypeList || []).join(', ') || 'N/A'],
+                    ['Contrato', (() => {
+                      try {
+                        const parsed = typeof project.contractTypeList === 'string' ? JSON.parse(project.contractTypeList) : project.contractTypeList;
+                        return Array.isArray(parsed) ? parsed.join(', ') : 'N/A';
+                      } catch { return 'N/A'; }
+                    })()],
                     ['Ciudad', localProjectCity || 'N/A'],
                     ['Inicio', formatDate(project.startDate)],
                     ['Fin Est.', formatDate(project.endDate)]

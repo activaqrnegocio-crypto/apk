@@ -1375,14 +1375,16 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
     // v278: Sticky Sync - Show a subtle notification to prevent OS suspension
     if (pendingItems.length > 0 && !isForced) {
       try {
-        self.registration.showNotification('Sincronizando Aquatech', {
-          body: `Procesando ${pendingItems.length} cambios en segundo plano...`,
-          icon: '/icon-192.png',
-          tag: 'sync-progress',
-          silent: true,
-          // @ts-ignore
-          priority: 'low'
-        });
+        if (self.Notification && self.Notification.permission === 'granted') {
+          await self.registration.showNotification('Sincronizando Aquatech', {
+            body: `Procesando ${pendingItems.length} cambios en segundo plano...`,
+            icon: '/icon-192.png',
+            tag: 'sync-progress',
+            silent: true,
+            // @ts-ignore
+            priority: 'low'
+          });
+        }
       } catch (e) {}
     }
 
@@ -1390,7 +1392,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
     let storageConfig = null;
     try {
       // v286: Use fetchWithTimeout for config retrieval
-      const configResp = await fetchWithTimeout(new Request('/api/storage/config'), 10000);
+      const configResp = await fetchWithTimeout(new Request('/api/storage/config', { credentials: 'same-origin' }), 10000);
       if (configResp.ok) storageConfig = await configResp.json();
     } catch (e) {
       console.warn('[SW] Could not pre-fetch storage config');
@@ -1470,7 +1472,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       if (!storageConfig && itemTieneMedia(item)) {
         console.log(`[SW] Item ${item.id} requires media sync but config is missing. Retrying config fetch...`);
         try {
-          const retry = await fetchWithTimeout(new Request('/api/storage/config'), 8000);
+          const retry = await fetchWithTimeout(new Request('/api/storage/config', { credentials: 'same-origin' }), 8000);
           if (retry.ok) storageConfig = await retry.json();
         } catch(e) {
           console.warn('[SW] Emergency config retry failed');
@@ -1597,6 +1599,57 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
               }
             };
 
+// ─── PUSH NOTIFICATIONS ──────────────────────────────────────────
+self.addEventListener('push', (event) => {
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (e) {
+      data = { title: 'Aquatech Notificación', body: event.data.text() };
+    }
+  }
+
+  const title = data.title || 'Aquatech';
+  const options = {
+    body: data.body || 'Tienes una nueva notificación en Aquatech',
+    icon: data.icon || '/icon-192.png',
+    badge: data.badge || '/icon-192.png',
+    image: data.image || null,
+    data: data.url || '/admin/operador',
+    tag: data.tag || 'general',
+    vibrate: data.vibrate || [300, 100, 300, 100, 400],
+    renotify: data.renotify !== false
+  };
+
+  if (self.Notification && self.Notification.permission === 'granted') {
+    event.waitUntil(
+      self.registration.showNotification(title, options)
+    );
+  }
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const urlToOpen = event.notification.data || '/admin/operador';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((windowClients) => {
+        // If a window is already open, focus it and navigate
+        for (let client of windowClients) {
+          if (client.url.includes(new URL(urlToOpen, self.location.origin).pathname) && 'focus' in client) {
+            return client.focus();
+          }
+        }
+        // Otherwise, open a new window
+        if (clients.openWindow) {
+          return clients.openWindow(urlToOpen);
+        }
+      })
+  );
+});
+
             const uploadInChunksSW = async (blob, filename, subfolder = 'uploads') => {
               const CHUNK_SIZE = getChunkSize(blob.size);
               const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
@@ -1635,11 +1688,13 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
 
                     // Notificar progreso real
                     try {
-                      await self.registration.showNotification('Aquatech — Subiendo archivo', {
-                        body: `${filename}: parte ${i + 1} de ${totalChunks}`,
-                        tag: 'sync-progress',
-                        silent: true,
-                      });
+                      if (self.Notification && self.Notification.permission === 'granted') {
+                        await self.registration.showNotification('Aquatech — Subiendo archivo', {
+                          body: `${filename}: parte ${i + 1} de ${totalChunks}`,
+                          tag: 'sync-progress',
+                          silent: true,
+                        });
+                      }
                     } catch(e) {}
 
                     // Notificar a la UI si está abierta
