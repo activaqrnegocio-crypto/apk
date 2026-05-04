@@ -5,10 +5,9 @@ import { useEffect } from 'react'
 export default function ServiceWorkerRegistration() {
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
-    if (!window.location.pathname.startsWith('/admin')) return
-
-    const SW_VERSION = 'v314'; // Sync this with custom-sw.js VERSION
+    const SW_VERSION = 'v328'; 
     const swUrl = `/custom-sw.js?v=${SW_VERSION}`
+    console.log('[App] Solicitando registro de Robot v328...');
     navigator.serviceWorker.register(swUrl, { scope: '/' })
       .then((registration) => {
         // console.log('[App] SW registrado:', registration.scope)
