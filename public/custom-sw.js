@@ -1,4 +1,4 @@
-const SW_VERSION = 'v320-industrial-sync';
+const SW_VERSION = 'v321-industrial-sync';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1279,6 +1279,9 @@ function openAquatechDB() {
     const request = indexedDB.open('AquatechOfflineDB', 15);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
+    request.onblocked = () => {
+      console.warn('[SW DB] Upgrade blocked. Please close other tabs.');
+    };
     request.onupgradeneeded = (event) => {
       const db = request.result;
       if (!db.objectStoreNames.contains('syncLogs')) {
@@ -1736,58 +1739,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
               }
             };
 
-// ─── PUSH NOTIFICATIONS ──────────────────────────────────────────
-self.addEventListener('push', (event) => {
-  let data = {};
-  if (event.data) {
-    try {
-      data = event.data.json();
-    } catch (e) {
-      data = { title: 'Aquatech Notificación', body: event.data.text() };
-    }
-  }
-
-  const title = data.title || 'Aquatech';
-  const options = {
-    body: data.body || 'Tienes una nueva notificación en Aquatech',
-    icon: data.icon || '/icon-192.png',
-    badge: data.badge || '/icon-192.png',
-    image: data.image || null,
-    data: data.url || '/admin/operador',
-    tag: data.tag || 'general',
-    vibrate: data.vibrate || [300, 100, 300, 100, 400],
-    renotify: data.renotify !== false
-  };
-
-  if (self.Notification && self.Notification.permission === 'granted') {
-    event.waitUntil(
-      self.registration.showNotification(title, options)
-    );
-  }
-});
-
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const urlToOpen = event.notification.data || '/admin/operador';
-
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then((windowClients) => {
-        // If a window is already open, focus it and navigate
-        for (let client of windowClients) {
-          if (client.url.includes(new URL(urlToOpen, self.location.origin).pathname) && 'focus' in client) {
-            return client.focus();
-          }
-        }
-        // Otherwise, open a new window
-        if (clients.openWindow) {
-          return clients.openWindow(urlToOpen);
-        }
-      })
-  );
-});
-
-            const uploadInChunksSW = async (blob, filename, subfolder = 'uploads') => {
+const uploadInChunksSW = async (blob, filename, subfolder = 'uploads') => {
               const CHUNK_SIZE = getChunkSize(blob.size);
               const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
               const uploadId = self.crypto.randomUUID();

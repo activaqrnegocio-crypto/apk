@@ -13,13 +13,13 @@ COPY . .
 # Generate Prisma client if using Prisma
 RUN npx prisma generate
 
-# Build-time environment variables (Dummies to prevent Next.js from failing during prerendering)
-ENV DATABASE_URL="mysql://root:password@localhost:3306/aquatech"
-ENV NEXTAUTH_SECRET="build-secret-dummy"
-ENV NEXTAUTH_URL="http://localhost:3000"
-ENV NEXT_PUBLIC_VAPID_PUBLIC_KEY="dummy"
-ENV VAPID_PRIVATE_KEY="dummy"
-ENV VAPID_SUBJECT="mailto:dummy@example.com"
+# Build-time environment variables (Passed from docker-compose)
+ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY
+ENV NEXT_PUBLIC_VAPID_PUBLIC_KEY=$NEXT_PUBLIC_VAPID_PUBLIC_KEY
+ARG NEXTAUTH_URL
+ENV NEXTAUTH_URL=$NEXTAUTH_URL
+ARG DATABASE_URL
+ENV DATABASE_URL=$DATABASE_URL
 
 # Build the application
 RUN npm run build

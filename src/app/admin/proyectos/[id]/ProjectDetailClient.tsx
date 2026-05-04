@@ -475,7 +475,11 @@ export default function ProjectDetailClient({ project: initialProject, available
       .filter((i: any) => i.type === 'GALLERY_DELETE')
       .map((i: any) => i.payload.galleryId || i.payload.itemId);
 
-    const base = gallery.filter((item: any) => (item.category || '').toUpperCase() === 'EVIDENCE' && !item.isFromChat)
+    const base = gallery.filter((item: any) => {
+      const cat = (item.category || '').toUpperCase()
+      return (cat === 'EVIDENCE' || cat === 'FINALES') && !item.isFromChat
+    })
+
       .map((item: any) => {
         if (pendingDeletions.some((pdId: any) => String(pdId) === String(item.id))) return { ...item, isPendingDelete: true }
         return item
@@ -496,11 +500,15 @@ export default function ProjectDetailClient({ project: initialProject, available
           objUrl = p.base64;
         } else if (p.fileData) {
           try {
-            const data = p.fileData.buffer || p.fileData;
-            const blob = new Blob([data], { type: p.mimeType || 'image/jpeg' });
+            // v320: Handle multiple data formats (ArrayBuffer, Uint8Array, or Blob-like)
+            const rawData = p.fileData.buffer || p.fileData;
+            const blob = new Blob([rawData], { type: p.mimeType || 'image/jpeg' });
             objUrl = URL.createObjectURL(blob);
-          } catch(e) {}
+          } catch(e) {
+            console.error("[UI] Failed to recreate blob for evidence:", e);
+          }
         }
+
 
         return {
           id: `pending-ev-${item.id}`,

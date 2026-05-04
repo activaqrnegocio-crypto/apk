@@ -751,10 +751,14 @@ export default function ProjectExecutionClient({
     if (!project?.gallery) return []
     const pendingDeletions = (pendingItems || []).filter((i: any) => i.type === 'GALLERY_DELETE').map((i: any) => i.payload.galleryId);
     
-    const list = [...project.gallery.filter((item: any) => !item.isFromChat && (item.category || '').toUpperCase() === 'EVIDENCE')].map((item: any) => {
+    const list = [...project.gallery.filter((item: any) => {
+      const cat = (item.category || '').toUpperCase();
+      return !item.isFromChat && (cat === 'EVIDENCE' || cat === 'FINALES');
+    })].map((item: any) => {
       if (pendingDeletions.some((pdId: any) => String(pdId) === String(item.id))) return { ...item, isPendingDelete: true };
       return item;
     })
+
     const pendingEvidence = (pendingItems || []).filter((item: any) => {
       const isGalleryType = item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD'
       const cat = (item.payload?.category || '').toUpperCase()
@@ -769,11 +773,15 @@ export default function ProjectExecutionClient({
         objUrl = p.base64;
       } else if (p.fileData) {
         try {
-          const data = p.fileData.buffer || p.fileData;
-          const blob = new Blob([data], { type: p.mimeType || 'image/jpeg' });
+          // v321: Robust binary handling
+          const rawData = p.fileData.buffer || p.fileData;
+          const blob = new Blob([rawData], { type: p.mimeType || 'image/jpeg' });
           objUrl = URL.createObjectURL(blob);
-        } catch(e) {}
+        } catch(e) {
+          console.error("[UI] Failed to recreate blob preview:", e);
+        }
       }
+
 
       return {
         id: `pending-ev-${item.id}`, 
@@ -1450,12 +1458,27 @@ export default function ProjectExecutionClient({
 
       if (isOffline) {
         try {
-          // v301: Use consistent preparation helper for Gallery
+          // v301/v321: Use consistent preparation helper for Gallery, preferring the raw File object to avoid broken images.
           let fileToPrepare: File;
-          if (file.url.startsWith('blob:')) {
-            const res = await fetch(file.url);
-            const blob = await res.blob();
-            fileToPrepare = new File([blob], file.filename, { type: file.mimeType });
+          if (file.file && file.file instanceof File) {
+            fileToPrepare = file.file;
+          } else if (file.url && file.url.startsWith('blob:')) {
+            try {
+              const res = await fetch(file.url);
+              const blob = await res.blob();
+              fileToPrepare = new File([blob], file.filename, { type: file.mimeType });
+            } catch(e) {
+              console.warn("Failed to fetch blob URL", e);
+              fileToPrepare = new File([], file.filename, { type: file.mimeType });
+            }
+          } else if (file.url && file.url.startsWith('data:')) {
+            try {
+              const res = await fetch(file.url);
+              const blob = await res.blob();
+              fileToPrepare = new File([blob], file.filename, { type: file.mimeType });
+            } catch(e) {
+              fileToPrepare = new File([], file.filename, { type: file.mimeType });
+            }
           } else {
             // Assume it's already a File or we need to handle data:
             fileToPrepare = new File([], file.filename, { type: file.mimeType });
