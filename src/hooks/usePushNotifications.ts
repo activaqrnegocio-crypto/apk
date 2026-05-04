@@ -127,12 +127,12 @@ export function usePushNotifications() {
           return finishSub(false, 'Permiso denegado por el usuario.');
         }
 
-        // START TIMEOUT HERE: Only after user interacted, we set a 60s limit for the network parts.
+        // START TIMEOUT HERE: Only after user interacted, we set a 120s limit for the network parts.
         safetyTimeout = setTimeout(() => {
           isTimeout = true;
-          console.warn('[PUSH] Subscription network timed out after 60s');
-          finishSub(false, 'Tiempo de espera agotado al contactar con el servidor. Verifica tu conexión a internet.');
-        }, 60000);
+          console.warn('[PUSH] Subscription network timed out after 120s');
+          finishSub(false, 'Tiempo de espera agotado al contactar con el servidor. Revisa tu conexión a internet.');
+        }, 120000);
 
       // 2. Get service worker registration
       console.log('[PUSH] Waiting for Service Worker ready...');

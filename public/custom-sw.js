@@ -2038,7 +2038,9 @@ const uploadInChunksSW = async (blob, filename, subfolder = 'uploads') => {
               if (retryIndex >= retryDelays.length) {
                 console.log('[SW] Retry chain exhausted. Registering sync tag for OS wake-up.');
                 // Darle al navegador la pista de que hay trabajo pendiente
-                (self.registration as any).sync?.register('sync-outbox').catch(() => {});
+                if (self.registration && 'sync' in self.registration) {
+                  (self.registration.sync).register('sync-outbox').catch(() => {});
+                }
                 return;
               }
               const delay = retryDelays[retryIndex];
