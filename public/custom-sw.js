@@ -1,4 +1,4 @@
-const SW_VERSION = 'v332-unlocked';
+const SW_VERSION = 'v333-unlocked-heartbeat';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1234,6 +1234,19 @@ self.addEventListener('message', (event) => {
     // pueda actualizarse correctamente al recuperar el foco.
     event.source?.postMessage({ type: 'ASSETS_CACHED', count: precacheQueueSet.size });
   }
+
+  // v333: PING/PONG — Permite al cliente verificar que el SW está vivo
+  if (event.data && event.data.type === 'PING') {
+    event.source?.postMessage({
+      type: 'PONG',
+      version: SW_VERSION,
+      timestamp: Date.now(),
+      isSyncing: isSyncingGlobal,
+      pendingUrls: precacheQueueSet.size
+    });
+    // También loggear a IndexedDB que el robot respondió
+    logSyncSW('info', `🏓 PONG — Robot vivo (${SW_VERSION})`, 'heartbeat').catch(() => {});
+  }
 });
 
 // ─── BACKGROUND SYNC ───────────────────────────────────────────────
@@ -1335,6 +1348,7 @@ async function processOutboxSync(isForced = false, specificType = null) {
   }
 
   isSyncingGlobal = true;
+  await logSyncSW('info', `🚀 Robot ${SW_VERSION} iniciando ciclo de sync${isForced ? ' (FORZADO)' : ''}${specificType ? ' tipo: '+specificType : ''}`, 'system');
   console.log('[SW] Starting processOutboxSync...');
   try {
     await _internalProcessOutbox(isForced, specificType);
@@ -1436,7 +1450,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
         const allItems = getAllRequest.result || [];
         
         if (allItems.length > 0) {
-          addRobotLog('INFO', `Robot v328: Encontrados ${allItems.length} ítems en cola.`);
+          await logSyncSW('info', `Robot ${SW_VERSION}: Encontrados ${allItems.length} ítems en cola.`, 'system');
         }
         
         // Filtrar por tipo si se especificó una etiqueta de sync
@@ -1526,6 +1540,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       // v317: Phase 4 - Strict retry limit for production stability
       if (item.attempts >= 5) {
         console.warn(`[SW] Item ${item.id} (${item.type}) permanently failed after 5 attempts.`);
+        await logSyncSW('error', `☠ Item ${item.id} (${item.type}) eliminado tras 5 intentos fallidos`, item.type);
         await new Promise(r => {
           try {
             const tx = db.transaction(['outbox'], 'readwrite');
@@ -2022,24 +2037,6 @@ const uploadInChunksSW = async (blob, filename, subfolder = 'uploads') => {
     }); // Close the then block for clients.matchAll
   });
 }
-
-// ─── BACKGROUND SYNC ───────────────────────────────────────
-// ─── BACKGROUND SYNC ───────────────────────────────────────
-// v288: The "Robot" — wakes up when internet returns
-self.addEventListener('sync', (event) => {
-  if (event.tag === 'sync-outbox' || event.tag === 'sync-outbox-periodic' || event.tag === 'test-tag-from-devtools') {
-    // console.log('[SW] Background Sync triggered:', event.tag);
-    event.waitUntil(processOutboxSync(false));
-  }
-});
-
-// v288: Periodic Background Sync (requires PWA installation)
-self.addEventListener('periodicsync', (event) => {
-  if (event.tag === 'sync-outbox' || event.tag === 'sync-outbox-periodic') {
-    // console.log('[SW] Periodic Background Sync triggered:', event.tag);
-    event.waitUntil(processOutboxSync(false));
-  }
-});
 
 // ─── BACKGROUND FETCH (Phase 1: Robust Sync) ──────────────
 // v317: System-managed sync for large uploads (survives tab closure)

@@ -43,4 +43,21 @@ Este documento describe la arquitectura de sincronización de "Grado Industrial"
     *   Si es ligero: Envío directo con reintentos y backoff.
 6.  **Cleanup**: Una vez confirmado por el servidor (o subido a Bunny.net), el item se elimina del outbox local.
 
-**Estado Actual: RESILIENCIA MÁXIMA ALCANZADA**
+**Estado Actual: RESILIENCIA MÁXIMA ALCANZADA — v333 HEARTBEAT**
+
+---
+
+## 🩺 v333 — Monitoreo y Visibilidad (Mayo 2026)
+
+### Problema Detectado
+Los logs en `/admin/debug/sync` no mostraban actividad real. El robot trabajaba en silencio sin confirmación visible.
+
+### Correcciones Implementadas
+
+1. **Logs unificados**: `GlobalSyncWorker` ahora escribe a `db.syncLogs` en cada evento clave (inicio sync, éxito, error, desconexión).
+2. **Listeners duplicados eliminados**: El SW tenía 2 `sync` listeners que competían. Se consolidó en uno solo.
+3. **Heartbeat cada 30s**: El robot emite un latido periódico visible en la UI como "Robot VIVO hace X segundos".
+4. **Panel de estado en /admin/debug/sync**: Muestra 5 indicadores: Robot VIVO/DORMIDO, último latido, ítems pendientes, estado de red, versión SW.
+5. **Confirmación de instalación**: Al registrarse el SW, escribe un log `🤖 Robot vXXX instalado correctamente`.
+6. **PING/PONG**: El cliente hace ping al SW cada 60s y el SW responde con su versión y estado.
+7. **Bug fix**: `addRobotLog()` no existía en el SW → reemplazado por `logSyncSW()`.

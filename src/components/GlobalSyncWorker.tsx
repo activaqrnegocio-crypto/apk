@@ -5,6 +5,26 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { db } from '@/lib/db'
 
+// ─── v333: Centralized logging to IndexedDB (visible in /admin/debug/sync) ───
+async function logSync(level: 'info' | 'warn' | 'error' | 'success', message: string, type = 'system', details?: string) {
+  try {
+    const count = await db.syncLogs.count();
+    if (count > 250) {
+      const oldest = await db.syncLogs.orderBy('timestamp').first();
+      if (oldest?.id) await db.syncLogs.delete(oldest.id);
+    }
+    await db.syncLogs.add({
+      timestamp: Date.now(),
+      level,
+      message,
+      type,
+      details: details || ''
+    });
+  } catch (e) {
+    // Silent — don't break sync if logging fails
+  }
+}
+
 // v261: Global throttle to prevent sync loops on component remounts (caused by router.refresh)
 let lastSyncExecution = 0;
 // v291: Separate throttle for heavy bulk sync to prevent constant re-triggering
@@ -116,6 +136,7 @@ export default function GlobalSyncWorker() {
 
     // v291: We are actually starting a heavy sync now. Mark state.
     setIsBulkSyncing(true)
+    await logSync('info', `Iniciando sincronización masiva (${userRole})...`, 'bulk-sync');
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('bulk-cache-sync-started'));
     }
@@ -402,6 +423,8 @@ export default function GlobalSyncWorker() {
         status: 'idle'
       })
       
+      await logSync('success', `Sincronización masiva completada: ${finalCount} proyectos`, 'bulk-sync');
+
       const syncChannelFinal = new BroadcastChannel('aquatech-sync');
       syncChannelFinal.postMessage({ type: 'DATA_SYNC_FINISHED', count: finalCount });
       syncChannelFinal.close();
@@ -429,6 +452,7 @@ export default function GlobalSyncWorker() {
       }
     } catch (err) {
       console.error('Skeleton sync error:', err)
+      await logSync('error', `Fallo sincronización masiva: ${err instanceof Error ? err.message : 'Desconocido'}`, 'bulk-sync');
       window.dispatchEvent(new CustomEvent('bulk-cache-sync-log', {
         detail: { message: `Error en sincronización: ${err instanceof Error ? err.message : 'Desconocido'}` }
       }))
@@ -508,7 +532,9 @@ export default function GlobalSyncWorker() {
         return
       }
 
-      // console.log(`[Sync] Processing ${items.length} items from outbox...`);
+      // v333: Log visible en /admin/debug/sync
+      const itemTypes = [...new Set(items.map(i => i.type))].join(', ');
+      await logSync('info', `Procesando ${items.length} ítems en cola [${itemTypes}]`, 'outbox', `Items: ${items.length}`);
 
       // v272: Sort chronologically (FIFO) — critical for dependency order
       // DAY_START must sync before EXPENSE/MESSAGE, PROJECT before PHASE_CREATE, etc.
@@ -760,6 +786,7 @@ export default function GlobalSyncWorker() {
              if (res.ok) {
                await db.outbox.delete(item.id!)
                hasSyncedAnything = true
+               await logSync('success', `✓ Sincronizado: ${item.type} #${item.id}`, item.type, `Proyecto ${item.projectId}`);
                if (typeof window !== 'undefined') {
                  window.dispatchEvent(new CustomEvent('sync-success', { detail: { type: item.type, projectId: item.projectId } }))
                }
@@ -769,10 +796,11 @@ export default function GlobalSyncWorker() {
                  // Unauthorized or rate limited -> keep pending and retry later
                  if (ctx) failedContexts.add(ctx); // v272: block dependents
                  await db.outbox.update(item.id!, { status: 'pending' })
+                 await logSync('warn', `⚠ Rate-limited: ${item.type} #${item.id} (HTTP ${status})`, item.type);
                } else if (status >= 400 && status < 500) {
                  // Permanent client error (400, 403, 404) -> Drop it so it doesn't loop forever
-                 console.warn(`[Sync] Descartando tarea inválida permanentemente: ${item.type} (Status ${status})`);
                  await db.outbox.delete(item.id!)
+                 await logSync('error', `✗ Descartado: ${item.type} #${item.id} (HTTP ${status})`, item.type);
                } else {
                  // Server errors (500+) -> mark as failed and increment attempts
                  if (ctx) failedContexts.add(ctx); // v272: block dependents
@@ -781,6 +809,7 @@ export default function GlobalSyncWorker() {
                    attempts: (item.attempts || 0) + 1,
                    lastAttemptAt: Date.now()
                  })
+                 await logSync('error', `✗ Error servidor: ${item.type} #${item.id} (HTTP ${status})`, item.type);
                }
              }
           }
@@ -790,6 +819,7 @@ export default function GlobalSyncWorker() {
        } catch (e) {
           // v272: Mark context as failed so dependents are skipped
           if (ctx) failedContexts.add(ctx);
+          await logSync('error', `✗ Excepción: ${item.type} #${item.id} — ${e instanceof Error ? e.message : 'Unknown'}`, item.type);
           await db.outbox.update(item.id!, { 
             status: 'pending',
             attempts: (item.attempts || 0) + 1,
@@ -916,11 +946,13 @@ export default function GlobalSyncWorker() {
     const handleStatusChange = () => {
       setIsOnline(navigator.onLine)
       if (navigator.onLine) {
-        // console.log('[Sync] Back online, triggering sync...')
+        logSync('info', '🟢 Conexión restaurada — iniciando sincronización...', 'network');
         syncOutbox()
         refreshCaches()
         // Also wake SW to sync anything it has
         registerSwSync()
+      } else {
+        logSync('warn', '🔴 Sin conexión a internet', 'network');
       }
     }
     
@@ -998,6 +1030,14 @@ export default function GlobalSyncWorker() {
         }
     }, 30 * 60 * 1000) // v259: 30 mins to match freshness window
 
+    // v333: HEARTBEAT — Escribe un latido cada 30s para confirmar que el robot está vivo.
+    // Visible en /admin/debug/sync como "Robot vivo"
+    const heartbeatInterval = setInterval(() => {
+      logSync('info', '🤖 Robot vivo — latido periódico', 'heartbeat').catch(() => {});
+    }, 30000);
+    // Primer latido inmediato
+    logSync('success', '🤖 Robot v333 iniciado y funcionando', 'heartbeat');
+
     // Keep-Alive Ping para base de datos (StackCP)
     const keepAliveInterval = setInterval(() => {
       if (navigator.onLine) {
@@ -1012,6 +1052,7 @@ export default function GlobalSyncWorker() {
       window.removeEventListener('trigger-bulk-sync', handleManualSync)
       clearInterval(interval)
       clearInterval(bulkInterval)
+      clearInterval(heartbeatInterval)
       clearInterval(keepAliveInterval)
     }
   }, [])

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { db, type SyncLog } from '@/lib/db';
 
 import { 
@@ -12,7 +12,12 @@ import {
   XCircle, 
   CheckCircle2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Activity,
+  Wifi,
+  WifiOff,
+  Package,
+  Clock
 } from 'lucide-react';
 
 const formatLogDate = (timestamp: number) => {
@@ -26,17 +31,88 @@ const formatLogDate = (timestamp: number) => {
   }).format(new Date(timestamp));
 };
 
+const timeAgo = (timestamp: number) => {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 10) return 'ahora mismo';
+  if (seconds < 60) return `hace ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `hace ${minutes}min`;
+  const hours = Math.floor(minutes / 60);
+  return `hace ${hours}h`;
+};
+
 
 export default function SyncLogPage() {
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  // v333: Robot status
+  const [robotStatus, setRobotStatus] = useState<{
+    alive: boolean;
+    lastHeartbeat: number | null;
+    swVersion: string;
+    pendingItems: number;
+    lastSync: number | null;
+    isOnline: boolean;
+  }>({
+    alive: false,
+    lastHeartbeat: null,
+    swVersion: '',
+    pendingItems: 0,
+    lastSync: null,
+    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true
+  });
+
+  const fetchRobotStatus = useCallback(async () => {
+    try {
+      // Last heartbeat
+      const lastHeartbeat = await db.syncLogs
+        .where('type').equals('heartbeat')
+        .reverse()
+        .first();
+      
+      // Pending outbox items
+      const pendingItems = await db.outbox
+        .where('status')
+        .anyOf(['pending', 'failed'])
+        .count();
+
+      // Last successful sync
+      const lastSyncLog = await db.syncLogs
+        .where('level').equals('success')
+        .reverse()
+        .first();
+
+      // SW version
+      let swVersion = '';
+      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        swVersion = navigator.serviceWorker.controller.scriptURL.match(/v=([^&]+)/)?.[1] || '';
+      }
+
+      const isAlive = lastHeartbeat 
+        ? (Date.now() - lastHeartbeat.timestamp) < 90000 // alive if heartbeat < 90s
+        : false;
+
+      setRobotStatus({
+        alive: isAlive,
+        lastHeartbeat: lastHeartbeat?.timestamp || null,
+        swVersion,
+        pendingItems,
+        lastSync: lastSyncLog?.timestamp || null,
+        isOnline: navigator.onLine
+      });
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
   const fetchLogs = async () => {
     setLoading(true);
     try {
       const allLogs = await db.syncLogs.orderBy('timestamp').reverse().toArray();
       setLogs(allLogs);
+      await fetchRobotStatus();
     } catch (error) {
       console.error('Error fetching logs:', error);
     } finally {
@@ -46,11 +122,22 @@ export default function SyncLogPage() {
 
   useEffect(() => {
     fetchLogs();
-    // Refresh every 5 seconds if page is visible
+    // Refresh every 3 seconds for heartbeat responsiveness
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') fetchLogs();
-    }, 5000);
+    }, 3000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Also refresh on online/offline
+  useEffect(() => {
+    const update = () => fetchRobotStatus();
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
   }, []);
 
   const clearLogs = async () => {
@@ -81,7 +168,7 @@ export default function SyncLogPage() {
   return (
     <div className="min-h-screen bg-[#0a0f1e] text-slate-200 p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
-        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
           <div>
             <h1 className="text-3xl font-bold text-white flex items-center gap-3">
               <Terminal className="w-8 h-8 text-blue-500" />
@@ -110,6 +197,72 @@ export default function SyncLogPage() {
           </div>
         </div>
 
+        {/* v333: Robot Status Panel */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+          {/* Robot Alive */}
+          <div className={`rounded-xl border p-4 flex items-center gap-3 ${
+            robotStatus.alive 
+              ? 'bg-emerald-500/5 border-emerald-500/20' 
+              : 'bg-rose-500/5 border-rose-500/20'
+          }`}>
+            <Activity className={`w-5 h-5 ${robotStatus.alive ? 'text-emerald-400 animate-pulse' : 'text-rose-400'}`} />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Robot</div>
+              <div className={`text-sm font-bold ${robotStatus.alive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {robotStatus.alive ? 'VIVO' : 'DORMIDO'}
+              </div>
+            </div>
+          </div>
+
+          {/* Last Heartbeat */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 flex items-center gap-3">
+            <Clock className="w-5 h-5 text-blue-400" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Latido</div>
+              <div className="text-sm font-bold text-white">
+                {robotStatus.lastHeartbeat ? timeAgo(robotStatus.lastHeartbeat) : '—'}
+              </div>
+            </div>
+          </div>
+
+          {/* Pending Items */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 flex items-center gap-3">
+            <Package className="w-5 h-5 text-amber-400" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Pendientes</div>
+              <div className={`text-sm font-bold ${robotStatus.pendingItems > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {robotStatus.pendingItems}
+              </div>
+            </div>
+          </div>
+
+          {/* Connection */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 flex items-center gap-3">
+            {robotStatus.isOnline ? (
+              <Wifi className="w-5 h-5 text-emerald-400" />
+            ) : (
+              <WifiOff className="w-5 h-5 text-rose-400" />
+            )}
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Red</div>
+              <div className={`text-sm font-bold ${robotStatus.isOnline ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {robotStatus.isOnline ? 'ONLINE' : 'OFFLINE'}
+              </div>
+            </div>
+          </div>
+
+          {/* SW Version */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/30 p-4 flex items-center gap-3">
+            <Terminal className="w-5 h-5 text-violet-400" />
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Versión SW</div>
+              <div className="text-sm font-bold text-violet-400 font-mono">
+                {robotStatus.swVersion || '—'}
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div className="bg-[#111827] rounded-xl border border-slate-800 overflow-hidden shadow-2xl">
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
@@ -133,7 +286,7 @@ export default function SyncLogPage() {
                   logs.map((log) => (
                     <React.Fragment key={log.id}>
                       <tr 
-                        className={`hover:bg-slate-800/30 transition-colors ${expandedId === log.id ? 'bg-slate-800/50' : ''}`}
+                        className={`hover:bg-slate-800/30 transition-colors cursor-pointer ${expandedId === log.id ? 'bg-slate-800/50' : ''}`}
                         onClick={() => log.details ? setExpandedId(expandedId === log.id ? null : log.id!) : null}
                       >
                         <td className="px-4 py-3">
@@ -146,7 +299,13 @@ export default function SyncLogPage() {
                         </td>
 
                         <td className="px-4 py-3">
-                          <span className="text-xs font-bold px-2 py-1 bg-slate-800 rounded text-slate-300 uppercase tracking-tight">
+                          <span className={`text-xs font-bold px-2 py-1 rounded uppercase tracking-tight ${
+                            log.type === 'heartbeat' ? 'bg-violet-500/15 text-violet-400' :
+                            log.type === 'network' ? 'bg-blue-500/15 text-blue-400' :
+                            log.type === 'bulk-sync' ? 'bg-cyan-500/15 text-cyan-400' :
+                            log.type === 'outbox' ? 'bg-amber-500/15 text-amber-400' :
+                            'bg-slate-800 text-slate-300'
+                          }`}>
                             {log.type || 'General'}
                           </span>
                         </td>
@@ -180,11 +339,11 @@ export default function SyncLogPage() {
 
         <div className="mt-6 flex items-center justify-center gap-6 text-sm text-slate-500">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Auto-actualización activa
+            <div className={`w-2 h-2 rounded-full ${robotStatus.alive ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+            {robotStatus.alive ? 'Robot activo — actualización cada 3s' : 'Robot inactivo'}
           </div>
           <div className="text-slate-600">|</div>
-          <div>Mostrando los últimos 200 eventos</div>
+          <div>Mostrando últimos eventos</div>
         </div>
       </div>
     </div>
