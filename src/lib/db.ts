@@ -2,7 +2,7 @@ import Dexie, { type Table } from 'dexie';
 
 export interface OutboxItem {
   id?: number;
-  type: 'MESSAGE' | 'EXPENSE' | 'EXPENSE_DELETE' | 'DAY_START' | 'DAY_END' | 'PHASE_COMPLETE' | 'PHASE_UPDATE' | 'PHASE_CREATE' | 'TEAM_UPDATE' | 'MEDIA_UPLOAD' | 'GALLERY_UPLOAD' | 'GALLERY_DELETE' | 'GALLERY_RENAME' | 'QUOTE' | 'MATERIAL' | 'PROJECT' | 'PROJECT_UPDATE' | 'TASK' | 'TASK_STATUS_TOGGLE';
+  type: 'MESSAGE' | 'EXPENSE' | 'EXPENSE_DELETE' | 'DAY_START' | 'DAY_END' | 'PHASE_COMPLETE' | 'PHASE_UPDATE' | 'PHASE_CREATE' | 'TEAM_UPDATE' | 'MEDIA_UPLOAD' | 'GALLERY_UPLOAD' | 'GALLERY_DELETE' | 'GALLERY_RENAME' | 'QUOTE' | 'MATERIAL' | 'PROJECT' | 'PROJECT_UPDATE' | 'TASK' | 'TASK_STATUS_TOGGLE' | 'LOCATION';
   projectId: number;
   payload: any;
   timestamp: number;

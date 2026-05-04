@@ -120,13 +120,14 @@ export default function ProjectUploader({
               })
             }
 
-            const localFile: ProjectFile = {
+            const localFile: ProjectFile & { file?: File } = {
               url: base64,
               filename: file.name,
               mimeType: file.type,
               type: (isImage ? 'IMAGE' : (file.type.startsWith('video/') ? 'VIDEO' : (file.type.startsWith('audio/') ? 'AUDIO' : 'DOCUMENT'))) as any,
               category: defaultCategory,
-              size: file.size
+              size: file.size,
+              file: file // v324: pass raw File so handleUploadMedia can serialize it correctly
             }
             
             onAddFile(localFile)

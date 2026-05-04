@@ -1,4 +1,4 @@
-const SW_VERSION = 'v323-industrial-sync';
+const SW_VERSION = 'v325-silent-sync';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1416,7 +1416,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
             for (const item of allItems) {
               if (item.status === 'syncing') {
                 const stuckTime = now - (item.lastAttemptAt || item.timestamp || 0);
-                if (stuckTime > 120000) { // 2 minutes (v317: reduce from 5 min)
+                if (stuckTime > 30000) { // v324: 30 seconds — items marked syncing at cycle start need fast recovery
                   console.log(`[SW] Resetting stuck item ${item.id} (${item.type}) from 'syncing' to 'pending'`);
                   item.status = 'pending';
                   resetStore.put(item);
@@ -1432,6 +1432,12 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           resolveReset();
         }
       });
+      
+      // v324: If forced, clear history of failed contexts and ignore backoff
+      if (isForced) {
+        failedContexts.clear();
+        console.log('[SW] Forced sync: cleared failed contexts and ignoring backoffs.');
+      }
 
       const transaction = db.transaction(['outbox'], 'readwrite');
       const outboxStore = transaction.objectStore('outbox');
@@ -1475,7 +1481,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
     // v278: Sticky Sync - Show a subtle notification to prevent OS suspension
     if (pendingItems.length > 0 && !isForced) {
       try {
-        if (self.Notification && self.Notification.permission === 'granted') {
+        // v325: Solo mostrar notificación si hay internet o es forzado, para evitar el titileo offline
+        if (self.Notification && self.Notification.permission === 'granted' && (navigator.onLine || isForced)) {
           await self.registration.showNotification('Sincronizando Aquatech', {
             body: `Procesando ${pendingItems.length} cambios en segundo plano...`,
             icon: '/icon-192.png',
@@ -1511,8 +1518,9 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       
       // Actualizar notificación de progreso principal
       try {
-        if (self.Notification && self.Notification.permission === 'granted') {
-          self.registration.showNotification('Sincronizando (v320)', {
+        // v325: Evitar spam de notificaciones por cada item si no hay red
+        if (self.Notification && self.Notification.permission === 'granted' && (navigator.onLine || isForced)) {
+          self.registration.showNotification(`Sincronizando (${SW_VERSION})`, {
             body: `Item ${processedCount} de ${totalToSync}: Procesando ${item.type}...`,
             icon: '/icon-192.png',
             tag: 'sync-progress',
@@ -1547,8 +1555,8 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
         continue;
       }
 
-      // Backoff exponencial: esperar más tiempo entre intentos
-      if (item.attempts > 0) {
+      // Backoff exponencial: esperar más tiempo entre intentos (Omitir si es forzado)
+      if (item.attempts > 0 && !isForced) {
         const waitMs = Math.min(1000 * Math.pow(2, item.attempts), 300_000); // máx 5 min
         const timeSinceLastAttempt = now - (item.lastAttemptAt || 0);
         if (timeSinceLastAttempt < waitMs) {
@@ -1566,10 +1574,13 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
         }
       }
 
-      // v316: Contexto para evitar enviar dependientes si falla el padre (ej: mensaje si falló proyecto)
-      const ctx = item.projectId || item.payload?.projectId || item.payload?.id;
-      if (ctx && failedContexts.has(ctx)) {
-        console.log(`[SW] Saltando item ${item.id} porque el contexto ${ctx} falló anteriormente`);
+      // v324 FIX: failedContexts now ONLY blocks items whose parent PROJECT creation failed.
+      // Messages, gallery, expenses etc. are standalone and must NOT be blocked by a failed project creation.
+      // The ctx is only relevant for items that depend on a PROJECT existing on the server.
+      const ctx = item.payload?.id; // Only PROJECT type sets payload.id as the local context key
+      const isProjectDependent = item.type === 'PROJECT'; // Only block cascading failures for new PROJECT creation
+      if (isProjectDependent && ctx && failedContexts.has(ctx)) {
+        console.log(`[SW] Saltando item ${item.id} (${item.type}) porque el proyecto padre ${ctx} falló.`);
         await new Promise(r => {
           try {
             const tx = db.transaction(['outbox'], 'readwrite');
@@ -1622,7 +1633,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
             }
           }
           else if (item.type === 'MATERIAL') endpoint = '/api/materials';
-          else if (item.type === 'MESSAGE' || item.type === 'MEDIA_UPLOAD') {
+          else if (item.type === 'MESSAGE' || item.type === 'MEDIA_UPLOAD' || item.type === 'LOCATION') {
             endpoint = `/api/projects/${item.projectId}/messages`;
           } else if (item.type === 'GALLERY_UPLOAD') {
             endpoint = `/api/projects/${item.projectId}/gallery`;
@@ -1946,8 +1957,9 @@ const uploadInChunksSW = async (blob, filename, subfolder = 'uploads') => {
         } catch (e) {
           console.error(`[SW] Failed to sync item ${item.id}:`, e);
           logSyncSW('error', `Error procesando item: ${item.id} (${item.type})`, item.type, { error: e.message });
-          // v272: Mark context as failed so dependents are skipped
-          if (ctx) failedContexts.add(ctx);
+          // v324 FIX: Only poison context if a PROJECT creation itself failed.
+          // Previously, ANY item failure (msg, gallery) would block the whole project queue.
+          if (ctx && item.type === 'PROJECT') failedContexts.add(ctx);
           await new Promise((res) => {
             try {
               const txError = db.transaction(['outbox'], 'readwrite');
