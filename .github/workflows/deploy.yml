@@ -43,6 +43,8 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             BUILDTIME=${{ github.run_id }}
+            NEXT_PUBLIC_VAPID_PUBLIC_KEY=BLSZBPzs10qOLxh4miqlss8CuAL-VmzTR8xEbOImfojxNJGcqIy9PR4qQwZg6qxvWPKPabCMguhCf-2Y97fNk-k
+            NEXTAUTH_URL=https://178.238.238.158.sslip.io/
 
   deploy:
     name: Deploy to VPS (Pull & Restart)

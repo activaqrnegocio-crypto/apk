@@ -13,12 +13,12 @@ COPY . .
 # Generate Prisma client if using Prisma
 RUN npx prisma generate
 
-# Build-time environment variables (Passed from docker-compose)
-ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY
+# Build-time environment variables (Passed from docker-compose or CI)
+ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY="BLSZBPzs10qOLxh4miqlss8CuAL-VmzTR8xEbOImfojxNJGcqIy9PR4qQwZg6qxvWPKPabCMguhCf-2Y97fNk-k"
 ENV NEXT_PUBLIC_VAPID_PUBLIC_KEY=$NEXT_PUBLIC_VAPID_PUBLIC_KEY
-ARG NEXTAUTH_URL
+ARG NEXTAUTH_URL="https://178.238.238.158.sslip.io/"
 ENV NEXTAUTH_URL=$NEXTAUTH_URL
-ARG DATABASE_URL
+ARG DATABASE_URL="mysql://root:password@localhost:3306/aquatech"
 ENV DATABASE_URL=$DATABASE_URL
 
 # Build the application
