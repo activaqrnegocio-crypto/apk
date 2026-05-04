@@ -6,9 +6,9 @@ import { db } from '@/lib/db'
 export default function ServiceWorkerRegistration() {
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
-    const SW_VERSION = 'v335';
+    const SW_VERSION = 'v336';
     const swUrl = `/custom-sw.js?v=${SW_VERSION}`
-    console.log('[App] Solicitando registro de Robot v335 (Silent Push)...');
+    console.log('[App] Solicitando registro de Robot v336 (Real Sync)...');
     let refreshing = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (refreshing) return;

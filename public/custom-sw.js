@@ -1,4 +1,4 @@
-const SW_VERSION = 'v335-silent-push';
+const SW_VERSION = 'v336-real-sync';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1076,15 +1076,13 @@ self.addEventListener('message', (event) => {
     });
   }
 
-  // v273: Support specific sync types via postMessage
+  // v335: Call the REAL processOutboxSync (not a shadow/local no-op!)
   if (event.data && (event.data.type === 'TRIGGER_SYNC' || event.data.type === 'FORCE_SYNC_OUTBOX')) {
     const isForced = event.data.type === 'FORCE_SYNC_OUTBOX';
-    const processOutboxSync = async (isForced = false, specificType = null) => {
-      // v329: Log crítico de arranque
-      console.log('INFO', 'CICLO DE SYNC INICIADO v329');
-      console.log(`[SW] processOutboxSync started. Forced: ${isForced}, Type: ${specificType}`);
-    };
-    event.waitUntil(processOutboxSync(isForced, event.data.specificType));
+    const specificType = event.data.specificType || null;
+    console.log(`[SW] postMessage sync triggered. Forced: ${isForced}, Type: ${specificType}`);
+    // Call the GLOBAL processOutboxSync defined below, NOT a local shadow
+    event.waitUntil(processOutboxSync(isForced, specificType));
   }
 
   // Warm-up pre-caching — caches responses INCLUDING redirects (except login)
@@ -1281,9 +1279,15 @@ self.addEventListener('sync', (event) => {
     'sync-video'
   ];
 
+  // v335: Anti-flood — solo procesar si no estamos ya en un ciclo
+  // El SO dispara el sync event MUCHAS veces simultáneas (una por cada tag),
+  // pero solo necesitamos UN procesamiento que revise TODA la cola.
   if (syncTags.includes(event.tag)) {
-    console.log(`[SW] Background sync triggered by OS: ${event.tag}. Forcing immediate upload...`);
-    // v268: Force sync when triggered by the OS to bypass any "active tab" checks
+    if (isSyncingGlobal) {
+      console.log(`[SW] Sync event ${event.tag} ignored — already processing.`);
+      return;
+    }
+    console.log(`[SW] Background sync triggered by OS: ${event.tag}. Processing outbox...`);
     event.waitUntil(processOutboxSync(true));
   }
 });

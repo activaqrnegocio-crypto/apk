@@ -671,6 +671,11 @@ export default function ProjectExecutionClient({
           objUrl = URL.createObjectURL(blob);
         } catch(e) { console.warn("Failed to create preview blob", e); }
       }
+
+      // v335: Si no hay URL válida y es imagen, usar placeholder
+      if (!objUrl && (p.mimeType || '').startsWith('image/')) {
+        objUrl = '/placeholder-image.png';
+      }
       
       return {
         id: `pending-${item.id}`, 
@@ -775,6 +780,10 @@ export default function ProjectExecutionClient({
         }
       }
 
+      // v335: Si no hay URL válida y es del tipo imagen, usar placeholder con icono de carga
+      if (!objUrl && (p.mimeType || '').startsWith('image/')) {
+        objUrl = '/placeholder-image.png';
+      }
 
       return {
         id: `pending-ev-${item.id}`, 
@@ -1483,11 +1492,20 @@ export default function ProjectExecutionClient({
           galleryPayload.mimeType = prep.mimeType;
           galleryPayload.storageType = prep.storageType;
           
-          if (prep.storageType === 'base64') {
-            galleryPayload.url = prep.data;
+          // v335: Forzar base64 para TODOS los archivos de galería
+          // Los ArrayBuffers no sobreviven bien el roundtrip IndexedDB → Dexie → UI
+          // y la preview se rompe, haciendo que el indicador de pendiente desaparezca.
+          if (prep.storageType === 'arraybuffer') {
+            // Convertir ArrayBuffer a base64 para persistencia confiable
+            const bytes = new Uint8Array(prep.data as ArrayBuffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            galleryPayload.url = 'data:' + (prep.mimeType || 'image/jpeg') + ';base64,' + btoa(binary);
+            galleryPayload.fileData = null;
           } else {
-            galleryPayload.fileData = prep.data;
-            galleryPayload.url = ''; 
+            galleryPayload.url = prep.data;
           }
         } catch (e) {
           console.warn('[Gallery] Offline preparation failed:', e);
