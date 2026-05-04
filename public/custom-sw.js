@@ -1,4 +1,4 @@
-const SW_VERSION = 'v319-industrial-sync';
+const SW_VERSION = 'v320-industrial-sync';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1374,6 +1374,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
     const abortController = new AbortController();
     const GLOBAL_SYNC_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutos máximo por ciclo completo
     const globalSyncTimer = setTimeout(async () => {
+      try {
         const dbT = await openAquatechDB();
         const tx = dbT.transaction(['outbox'], 'readwrite');
         const store = tx.objectStore('outbox');
@@ -1385,6 +1386,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
         };
       } catch(e) {}
     }, GLOBAL_SYNC_TIMEOUT_MS);
+
 
     // Evitar race condition: Si la app está abierta, GlobalSyncWorker se encargará
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (windowClients) => {
@@ -1505,7 +1507,7 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       // Actualizar notificación de progreso principal
       try {
         if (self.Notification && self.Notification.permission === 'granted') {
-          self.registration.showNotification('Sincronizando (v318)', {
+          self.registration.showNotification('Sincronizando (v320)', {
             body: `Item ${processedCount} de ${totalToSync}: Procesando ${item.type}...`,
             icon: '/icon-192.png',
             tag: 'sync-progress',
