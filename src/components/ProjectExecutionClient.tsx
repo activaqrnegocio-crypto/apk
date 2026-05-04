@@ -754,8 +754,8 @@ export default function ProjectExecutionClient({
     const pendingEvidence = (pendingItems || []).filter((item: any) => {
       const isGalleryType = item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD'
       const cat = (item.payload?.category || '').toUpperCase()
-      // v317: Fix 'Finales' visibility - both 'EVIDENCE' and 'FINALES' mapping
-      return isGalleryType && (cat === 'EVIDENCE' || cat === 'FINALES')
+      // v327: Fix 'Finales' visibility - support all final gallery tags
+      return isGalleryType && (cat === 'EVIDENCE' || cat === 'FINALES' || cat === 'ENTREGA' || cat === 'ENTREGA_FINAL');
     }).map((item: any) => {
       const p = item.payload || {};
       let objUrl = '';

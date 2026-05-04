@@ -1,4 +1,4 @@
-const SW_VERSION = 'v325-silent-sync';
+const SW_VERSION = 'v328-robot-fix';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1446,6 +1446,10 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
     getAllRequest.onsuccess = async () => {
       try {
         const allItems = getAllRequest.result || [];
+        
+        if (allItems.length > 0) {
+          addRobotLog('INFO', `Robot v328: Encontrados ${allItems.length} ítems en cola.`);
+        }
         
         // Filtrar por tipo si se especificó una etiqueta de sync
         let toSync = allItems.filter(i => (i.status === 'pending' || i.status === 'failed'));
