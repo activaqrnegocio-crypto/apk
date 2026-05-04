@@ -189,6 +189,9 @@ export default function ProjectExecutionClient({
       const online = navigator.onLine
       setIsOnline(online)
       setIsOfflineMode(!online)
+      if (online) {
+        triggerBackgroundSync()
+      }
     }
     
     const handleSyncSuccess = (e: any) => {
@@ -220,6 +223,42 @@ export default function ProjectExecutionClient({
   }, [])
 
   // --- HELPER FUNCTIONS ---
+  const deduplicateMessages = (messages: any[]) => {
+    const seenIds = new Set();
+    const result: any[] = [];
+    
+    // 1. Prioritize real IDs
+    const sorted = [...messages].sort((a, b) => {
+      const aIsTemp = typeof a.id === 'string' && a.id.startsWith('temp-');
+      const bIsTemp = typeof b.id === 'string' && b.id.startsWith('temp-');
+      if (aIsTemp && !bIsTemp) return 1;
+      if (!aIsTemp && bIsTemp) return -1;
+      return 0;
+    });
+
+    for (const msg of sorted) {
+      // If we have a real ID, use it as unique key
+      if (typeof msg.id === 'number') {
+        if (!seenIds.has(msg.id)) {
+          seenIds.add(msg.id);
+          result.push(msg);
+        }
+      } else {
+        // If it's a temp ID, only add if no real message matches its content/type
+        const isDuplicate = result.some(rm => 
+          rm.content === msg.content && 
+          rm.type === msg.type && 
+          Math.abs(new Date(rm.createdAt).getTime() - new Date(msg.createdAt).getTime()) < 30000
+        );
+        if (!isDuplicate && !seenIds.has(msg.id)) {
+          seenIds.add(msg.id);
+          result.push(msg);
+        }
+      }
+    }
+    return result.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  };
+
   const fetchMessages = async (since?: string): Promise<any[]> => {
     try {
       const url = `/api/projects/${idFromUrl}/messages?_t=${Date.now()}${since ? `&since=${since}` : ''}`
@@ -477,7 +516,7 @@ export default function ProjectExecutionClient({
       })
     }
 
-    const pollInterval = setInterval(async () => {
+        const pollInterval = setInterval(async () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) return
       if (typeof document !== 'undefined' && document.hidden) return
       const currentChat = liveChatRef.current
@@ -486,24 +525,14 @@ export default function ProjectExecutionClient({
       try {
         const freshMsgs = await fetchMessages(since)
         if (freshMsgs && freshMsgs.length > 0) {
-          setLiveChat((prev: any[]) => {
-            const existingIds = new Set(prev.map(m => m.id))
-            const uniqueNew = freshMsgs.filter(m => !existingIds.has(m.id))
-            if (uniqueNew.length === 0) return prev
-            return [...prev, ...uniqueNew]
-          })
+          setLiveChat((prev: any[]) => deduplicateMessages([...prev, ...freshMsgs]))
         }
       } catch (err) { console.error(err) }
     }, 5000) 
     
     const handleFocus = () => fetchMessages().then(msgs => {
       if (msgs && msgs.length > 0) {
-        setLiveChat((prev: any[]) => {
-          const existingIds = new Set(prev.map(m => m.id))
-          const uniqueNew = msgs.filter(m => !existingIds.has(m.id))
-          if (uniqueNew.length === 0) return prev
-          return [...prev, ...uniqueNew]
-        })
+        setLiveChat((prev: any[]) => deduplicateMessages([...prev, ...msgs]))
       }
     })
 
@@ -516,15 +545,7 @@ export default function ProjectExecutionClient({
 
   useEffect(() => {
     if (localChat && localChat.length > 0) {
-      setLiveChat(prev => {
-        if (localChat.length > prev.length) return localChat
-        const serverIds = new Set(localChat.map((m: any) => m.id))
-        const localOnly = prev.filter((m: any) => typeof m.id === 'string' || !serverIds.has(m.id))
-        if (localOnly.length === 0) return localChat
-        return [...localChat, ...localOnly].sort((a: any, b: any) => 
-          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        )
-      })
+      setLiveChat(prev => deduplicateMessages([...localChat, ...prev]))
     }
   }, [localChat])
 
@@ -639,7 +660,15 @@ export default function ProjectExecutionClient({
       filename: item.payload.media.filename || 'Enviando...', mimeType: item.payload.media.mimeType || 'image/jpeg',
       isFromChat: true, isPending: true, createdAt: new Date(item.timestamp).toISOString()
     }))
-    return [...fromChat, ...pendingChat].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+
+    const combined = [...fromChat, ...pendingChat]
+    const seen = new Set()
+    return combined.filter(m => {
+      const uid = m.id
+      if (seen.has(uid)) return false
+      seen.add(uid)
+      return true
+    }).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
   }, [liveChat, pendingItems])
 
   const [evidenceFilter, setEvidenceFilter] = useState<'ALL' | 'IMAGES' | 'VIDEOS' | 'AUDIOS' | 'DOCS'>('ALL')
@@ -670,8 +699,16 @@ export default function ProjectExecutionClient({
       }
     })
     const combinedList = [...list, ...pendingEvidence]
-    if (evidenceFilter === 'ALL') return combinedList
-    return combinedList.filter((item: any) => {
+    const seen = new Set()
+    const uniqueList = combinedList.filter(item => {
+      const uid = item.id
+      if (seen.has(uid)) return false
+      seen.add(uid)
+      return true
+    })
+
+    if (evidenceFilter === 'ALL') return uniqueList
+    return uniqueList.filter((item: any) => {
       const url = (item.url || '').toLowerCase();
       const mime = (item.mimeType || '').toLowerCase();
       const isImage = mime.startsWith('image/') || url.match(/\.(jpg|jpeg|png|gif|webp|heic|svg)$/);
@@ -2113,7 +2150,7 @@ export default function ProjectExecutionClient({
             pointerEvents: 'none'
           }}>
             <div style={{
-              background: isSyncingGlobal ? 'var(--primary)' : (globalFailed > 0 ? '#ef4444' : 'rgba(255,255,255,0.1)'),
+              background: isSyncingGlobal ? 'var(--primary)' : ((globalFailed > 0 || globalPending > 0) ? '#f59e0b' : 'rgba(255,255,255,0.1)'),
               color: isSyncingGlobal ? '#000' : '#fff',
               padding: '8px 16px',
               borderRadius: '20px',
@@ -2130,20 +2167,15 @@ export default function ProjectExecutionClient({
               opacity: isSyncingGlobal || globalPending > 0 || globalFailed > 0 ? 1 : 0,
               transition: 'all 0.3s ease'
             }}>
-              {isSyncingGlobal && globalPending > 0 ? (
+              {isSyncingGlobal ? (
                 <>
                   <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/></svg>
                   Sincronizando...
                 </>
-              ) : globalFailed > 0 ? (
-                <>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4m0 4h.01"/></svg>
-                  {globalFailed} fallidos (reintentando)
-                </>
               ) : (
                 <>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4L12 14.01l-3-3"/></svg>
-                  {globalPending} pendientes de subir
+                  {globalPending + globalFailed} pendientes de subir
                 </>
               )}
             </div>

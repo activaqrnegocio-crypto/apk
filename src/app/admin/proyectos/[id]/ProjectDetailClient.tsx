@@ -227,17 +227,48 @@ export default function ProjectDetailClient({ project: initialProject, available
     };
   }, [idFromUrl, initialProject?.id, initialProject?.isSkeleton]); // v315: Fix loop offline shell
 
-  // --- CHAT STATE ---
+  // v320: Robust deduplication for chat and galleries
+  const deduplicateMessages = (messages: any[]) => {
+    const seenIds = new Set();
+    const result: any[] = [];
+    
+    // Prioritize real numeric IDs over "pending-" or "temp-" strings
+    const sorted = [...messages].sort((a, b) => {
+      const aIsTemp = typeof a.id === 'string' && (a.id.startsWith('temp-') || a.id.startsWith('pending-'));
+      const bIsTemp = typeof b.id === 'string' && (b.id.startsWith('temp-') || b.id.startsWith('pending-'));
+      if (aIsTemp && !bIsTemp) return 1;
+      if (!aIsTemp && bIsTemp) return -1;
+      return 0;
+    });
+
+    for (const msg of sorted) {
+      if (typeof msg.id === 'number') {
+        if (!seenIds.has(msg.id)) {
+          seenIds.add(msg.id);
+          result.push(msg);
+        }
+      } else {
+        const isDuplicate = result.some(rm => 
+          rm.content === msg.content && 
+          rm.type === msg.type && 
+          Math.abs(new Date(rm.createdAt).getTime() - new Date(msg.createdAt).getTime()) < 45000
+        );
+        if (!isDuplicate && !seenIds.has(msg.id)) {
+          seenIds.add(msg.id);
+          result.push(msg);
+        }
+      }
+    }
+    return result.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  };
+
   const [chatMessages, setChatMessages] = useState<any[]>([])
   
   // Keep chatMessages in sync with localChat (which comes from props or cache)
   useEffect(() => {
-    setChatMessages(localChat)
-  }, [localChat])
-  const [liveChat, setLiveChat] = useState<any[]>([])
-
-  useEffect(() => {
-    setChatMessages(localChat)
+    if (localChat && localChat.length > 0) {
+      setChatMessages(prev => deduplicateMessages([...localChat, ...prev]))
+    }
   }, [localChat])
 
   // Sync all sub-states when localProject updates (e.g. from offline cache)
@@ -267,11 +298,7 @@ export default function ProjectDetailClient({ project: initialProject, available
 
   const combinedChat = useMemo(() => {
     const base = chatMessages || [];
-    const live = liveChat || [];
-    return [
-      ...base,
-      ...live,
-      ...pendingItems
+    const pending = (pendingItems || [])
       .filter((item: any) => item.type === 'MESSAGE')
       .map((item: any) => {
         let mediaArr: any[] = [];
@@ -306,9 +333,10 @@ export default function ProjectDetailClient({ project: initialProject, available
           media: mediaArr,
           extraData: item.payload.extraData
         };
-      })
-    ].sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  }, [chatMessages, liveChat, pendingItems, session?.user?.id, session?.user?.name]);
+      });
+
+    return deduplicateMessages([...base, ...pending]);
+  }, [chatMessages, pendingItems, session?.user?.id, session?.user?.name]);
 
   const isAdmin = useMemo(() => {
     const role = session?.user?.role?.toUpperCase() || '';
@@ -376,12 +404,10 @@ export default function ProjectDetailClient({ project: initialProject, available
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const masterGallery = useMemo(() => {
-    // v260: Robust pending deletions identification (supporting both galleryId and legacy itemId)
     const pendingDeletions = (pendingItems || [])
       .filter((i: any) => i.type === 'GALLERY_DELETE')
       .map((i: any) => i.payload.galleryId || i.payload.itemId);
 
-    // Filter project gallery items, adding isPendingDelete status
     const baseFiles = gallery.filter((item: any) => {
       const cat = (item.category || 'MASTER').toUpperCase()
       return (cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO') && !item.isFromChat
@@ -401,7 +427,6 @@ export default function ProjectDetailClient({ project: initialProject, available
       isExpense: true
     })).filter((e: any) => e.url)
 
-    // Add pending uploads from outbox, filtering out those already in baseFiles
     const pendingUploads = (pendingItems || [])
       .filter((item: any) => (item.type === 'MEDIA_UPLOAD' || item.type === 'GALLERY_UPLOAD'))
       .filter((item: any) => {
@@ -416,26 +441,30 @@ export default function ProjectDetailClient({ project: initialProject, available
         category: 'MASTER',
         isPending: true
       }))
-      .filter((pending: any) => !baseFiles.some((base: any) => base.url === pending.url || base.filename === pending.filename))
 
-    return [...baseFiles, ...expenseFiles, ...pendingUploads]
+    const combined = [...baseFiles, ...expenseFiles, ...pendingUploads]
+    const seen = new Set()
+    return combined.filter(item => {
+      const uid = item.id;
+      if (seen.has(uid)) return false;
+      seen.add(uid);
+      // Deduplicate by URL too for pending items
+      if (item.isPending && combined.some(b => !b.isPending && b.url === item.url)) return false;
+      return true;
+    })
   }, [gallery, expenses, pendingItems])
 
   const evidenceGallery = useMemo(() => {
-    // v260: Detect pending deletions
-    // v260: Robust pending deletions identification
     const pendingDeletions = (pendingItems || [])
       .filter((i: any) => i.type === 'GALLERY_DELETE')
       .map((i: any) => i.payload.galleryId || i.payload.itemId);
 
-    // Strictly ONLY EVIDENCE category (uploaded as finals)
     const base = gallery.filter((item: any) => (item.category || '').toUpperCase() === 'EVIDENCE' && !item.isFromChat)
       .map((item: any) => {
         if (pendingDeletions.some((pdId: any) => String(pdId) === String(item.id))) return { ...item, isPendingDelete: true }
         return item
       })
     
-    // Add pending evidence uploads, filtering out duplicates
     const pendingEvidence = (pendingItems || [])
       .filter((item: any) => (item.type === 'MEDIA_UPLOAD' || item.type === 'GALLERY_UPLOAD'))
       .filter((item: any) => (item.payload?.category || '').toUpperCase() === 'EVIDENCE')
@@ -447,23 +476,25 @@ export default function ProjectDetailClient({ project: initialProject, available
         category: 'EVIDENCE',
         isPending: true
       }))
-      .filter((pending: any) => !base.some((b: any) => b.url === pending.url || b.filename === pending.filename))
 
-    return [...base, ...pendingEvidence]
+    const combined = [...base, ...pendingEvidence]
+    const seen = new Set()
+    return combined.filter(item => {
+      const uid = item.id;
+      if (seen.has(uid)) return false;
+      seen.add(uid);
+      if (item.isPending && combined.some(b => !b.isPending && b.url === item.url)) return false;
+      return true;
+    })
   }, [gallery, pendingItems])
 
   const chatGallery = useMemo(() => {
-    // Extract media from persistent chat messages
     const fromChat = chatMessages
       .filter((msg: any) => msg.media && msg.media.length > 0)
       .flatMap((msg: any) => msg.media.map((m: any) => ({
-        ...m,
-        isFromChat: true,
-        userName: msg.userName,
-        createdAt: msg.createdAt
+        ...m, isFromChat: true, userName: msg.userName, createdAt: msg.createdAt, msgId: msg.id
       })))
 
-    // Extract media from pending chat messages
     const pendingChat = (pendingItems || [])
       .filter((item: any) => item.type === 'MESSAGE' && item.payload?.media)
       .map((item: any) => ({
@@ -471,15 +502,18 @@ export default function ProjectDetailClient({ project: initialProject, available
         url: item.payload.media.url || item.payload.media.base64 || '',
         filename: item.payload.media.filename || 'Enviando...',
         mimeType: item.payload.media.mimeType || 'image/jpeg',
-        isFromChat: true,
-        isPending: true,
-        createdAt: new Date(item.timestamp).toISOString()
+        isFromChat: true, isPending: true, createdAt: new Date(item.timestamp).toISOString()
       }))
 
-    // Sort by date (newest first)
-    return [...fromChat, ...pendingChat].sort((a: any, b: any) => 
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )
+    const combined = [...fromChat, ...pendingChat]
+    const seen = new Set()
+    return combined.filter(item => {
+      const uid = item.id;
+      if (seen.has(uid)) return false;
+      seen.add(uid);
+      if (item.isPending && combined.some(b => !b.isPending && b.url === item.url)) return false;
+      return true;
+    }).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
   }, [chatMessages, pendingItems])
 
   // --- REORDERED HOOKS: Ensuring all hooks run on every render (v252 Fix) ---
@@ -680,12 +714,7 @@ export default function ProjectDetailClient({ project: initialProject, available
       const freshMsgs = await fetchMessages(since)
       
       if (freshMsgs.length > 0) {
-        setChatMessages((prev: any[]) => {
-          const existingIds = new Set(prev.map(m => m.id))
-          const uniqueNew = freshMsgs.filter(m => !existingIds.has(m.id))
-          if (uniqueNew.length === 0) return prev
-          return [...prev, ...uniqueNew]
-        })
+        setChatMessages((prev: any[]) => deduplicateMessages([...prev, ...freshMsgs]))
       }
     }, 3500)
 
@@ -1558,7 +1587,7 @@ export default function ProjectDetailClient({ project: initialProject, available
 
       // --- OPTIMISTIC UI UPDATE (Only when Online) ---
       const tempId = `temp-${Date.now()}-${Math.random()}`
-      setLiveChat((prev: any[]) => [
+      setChatMessages((prev: any[]) => deduplicateMessages([
         ...prev,
         {
           id: tempId,
@@ -1571,7 +1600,7 @@ export default function ProjectDetailClient({ project: initialProject, available
           userName: session?.user?.name || 'Administrador',
           status: 'pending'
         }
-      ])
+      ]))
 
       // Online: Send to Server
       const res = await fetch(`/api/projects/${project.id}/messages`, {
@@ -1603,7 +1632,7 @@ export default function ProjectDetailClient({ project: initialProject, available
           userName: session?.user?.name || 'Administrador'
         }]
       })
-      setLiveChat(prev => prev.filter(m => m.id !== tempId))
+      setChatMessages(prev => deduplicateMessages(prev.filter(m => m.id !== tempId)))
 
       // 🔥 REAL-TIME EXPENSE SYNC: If message was an expense, update the expenses list locally
       if (payload.type === 'EXPENSE_LOG' && payload.extraData?.amount) {

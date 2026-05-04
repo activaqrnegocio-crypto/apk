@@ -222,7 +222,35 @@ export default function AdminCalendarClient({
       isPending: true,
       status: 'PENDING'
     }))
-    return [...appointments, ...pending]
+
+    const combined = [...appointments, ...pending]
+    const seenIds = new Set()
+    const result: any[] = []
+
+    // 1. Process real appointments first
+    for (const a of combined) {
+      if (typeof a.id === 'number' && !seenIds.has(a.id)) {
+        seenIds.add(a.id)
+        result.push(a)
+      }
+    }
+
+    // 2. Add pending only if they don't match a real one by content/time
+    for (const a of combined) {
+      if (typeof a.id === 'string' && a.id.startsWith('pending-')) {
+        const isDuplicate = result.some(ra => 
+          ra.title === a.title && 
+          ra.projectId === a.projectId &&
+          Math.abs(new Date(ra.startTime).getTime() - new Date(a.startTime).getTime()) < 60000
+        )
+        if (!isDuplicate && !seenIds.has(a.id)) {
+          seenIds.add(a.id)
+          result.push(a)
+        }
+      }
+    }
+
+    return result
   }, [appointments, pendingTasks])
 
   const handleSaveAppointment = async (data: any) => {

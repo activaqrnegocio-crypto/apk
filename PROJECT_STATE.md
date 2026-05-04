@@ -51,12 +51,13 @@
 | **Error de Roles** | Ajustada redirección en `AdminDashboard` para sesiones offline. |
 | **Navegación Móvil** | Optimizado precaching de rutas RSC para evitar pantallas blancas. |
 | **Sync de Medios** | Corregida la autenticación de BunnyCDN en el entorno de producción. |
+| **UI de Sync** | Unificados "Fallidos" y "Pendientes" en color naranja no alarmista. |
+| **Trigger "Robot"** | Activación automática de sincronización al detectar evento `online`. |
 
 ---
 
 ## 6. Próximos Pasos
-- [ ] Indicador visual de "Sincronizando..." en tiempo real.
-- [ ] Reintentos automáticos (Backoff) en fallos de subida de imágenes.
+- [ ] Optimizar el Backoff (reintentos exponenciales) en fallos de red persistentes.
 - [ ] Auditoría de seguridad en las llaves VAPID.
 
 ---

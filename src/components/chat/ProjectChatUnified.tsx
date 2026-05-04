@@ -652,13 +652,9 @@ export default function ProjectChatUnified({
                  <div className="message-footer">
                    <span className="time">{formatTimeEcuador(msg.createdAt)}</span>
                    {isMe && (
-                     (msg.status === 'pending' || msg.status === 'pending_sync' || msg.isPending) ? (
-                       <span className="pending-icon" title="Pendiente de envío" style={{ marginLeft: '4px', opacity: 0.7, color: 'var(--text-muted)' }}>
+                     (msg.status === 'pending' || msg.status === 'pending_sync' || msg.isPending || msg.status === 'failed') ? (
+                       <span className="pending-icon" title={msg.status === 'failed' ? "Reintentando..." : "Pendiente de envío"} style={{ marginLeft: '4px', opacity: 0.8, color: msg.status === 'failed' ? '#f59e0b' : 'var(--text-muted)' }}>
                          <Clock size={12} />
-                       </span>
-                     ) : msg.status === 'failed' ? (
-                       <span className="pending-icon" title="Error de envío" style={{ marginLeft: '4px', opacity: 0.7, color: '#ef4444' }}>
-                         ❌
                        </span>
                      ) : (
                        <span className="check">✓✓</span>
