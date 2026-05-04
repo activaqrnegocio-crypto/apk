@@ -654,8 +654,9 @@ export default function ProjectExecutionClient({
     })).filter((e: any) => e.url)
     const pendingGallery = (pendingItems || []).filter((item: any) => {
       if (item.type !== 'MEDIA_UPLOAD' && item.type !== 'GALLERY_UPLOAD') return false
-      const cat = (item.payload?.category || 'MASTER').toUpperCase()
-      return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO'
+      const cat = (item.payload?.category || '').toUpperCase()
+      // v329: Only show in Planos if it strictly belongs here. Don't steal from Finales.
+      return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO';
     }).map((item: any) => {
       // v317: Use persistent preview logic
       let objUrl = '';

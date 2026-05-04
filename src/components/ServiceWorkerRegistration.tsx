@@ -8,9 +8,25 @@ export default function ServiceWorkerRegistration() {
     const SW_VERSION = 'v329-ultra-fix'; 
     const swUrl = `/custom-sw.js?v=${SW_VERSION}`
     console.log('[App] Solicitando registro de Robot v329...');
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      refreshing = true;
+      console.log('[App] Nuevo Robot activo. Recargando...');
+      window.location.reload();
+    });
+
     navigator.serviceWorker.register(swUrl, { scope: '/' })
       .then((registration) => {
-        // console.log('[App] SW registrado:', registration.scope)
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          newWorker?.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              console.log('[App] Actualización detectada. Forzando activación...');
+              newWorker.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        });
 
         navigator.serviceWorker.ready.then((reg) => {
           const isOperador = window.location.pathname.includes('/operador')
