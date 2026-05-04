@@ -1,4 +1,4 @@
-const SW_VERSION = 'v337-self-waking';
+const SW_VERSION = 'v338-fetch-trigger';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -21,24 +21,42 @@ function startOutboxPoller() {
   
   console.log('[SW] 🤖 Self-waking poller started (60s interval)');
   outboxPollerInterval = setInterval(async () => {
+    pollerCheckCount++;
     try {
       const db = await openAquatechDB();
-      const count = await new Promise((resolve) => {
+      const result = await new Promise((resolve) => {
         const tx = db.transaction(['outbox'], 'readonly');
-        const req = tx.objectStore('outbox').count();
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => resolve(0);
+        const countReq = tx.objectStore('outbox').count();
+        const getAllReq = tx.objectStore('outbox').getAll();
+        let count = 0;
+        let items = [];
+        countReq.onsuccess = () => { count = countReq.result; };
+        getAllReq.onsuccess = () => { items = getAllReq.result; };
+        tx.oncomplete = () => resolve({ count, items });
+        tx.onerror = () => resolve({ count: 0, items: [] });
       });
+      
+      const count = result.count;
+      const items = result.items;
+      
+      // Only log if count changed or every 8 checks (~2 min)
+      if (count !== lastOutboxCount || pollerCheckCount % 8 === 0) {
+        const types = [...new Set(items.map((i: any) => i.type))].join(',');
+        if (count > 0) {
+          console.log(`[SW] Poller #${pollerCheckCount}: ${count} items [${types}]`);
+        }
+        lastOutboxCount = count;
+      }
       
       if (count > 0 && !isSyncingGlobal) {
         console.log(`[SW] Poller found ${count} pending items — waking robot!`);
-        await logSyncSW('info', `🔍 Poller encontró ${count} ítems pendientes — procesando`, 'poller').catch(() => {});
+        await logSyncSW('info', `🔍 Poller #${pollerCheckCount}: ${count} ítems pendientes — procesando`, 'poller').catch(() => {});
         processOutboxSync(true).catch(() => {});
       }
     } catch (e) {
-      // Outbox might not be accessible yet, that's OK
+      // Outbox might not be accessible yet
     }
-  }, 60000); // Every 60 seconds
+  }, 15000); // Every 15 seconds (was 60s)
 }
 
 function stopOutboxPoller() {
@@ -248,6 +266,13 @@ self.addEventListener('fetch', (event) => {
 
   // v317: Handle Background Fetch dummy trigger
   const requestUrl = new URL(request.url);
+  
+  // v338: FETCH TRIGGER — on every navigation, check outbox in background
+  // This catches items when a cached page load re-awakens the SW
+  if (request.mode === 'navigate' || requestUrl.pathname.startsWith('/api/')) {
+    maybeCheckOutboxFromFetch();
+  }
+  
   if (requestUrl.pathname === '/api/sync/background-trigger') {
     event.respondWith(new Response(JSON.stringify({ triggered: true }), {
       headers: { 'Content-Type': 'application/json' }
