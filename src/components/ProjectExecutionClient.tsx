@@ -171,7 +171,11 @@ export default function ProjectExecutionClient({
     setCacheNotFound(false);
   }, [idFromUrl, expenses]);
   
-  const pendingItems = useLiveQuery(() => db.outbox.where('projectId').equals(idFromUrl).toArray(), [idFromUrl]) || []
+  // v326: Filter using string comparison to avoid type mismatch (Number vs String) between DB and URL params
+  const pendingItems = useLiveQuery(async () => {
+    const all = await db.outbox.toArray();
+    return all.filter(item => String(item.projectId) === String(idFromUrl));
+  }, [idFromUrl]) || []
 
   // Sync refs
   useEffect(() => { liveChatRef.current = liveChat }, [liveChat])
@@ -739,9 +743,9 @@ export default function ProjectExecutionClient({
     if (!project?.gallery) return []
     const pendingDeletions = (pendingItems || []).filter((i: any) => i.type === 'GALLERY_DELETE').map((i: any) => i.payload.galleryId);
     
-    const list = [...project.gallery.filter((item: any) => {
+    const list = [...(project?.gallery || []).filter((item: any) => {
       const cat = (item.category || '').toUpperCase();
-      return !item.isFromChat && (cat === 'EVIDENCE' || cat === 'FINALES');
+      return !item.isFromChat && (cat === 'EVIDENCE' || cat === 'FINALES' || cat === 'ENTREGA');
     })].map((item: any) => {
       if (pendingDeletions.some((pdId: any) => String(pdId) === String(item.id))) return { ...item, isPendingDelete: true };
       return item;
@@ -1500,6 +1504,7 @@ export default function ProjectExecutionClient({
             status: 'pending',
             syncId
           })
+          console.log('[Outbox] Guardado offline:', galleryPayload.filename);
         })
         setLoading(false)
         triggerBackgroundSync()
