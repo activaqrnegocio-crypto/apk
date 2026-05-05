@@ -2110,7 +2110,7 @@ const uploadInChunksSW = async (blob, filename, subfolder = 'uploads', mimeType 
                      const cacheEntry = {
                        ...finalPayload,
                        id: serverProject.id,
-                       team: finalPayload.team ? finalPayload.team.map((uid: any) => ({ userId: Number(uid) })) : [],
+                       team: finalPayload.team ? finalPayload.team.map((uid) => ({ userId: Number(uid) })) : [],
                        client: finalPayload.client || null,
                        phases: finalPayload.phases || [],
                        lastAccessedAt: Date.now(),
