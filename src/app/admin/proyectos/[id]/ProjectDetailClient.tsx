@@ -12,6 +12,7 @@ import { useSession } from 'next-auth/react'
 import { PROJECT_TYPES, translateType, PROJECT_CATEGORIES, translateCategory } from '@/lib/constants'
 import ProjectChatUnified from '@/components/chat/ProjectChatUnified'
 import { db } from '@/lib/db'
+import { revalidateRoute } from '@/actions/revalidate'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { compressImage as optimizedCompress, isCompressibleImage, blobToBase64 } from '@/lib/image-optimization'
 
@@ -782,7 +783,7 @@ export default function ProjectDetailClient({ project: initialProject, available
     const handleFocus = () => {
        if (typeof navigator !== 'undefined' && !navigator.onLine) return
        fetchMessages().then(msgs => { if (msgs.length > 0) setChatMessages(msgs) })
-       router.refresh() // También refresca datos del servidor como fotos y gastos
+       revalidateRoute(pathname) // Revalidate server data without full page reload
     }
     window.addEventListener('focus', handleFocus)
     
@@ -979,7 +980,7 @@ export default function ProjectDetailClient({ project: initialProject, available
         setIsEditingFicha(false)
         startTransition(() => {
           if (typeof navigator !== 'undefined' && navigator.onLine) {
-          router.refresh()
+          revalidateRoute(pathname)
         }
         })
       } else {
@@ -1009,7 +1010,7 @@ export default function ProjectDetailClient({ project: initialProject, available
         router.push('/admin/proyectos')
         startTransition(() => {
           if (typeof navigator !== 'undefined' && navigator.onLine) {
-          router.refresh()
+          revalidateRoute('/admin/proyectos')
         }
         })
       } else {
@@ -1147,7 +1148,7 @@ export default function ProjectDetailClient({ project: initialProject, available
         setIsExpenseModalOpen(false)
         startTransition(() => {
           if (typeof navigator !== 'undefined' && navigator.onLine) {
-            router.refresh()
+            revalidateRoute(pathname)
           }
         })
       } else {

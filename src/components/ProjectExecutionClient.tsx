@@ -16,6 +16,7 @@ import { useSession } from 'next-auth/react'
 import { formatToEcuador, ECUADOR_TIMEZONE, formatTimeEcuador, formatDateEcuador } from '@/lib/date-utils'
 import { compressImage as optimizedCompress, isCompressibleImage, blobToBase64 } from '@/lib/image-optimization'
 import { prepareFileForOutbox, generateSyncId } from '@/lib/offline-utils'
+import { revalidateRoute } from '@/actions/revalidate'
 
 import Link from 'next/link'
 import { useLocalStorage } from '@/hooks/useLocalStorage'
@@ -209,8 +210,8 @@ export default function ProjectExecutionClient({
     
     const handleSyncSuccess = (e: any) => {
       if (e.detail?.projectId === idFromUrl) {
-        // console.log('[UI] Background sync success detected. Refreshing data...');
-        router.refresh()
+        // Revalidate server cache without full page reload
+        startTransition(() => { revalidateRoute(pathname) })
       }
     }
 
@@ -350,7 +351,7 @@ export default function ProjectExecutionClient({
         
         setLocalTeam(newTeam)
         setIsEditingTeam(false)
-        if (typeof navigator !== 'undefined' && navigator.onLine) router.refresh()
+        if (typeof navigator !== 'undefined' && navigator.onLine) startTransition(() => { revalidateRoute(pathname) })
       } else {
         alert('Error al actualizar el equipo')
       }
@@ -397,7 +398,7 @@ export default function ProjectExecutionClient({
     try {
       const res = await fetch(`/api/projects/${project?.id || idFromUrl}/gallery/${itemId}`, { method: 'DELETE' })
       if (res.ok) {
-        startTransition(() => { if (typeof navigator !== 'undefined' && navigator.onLine) router.refresh() })
+        startTransition(() => { if (typeof navigator !== 'undefined' && navigator.onLine) revalidateRoute(pathname) })
       } else { alert('Error eliminando archivo') }
     } catch (err) {
       console.error('Delete error:', err)
@@ -971,7 +972,7 @@ export default function ProjectExecutionClient({
         if (!res.ok) throw new Error('Refresh needed')
         startTransition(() => {
           if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
+       revalidateRoute(pathname)
      }
         })
       } catch (err) {
@@ -1104,7 +1105,7 @@ export default function ProjectExecutionClient({
             if (res.ok) {
               startTransition(() => {
                 if (typeof navigator !== 'undefined' && navigator.onLine) {
-                  router.refresh()
+                  revalidateRoute(pathname)
                 }
               })
             }
@@ -1340,7 +1341,7 @@ export default function ProjectExecutionClient({
           
           if (payload.type === 'EXPENSE_LOG') {
             if (typeof navigator !== 'undefined' && navigator.onLine) {
-              router.refresh()
+              revalidateRoute(pathname)
             }
           }
         } else {
@@ -1399,9 +1400,9 @@ export default function ProjectExecutionClient({
         body: JSON.stringify({ ...file, category })
       })
       if (resp.ok) {
-        // Force refresh project data to update gallery
+        // Revalidate project data to update gallery — no full page reload
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
+       revalidateRoute(pathname)
      }
       }
     } catch (e) {
@@ -1420,7 +1421,7 @@ export default function ProjectExecutionClient({
       })
       if (resp.ok) {
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-       router.refresh()
+       revalidateRoute(pathname)
      }
       }
     } catch (e) {
@@ -1549,7 +1550,7 @@ export default function ProjectExecutionClient({
         })
         if (!res.ok) throw new Error('Refetch')
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-          router.refresh()
+          revalidateRoute(pathname)
         }
       } catch (err) {
         await db.transaction('rw', db.outbox, async () => {
@@ -1926,7 +1927,7 @@ export default function ProjectExecutionClient({
       if (res.ok) {
         setLocalExpenses(prev => prev.filter(e => e.id !== expenseId))
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-          router.refresh()
+          revalidateRoute(pathname)
         }
       }
     } catch (error) {
@@ -1968,7 +1969,7 @@ export default function ProjectExecutionClient({
         setIsExpenseModalOpen(false)
         setEditingExpense(null)
         if (typeof navigator !== 'undefined' && navigator.onLine) {
-          router.refresh()
+          revalidateRoute(pathname)
         }
       }
     } catch (error) {

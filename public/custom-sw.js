@@ -1,4 +1,4 @@
-const SW_VERSION = 'v338-fetch-trigger';
+const SW_VERSION = 'v339-fetch-trigger';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -267,6 +267,10 @@ self.addEventListener('activate', (event) => {
 // ─── FETCH ──────────────────────────────────────────────────
 self.addEventListener('fetch', (event) => {
   const { request } = event;
+
+  // v339: Reject data: and blob: URLs immediately — they're not network requests.
+  // The URL constructor accepts them but fetch() / caches don't, causing ERR_INVALID_URL.
+  if (request.url.startsWith('data:') || request.url.startsWith('blob:')) return;
 
   // v317: Handle Background Fetch dummy trigger
   const requestUrl = new URL(request.url);
@@ -1075,7 +1079,19 @@ async function staleWhileRevalidate(request, cacheName) {
     return response;
   }).catch(() => null);
 
-  return cached || (await fetchPromise) || Response.error();
+  // v339 FIX: StaleWhileRevalidate for JS chunks — when offline and chunk not cached,
+  // return a noop instead of crashing the page with ChunkLoadError.
+  if (cached) return cached;
+  const networkResult = await fetchPromise;
+  if (networkResult) return networkResult;
+  // v339: Last resort — return empty JS. Prevents ChunkLoadError crash.
+  // The component that called import() will fail gracefully with a module error
+  // that React error boundaries can catch, instead of a fatal page crash.
+  // NOTE: status 200 with empty body, NOT 204 — 204 disallows body and throws.
+  if (isNextChunk) {
+    return new Response('/* chunk unavailable offline */', { status: 200, headers: { 'Content-Type': 'application/javascript' } });
+  }
+  return Response.error();
 }
 
 /**
@@ -1532,10 +1548,6 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
       try {
         const allItems = getAllRequest.result || [];
         
-        if (allItems.length > 0) {
-          await logSyncSW('info', `Robot ${SW_VERSION}: Encontrados ${allItems.length} ítems en cola.`, 'system');
-        }
-        
         // Filtrar por tipo si se especificó una etiqueta de sync
         let toSync = allItems.filter(i => (i.status === 'pending' || i.status === 'failed'));
         if (specificType) {
@@ -1551,8 +1563,19 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           outboxStore.put(lockedItem);
         }
 
-        const pendingItems = toSync;
+        // v339 FIX: Wait for transaction to complete BEFORE any async operations.
+        // logSyncSW opens its own IDB transaction on 'syncLogs', which causes THIS
+        // transaction to auto-commit. Any put/delete after that throws TransactionInactiveError.
+        await new Promise((resolveTx) => {
+          transaction.oncomplete = () => resolveTx();
+          transaction.onerror = () => resolveTx();
+        });
 
+    const pendingItems = toSync;
+
+    if (allItems.length > 0) {
+      await logSyncSW('info', `Robot ${SW_VERSION}: Encontrados ${allItems.length} ítems en cola.`, 'system');
+    }
     await logSyncSW('info', `Iniciando ciclo de sincronización (Forced: ${isForced})`, 'system');
     
     if (pendingItems.length === 0) {
@@ -1582,6 +1605,34 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           });
         }
       } catch (e) {}
+    }
+
+    // v339 FIX: When offline, storage config WILL fail. Don't penalize items for that.
+    // Instead, abort the sync cycle early so items stay 'pending' for when we're back online.
+    if (!navigator.onLine && !isForced) {
+      console.log('[SW] Device is offline — aborting sync cycle (items preserved for online)');
+      // Reset items from 'syncing' back to 'pending' so they're picked up when online
+      await new Promise(r => {
+        try {
+          const resetTx = db.transaction(['outbox'], 'readwrite');
+          const resetStore = resetTx.objectStore('outbox');
+          const resetReq = resetStore.getAll();
+          resetReq.onsuccess = () => {
+            const items = resetReq.result || [];
+            for (const it of items) {
+              if (it.status === 'syncing') {
+                it.status = 'pending';
+                resetStore.put(it);
+              }
+            }
+          };
+          resetTx.oncomplete = r;
+          resetTx.onerror = r;
+        } catch(e) { r(); }
+      });
+      isSyncingGlobal = false;
+      resolve();
+      return;
     }
 
     // v278: Pre-fetch storage config once per cycle for better performance
@@ -1703,7 +1754,18 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           console.warn('[SW] Emergency config retry failed');
         }
         if (!storageConfig) {
-          throw new Error('No storage config available after retry — aborting media sync for this item');
+          // v339 FIX: Don't kill the item — reset to 'pending' and skip.
+          // The config might be temporarily unavailable (server restart, etc).
+          // Killing items causes permanent data loss for offline uploads.
+          console.warn(`[SW] Item ${item.id} skipped — storage config unavailable. Will retry on next cycle.`);
+          await new Promise(r => {
+            try {
+              const tx = db.transaction(['outbox'], 'readwrite');
+              tx.objectStore('outbox').put({ ...item, status: 'pending' });
+              tx.oncomplete = r; tx.onerror = r;
+            } catch(e) { r(); }
+          });
+          continue;
         }
       }
 
@@ -1750,7 +1812,10 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
           // --- NEW: UNIFIED MEDIA SYNC LOGIC FOR SERVICE WORKER ---
           const processMedia = async (item) => {
             const config = storageConfig;
-            if (!config) throw new Error('storageConfig not available — aborting media sync');
+            // v339: If config is unavailable, return payload unchanged.
+            // Items with media are already skipped earlier in the loop when config is null.
+            // Non-media items (text messages, etc.) don't need config.
+            if (!config) return item.payload;
             
             // v316: Copia profunda del payload para trabajar
             let payload = JSON.parse(JSON.stringify(item.payload));

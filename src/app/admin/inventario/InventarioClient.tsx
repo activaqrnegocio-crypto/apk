@@ -1,13 +1,15 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
+import { revalidateRoute } from '@/actions/revalidate'
 
 export default function InventarioClient({ initialMaterials }: { initialMaterials: any[] }) {
   const [materials, setMaterials] = useState(initialMaterials)
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('ALL')
   const [isSyncing, setIsSyncing] = useState(false)
+  const pathname = usePathname()
 
   // Modal de Creación
   const [showModal, setShowModal] = useState(false)
@@ -127,7 +129,7 @@ export default function InventarioClient({ initialMaterials }: { initialMaterial
         setMaterials([result, ...materials])
         setShowModal(false)
         setNewItem({ code: '', name: '', description: '', unitPrice: 0, stock: 1, category: '' })
-        router.refresh()
+        revalidateRoute(pathname)
       } else {
         alert("Error al cargar en el servidor")
       }

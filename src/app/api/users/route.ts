@@ -138,7 +138,8 @@ export async function POST(request: Request) {
 
     // Check if username is truly taken by an ACTIVE user
     const existingUser = await prisma.user.findFirst({
-      where: { username, isActive: true }
+      where: { username, isActive: true },
+      select: { id: true }
     })
 
     if (existingUser) {
@@ -148,7 +149,8 @@ export async function POST(request: Request) {
     // Check if email is already taken by an ACTIVE user
     if (email) {
       const existingEmail = await prisma.user.findFirst({
-        where: { email, isActive: true }
+        where: { email, isActive: true },
+        select: { id: true }
       })
 
       if (existingEmail) {
@@ -223,7 +225,10 @@ export async function DELETE(request: Request) {
     }
 
     // --- RBAC RULES FOR DELETION ---
-    const userToDeactivate = await prisma.user.findUnique({ where: { id: userIdToDelete } })
+    const userToDeactivate = await prisma.user.findUnique({ 
+      where: { id: userIdToDelete },
+      select: { id: true, role: true, name: true, email: true, username: true }
+    })
     if (!userToDeactivate) {
       return NextResponse.json({ error: 'Usuario no encontrado' }, { status: 404 })
     }
@@ -242,7 +247,8 @@ export async function DELETE(request: Request) {
         role: { in: ['SUPERADMIN', 'ADMIN', 'ADMINISTRADORA'] as any }, 
         isActive: true 
       },
-      orderBy: { id: 'asc' }
+      orderBy: { id: 'asc' },
+      select: { id: true }
     })
     
     // Safety check: If for some reason we cannot find any active admin, we must abort

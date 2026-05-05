@@ -41,7 +41,11 @@ export async function GET(request: Request) {
             { lastSummarySent: null }
           ]
         },
-        include: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          lastSummarySent: true,
           appointments: {
             where: {
               startTime: { 
