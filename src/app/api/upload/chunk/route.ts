@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir, readFile, unlink } from 'fs/promises';
-import { existsSync } from 'fs';
+import { writeFile, mkdir, rm } from 'fs/promises';
+import { existsSync, createReadStream } from 'fs';
+import { Readable } from 'stream';
 import path from 'path';
 
 // CRÍTICO: Desactivar el body parser de Next.js para permitir archivos grandes
-// Nota: En Next.js App Router, config exportada no funciona igual que en Pages Router para bodyParser.
-// Sin embargo, mantenemos la intención y usamos la configuración compatible.
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 minutos máximo por request en VPS
 
@@ -29,23 +28,18 @@ export async function POST(req: NextRequest) {
     if (!existsSync(uploadDir)) await mkdir(uploadDir, { recursive: true });
 
     const chunkBuffer = Buffer.from(await chunk.arrayBuffer());
-    await writeFile(path.join(uploadDir, `chunk_${chunkIndex}`), chunkBuffer);
+    
+    // v352fix: Write each chunk to its own file (writeFile overwrites on retry — no duplicates).
+    // Previous appendFile approach duplicated chunks on SW retries, corrupting the file.
+    const chunkPath = path.join(uploadDir, `chunk_${chunkIndex}`);
+    await writeFile(chunkPath, chunkBuffer);
 
     // Si no es el último chunk, confirmar recepción
     if (chunkIndex < totalChunks - 1) {
       return NextResponse.json({ received: true, chunk: chunkIndex });
     }
 
-    // Último chunk — ensamblar el archivo completo
-    const allChunkFiles = [];
-    for (let i = 0; i < totalChunks; i++) {
-      allChunkFiles.push(path.join(uploadDir, `chunk_${i}`));
-    }
-
-    const buffers = await Promise.all(allChunkFiles.map(f => readFile(f)));
-    const completeBuffer = Buffer.concat(buffers);
-
-    // Subir el archivo completo a BunnyNet
+    // Último chunk — subir el archivo ensamblado a BunnyNet via STREAMING secuencial
     const storageZone = process.env.BUNNY_STORAGE_ZONE!;
     const accessKey = process.env.BUNNY_STORAGE_API_KEY!;
     const storageHost = process.env.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com';
@@ -57,6 +51,22 @@ export async function POST(req: NextRequest) {
     const timestamp = Date.now();
     const remotePath = `${subfolder}/${timestamp}-${safeName}`;
 
+    // v352fix: Stream chunks sequentially from disk to Bunny CDN.
+    // Each chunk file is read in order (0, 1, 2, ...) and streamed directly.
+    // No Buffer.concat, no memory spikes, handles retries correctly.
+    async function* combineChunks(dir: string, total: number) {
+      for (let i = 0; i < total; i++) {
+        const fp = path.join(dir, `chunk_${i}`);
+        const stream = createReadStream(fp);
+        for await (const chunk of stream) {
+          yield chunk;
+        }
+      }
+    }
+
+    const combinedStream = Readable.from(combineChunks(uploadDir, totalChunks));
+    const webStream = Readable.toWeb(combinedStream) as ReadableStream;
+
     const bunnyRes = await fetch(
       `https://${storageHost}/${storageZone}/${remotePath}`,
       {
@@ -65,13 +75,14 @@ export async function POST(req: NextRequest) {
           'AccessKey': accessKey,
           'Content-Type': mimeType,
         },
-        body: completeBuffer,
+        body: webStream,
+        // @ts-ignore — Node 18+ requires duplex: 'half' for streaming request bodies
+        duplex: 'half',
       }
     );
 
-    // Limpiar chunks temporales
-    await Promise.all(allChunkFiles.map(f => unlink(f).catch(() => {})));
-    await import('fs/promises').then(fs => fs.rm(uploadDir, { recursive: true, force: true }).catch(() => {}));
+    // Limpiar directorio temporal
+    await rm(uploadDir, { recursive: true, force: true }).catch(() => {});
 
     if (!bunnyRes.ok) {
       throw new Error(`BunnyNet upload failed: ${bunnyRes.status}`);

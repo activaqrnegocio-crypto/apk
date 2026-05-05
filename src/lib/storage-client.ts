@@ -32,10 +32,10 @@ export async function uploadToBunnyClientSide(
   const path = `/${storageZone}/${folder}/${timestamp}-${randomSuffix}-${safeName}`;
   const uploadUrl = `https://${storageHost}${path}`;
 
-  // 3. Direct PUT to Bunny.net (or Chunked if large)
-  if (file.size > 1024 * 1024) {
-     console.log('[Storage] File > 1MB, using chunked upload...');
-     const chunkedResult = await uploadInChunks(file, originalName);
+  // 3. Direct PUT to Bunny.net (or Chunked if > 50MB)
+  if (file.size > 50 * 1024 * 1024) {
+     console.log('[Storage] File > 50MB, using chunked upload...');
+     const chunkedResult = await uploadInChunks(file, originalName, file.type || 'application/octet-stream');
      // The chunked upload already returns the final URL
      return {
        url: chunkedResult.url,
@@ -92,7 +92,8 @@ export async function uploadToBunnyClientSide(
  */
 export async function uploadInChunks(
   file: File | Blob,
-  filename: string
+  filename: string,
+  mimeType?: string
 ): Promise<{ url: string }> {
   // v278: Increased chunk size to 4MB for better performance on modern networks
   const CHUNK_SIZE = 4 * 1024 * 1024; 
@@ -107,6 +108,7 @@ export async function uploadInChunks(
     formData.append('chunkIndex', i.toString());
     formData.append('totalChunks', totalChunks.toString());
     formData.append('filename', filename);
+    formData.append('mimeType', mimeType || file.type || 'application/octet-stream');
 
     const res = await fetch('/api/upload/chunk', {
       method: 'POST',
