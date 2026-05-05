@@ -100,6 +100,29 @@ export default function ProyectosPage() {
     }
   }, [isAuthorized])
 
+  // v352: Listen for PROJECT_SYNCED from the Service Worker to add synced projects instantly
+  useEffect(() => {
+    const handleSwMessage = async (event: MessageEvent) => {
+      if (event.data?.type === 'PROJECT_SYNCED' && event.data?.projectId) {
+        console.log('[AdminProyectos] SW synced project:', event.data.projectId);
+        try {
+          const cached = await db.projectsCache.get(event.data.projectId);
+          if (cached) {
+            setProjects(prev => {
+              const exists = prev.some(p => p.id === cached.id);
+              if (exists) return prev;
+              return [cached, ...prev];
+            });
+          }
+        } catch (e) {
+          console.warn('[AdminProyectos] Could not read synced project:', e);
+        }
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', handleSwMessage);
+    return () => navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
+  }, []);
+
   const fetchProjects = async () => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) return; // Don't fetch if explicitly offline
 

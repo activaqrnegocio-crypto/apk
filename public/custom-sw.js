@@ -1074,10 +1074,9 @@ async function fetchWithTimeout(request, timeoutMs) {
   const id = setTimeout(() => controller.abort(), timeoutMs);
   
   try {
-    const response = await fetch(request, {
-      ...request,
-      signal: controller.signal
-    });
+    // v352: Never spread a Request object — it corrupts the body (especially for large uploads).
+    // Simply pass the signal as the init parameter.
+    const response = await fetch(request, { signal: controller.signal });
     clearTimeout(id);
     return response;
   } catch (error) {
@@ -2125,6 +2124,14 @@ const uploadInChunksSW = async (blob, filename, subfolder = 'uploads', mimeType 
                      putStore.put(cacheEntry);
                      await new Promise(r => { putTx.oncomplete = r; putTx.onerror = r; });
                      console.log(`[SW v352] Saved synced project #${serverProject.id} to projectsCache for instant UI update`);
+                     // v352: Notify ALL window clients so the operator/admin dashboard refreshes instantly
+                     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+                       clients.forEach(c => c.postMessage({
+                         type: 'PROJECT_SYNCED',
+                         projectId: serverProject.id,
+                         projectTitle: finalPayload.title || ''
+                       }));
+                     });
                    }
                  } catch (parseErr) {
                    console.warn('[SW v352] Could not save project to cache after sync:', parseErr);

@@ -458,6 +458,37 @@ export default function OperatorDashboardClient({
     };
   }, []);
 
+  // v352: Listen for PROJECT_SYNCED messages from the Service Worker.
+  // When the SW syncs a pending project and saves it to projectsCache,
+  // Dexie's useLiveQuery may not detect the cross-context IDB write.
+  // So we manually read the synced project from projectsCache and add it.
+  useEffect(() => {
+    const handleSwMessage = async (event: MessageEvent) => {
+      if (event.data?.type === 'PROJECT_SYNCED' && event.data?.projectId) {
+        console.log('[OpDashboard] SW synced project:', event.data.projectId);
+        try {
+          const cached = await db.projectsCache.get(event.data.projectId);
+          if (cached) {
+            setEmergencyProjects(prev => {
+              const existing = (prev || []).filter(p => p.id !== cached.id);
+              return [cached, ...existing];
+            });
+            // v352: Also persist to localStorage for snapshot recovery
+            try {
+              const prevSnap = JSON.parse(localStorage.getItem('last_op_projects_snapshot') || '[]');
+              const merged = [cached, ...prevSnap.filter((p: any) => p.id !== cached.id)];
+              localStorage.setItem('last_op_projects_snapshot', JSON.stringify(merged.slice(0, 100)));
+            } catch (e) {}
+          }
+        } catch (e) {
+          console.warn('[OpDashboard] Could not read synced project from cache:', e);
+        }
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', handleSwMessage);
+    return () => navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
+  }, []);
+
 
   // 2. Local outbox tasks (created offline)
   const pendingTasksRaw = useLiveQuery(
