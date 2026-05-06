@@ -5,13 +5,21 @@ import { getLocalNow, formatToEcuador } from '@/lib/date-utils'
 import { db } from '@/lib/db'
 import { useLiveQuery } from 'dexie-react-hooks'
 import Link from 'next/link'
-import AppointmentModal from '@/components/Calendar/AppointmentModal'
 import { usePushNotifications } from '@/hooks/usePushNotifications'
-import { NotificationOnboarding } from '@/components/NotificationOnboarding'
-import { IosInstallBanner } from '@/components/IosInstallBanner'
 import { hasModuleAccess } from '@/lib/rbac'
-import ProjectCacheManager from '@/components/ProjectCacheManager'
-import ManualSyncButton from '@/components/ManualSyncButton'
+import dynamic from 'next/dynamic'
+
+// Fase 3: Dynamic imports — these components are NOT needed for first paint
+// AppointmentModal: only opens on user action (~15KB)
+// NotificationOnboarding: dismissible banner (~5KB)
+// IosInstallBanner: iOS-only popup (~3KB)
+// ProjectCacheManager: status badge with SW listeners (~14KB)
+// ManualSyncButton: small button (~3KB)
+const AppointmentModal = dynamic(() => import('@/components/Calendar/AppointmentModal'), { ssr: false })
+const NotificationOnboarding = dynamic(() => import('@/components/NotificationOnboarding').then(m => ({ default: m.NotificationOnboarding })), { ssr: false })
+const IosInstallBanner = dynamic(() => import('@/components/IosInstallBanner').then(m => ({ default: m.IosInstallBanner })), { ssr: false })
+const ProjectCacheManager = dynamic(() => import('@/components/ProjectCacheManager'), { ssr: false })
+const ManualSyncButton = dynamic(() => import('@/components/ManualSyncButton'), { ssr: false })
 // Inline SVG icons to match project pattern
 const svgProps = (size: number, style?: React.CSSProperties, className?: string) => ({
   width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
@@ -118,7 +126,6 @@ export default function OperatorDashboardClient({
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine
 
       // v317: En offline, confiar plenamente en lo que hay en cache (ya filtrado por el server).
-      // Esto evita que fallos en la recuperación del userId (localUser.id) oculten proyectos.
       if (isOffline) {
         const allProjects = await db.projectsCache
           .orderBy('lastAccessedAt')
@@ -129,28 +136,29 @@ export default function OperatorDashboardClient({
       }
 
       const uId = user?.id || localUser?.id
-      if (!uId) return undefined
-
-      const userId = Number(uId)
-      if (isNaN(userId) || userId <= 0) return undefined
-
-      // v288: Scann ALL synced projects (up to 500) to find ownership.
+      // v339: Si no hay uId pero estamos online, NO filtrar (el server ya lo hizo en el sync)
+      // Esto evita que los proyectos desaparezcan si la sesión se refresca momentáneamente.
       const allProjects = await db.projectsCache
         .orderBy('lastAccessedAt')
         .reverse()
         .limit(500)
         .toArray()
-      
+
+      if (!uId) return allProjects; // Fallback: show everything we have in cache
+
+      const userId = Number(uId)
+      if (isNaN(userId) || userId <= 0) return allProjects
+
+      // v294: Usar comparación flexible y manejar casos donde team es null/undefined
       const filtered = allProjects.filter(p => {
-        // v294: Usar comparación flexible (==) y verificar tanto team como createdBy
-        const isInTeam = p.team?.some((m: any) => Number(m.userId) === userId)
-        const isCreator = Number(p.createdBy || p.createdById) === userId
-        return isInTeam || isCreator
+        const isInTeam = p.team?.some((m: any) => Number(m.userId) == userId)
+        const isCreator = Number(p.createdBy || p.createdById) == userId
+        return isInTeam || isCreator || p.isPending
       })
 
       return filtered
     },
-    [localUser?.id, user?.id] // Removed isHydratingAuth to prevent blocking
+    [localUser?.id, user?.id]
   )
 
   // v287: Live Agenda Cache
@@ -317,13 +325,23 @@ export default function OperatorDashboardClient({
     const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
 
     // v317: Robust Source Selection (Priority: LiveQuery > Emergency > Server Props)
-    // If projectsFromCache is undefined, it means Dexie hasn't responded yet.
-    // If emergencyProjects is also undefined, we are in the initial window.
     const sourceProjects = 
       (projectsFromCache && projectsFromCache.length > 0) ? projectsFromCache :
       (emergencyProjects && emergencyProjects.length > 0) ? emergencyProjects :
       (projectsFromCache === undefined || isHydratingAuth) ? undefined :
       initialProjects;
+
+    // v355: Emergency Merge — If projectsFromCache only has 1 or very few projects 
+    // compared to what we know we had (emergencyProjects), merge them.
+    // This prevents the "disappearing projects" issue when creating a new one.
+    let finalSource = sourceProjects;
+    if (Array.isArray(projectsFromCache) && Array.isArray(emergencyProjects) && 
+        projectsFromCache.length < emergencyProjects.length && projectsFromCache.length < 5) {
+       const map = new Map();
+       emergencyProjects.forEach(p => map.set(p.id, p));
+       projectsFromCache.forEach(p => map.set(p.id, p));
+       finalSource = Array.from(map.values());
+    }
 
     // v317: Si estamos cargando o hidratando auth, NO caer a initialProjects (que es [] offline)
     if (sourceProjects === undefined) {
@@ -336,7 +354,9 @@ export default function OperatorDashboardClient({
     }
 
     const projectMap = new Map();
-    sourceProjects.forEach((p: any) => projectMap.set(p.id, p));
+    if (finalSource) {
+      finalSource.forEach((p: any) => projectMap.set(p.id, p));
+    }
 
     // v352: Include pending outbox PROJECT entries (creados offline, aún no sincronizados)
     const pendingMapped = pendingProjects.map(p => ({

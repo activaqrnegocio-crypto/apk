@@ -5,13 +5,8 @@ import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import ProjectUploader, { ProjectFile } from '@/components/ProjectUploader'
 import { db } from '@/lib/db'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { jsPDF } from 'jspdf'
-import autoTable from 'jspdf-autotable'
-import { 
-  generateProfessionalPDF, 
-  generateProjectReportPDF, 
-  addAquatechHeader 
-} from '@/lib/pdf-generator'
+// Fase 4: Removed unused jsPDF + autoTable + pdf-generator static imports (~400KB dead weight)
+// If PDF generation is needed in the future, use: const { jsPDF } = await import('jspdf')
 import { useSession } from 'next-auth/react'
 import { formatToEcuador, ECUADOR_TIMEZONE, formatTimeEcuador, formatDateEcuador } from '@/lib/date-utils'
 import { compressImage as optimizedCompress, isCompressibleImage, blobToBase64 } from '@/lib/image-optimization'
@@ -542,7 +537,7 @@ export default function ProjectExecutionClient({
           setLiveChat((prev: any[]) => deduplicateMessages([...prev, ...freshMsgs]))
         }
       } catch (err) { console.error(err) }
-    }, 5000) 
+    }, 5000) // Reverted to 5s per user request for immediate chat feedback
     
     const handleFocus = () => fetchMessages().then(msgs => {
       if (msgs && msgs.length > 0) {
@@ -577,7 +572,7 @@ export default function ProjectExecutionClient({
         }
       } catch (e) {}
     }
-    const expInterval = setInterval(fetchExpenses, 5000)
+    const expInterval = setInterval(fetchExpenses, 30000) // Fase 5: Reduced from 5s to 30s — expenses rarely change in real-time
     return () => clearInterval(expInterval)
   }, [mounted, idFromUrl])
 

@@ -2,7 +2,6 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { redirect } from 'next/navigation'
 import OperatorDashboardClient from './OperatorDashboardClient'
-import OfflinePrefetcher from '@/components/OfflinePrefetcher'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,28 +25,14 @@ export default async function OperatorDashboard() {
     redirect('/admin/subcontratista')
   }
 
-  // Build URLs for offline prefetch
-  const prefetchUrls = [
-    '/admin/operador',
-    '/admin/operador/proyecto/offline-shell',
-    '/admin/operador/nuevo',
-    '/admin/calendario',
-    '/admin/inventario',
-    '/admin/cotizaciones',
-    '/admin/cotizaciones/nuevo',
-    '/admin/cotizaciones/offline',
-  ]
-
+  // Fase 9: Removed duplicated OfflinePrefetcher — AdminLayoutClient already handles prefetching
   return (
-    <>
-      <OfflinePrefetcher urls={prefetchUrls} />
-      <OperatorDashboardClient 
-        user={session.user}
-        activeProjects={[]}
-        activeDayRecord={null}
-        appointments={[]}
-        userViews={[]}
-      />
-    </>
+    <OperatorDashboardClient 
+      user={session.user}
+      activeProjects={[]}
+      activeDayRecord={null}
+      appointments={[]}
+      userViews={[]}
+    />
   )
 }

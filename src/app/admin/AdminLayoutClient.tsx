@@ -2,13 +2,17 @@
 
 import { usePathname, useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
-import GlobalSyncWorker from '@/components/GlobalSyncWorker'
 import ServiceWorkerRegistration from '@/components/ServiceWorkerRegistration'
 import { Suspense } from 'react'
+import dynamic from 'next/dynamic'
 
 import { useSession } from 'next-auth/react'
-import OfflinePrefetcher from '@/components/OfflinePrefetcher'
 import OfflineErrorBoundary from '@/components/OfflineErrorBoundary'
+
+// Fase 2: Dynamic import — these are invisible background workers (51KB + 1KB)
+// They don't affect visual render, so they load AFTER the UI paints
+const GlobalSyncWorker = dynamic(() => import('@/components/GlobalSyncWorker'), { ssr: false })
+const OfflinePrefetcher = dynamic(() => import('@/components/OfflinePrefetcher'), { ssr: false })
 import { useState, useEffect } from 'react'
 
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
@@ -116,7 +120,16 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
               </button>
             </div>
           )}
-          {children}
+          {/* Fase 1: Suspense boundary — Sidebar/Header/Footer render INSTANTLY,
+              page content shows skeleton while loading */}
+          <Suspense fallback={
+            <div style={{ padding: '24px' }}>
+              <div style={{ height: '28px', width: '220px', marginBottom: '20px', borderRadius: '8px', background: 'rgba(255,255,255,0.06)', animation: 'pulse 1.5s ease-in-out infinite' }} />
+              <div style={{ height: '180px', borderRadius: '12px', background: 'rgba(255,255,255,0.04)', animation: 'pulse 1.5s ease-in-out infinite', animationDelay: '0.2s' }} />
+            </div>
+          }>
+            {children}
+          </Suspense>
         </OfflineErrorBoundary>
       </main>
     </div>

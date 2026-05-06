@@ -1068,45 +1068,44 @@ export default function GlobalSyncWorker() {
       }, 25000) // Increased to 25s for the heavy bulk sync
     }
     
-    // v261: Reduced from 60s to 15s — this is the PRIMARY sync path when app is visible.
-    // When app goes to background, Android suspends this, but SW takes over.
-    const interval = setInterval(() => {
-        if (navigator.onLine) {
-            syncOutbox()
+    // Fase 8: MASTER SYNC LOOP
+    // Consolidates all background timers into one coordinated cycle to reduce CPU contention on mobile.
+    // Base cycle: 15 seconds.
+    let tickCount = 0;
+    const masterInterval = setInterval(() => {
+        if (!navigator.onLine) return;
+        
+        tickCount++;
+        
+        // 1. Every 15s: Primary Outbox Sync
+        syncOutbox();
+
+        // 2. Every 120s (8 ticks): Heartbeat
+        if (tickCount % 8 === 0) {
+            logSync('info', '🤖 Robot vivo — latido coordinado', 'heartbeat').catch(() => {});
         }
-    }, 15000) // 15 seconds for outbox sync (faster while app is active)
 
-    // v226: Periodic full refresh every 30 minutes
-    const bulkInterval = setInterval(() => {
-        if (navigator.onLine) {
-            startBulkSync() 
+        // 3. Every 240s (16 ticks): DB Keep-Alive Ping
+        if (tickCount % 16 === 0) {
+            fetch('/api/health/ping').catch(() => {});
         }
-    }, 30 * 60 * 1000) // v259: 30 mins to match freshness window
 
-    // v333: HEARTBEAT — Escribe un latido cada 30s para confirmar que el robot está vivo.
-    // Visible en /admin/debug/sync como "Robot vivo"
-    const heartbeatInterval = setInterval(() => {
-      logSync('info', '🤖 Robot vivo — latido periódico', 'heartbeat').catch(() => {});
-    }, 30000);
-    // Primer latido inmediato
-    logSync('success', '🤖 Robot v333 iniciado y funcionando', 'heartbeat');
-
-    // Keep-Alive Ping para base de datos (StackCP)
-    const keepAliveInterval = setInterval(() => {
-      if (navigator.onLine) {
-        fetch('/api/health/ping').catch(() => {})
-      }
-    }, 240000) // 4 minutos
+        // 4. Every 30 mins (120 ticks): Full Bulk Sync
+        if (tickCount % 120 === 0) {
+            startBulkSync();
+            tickCount = 0; // Reset counter
+        }
+    }, 15000);
     
+    // Primer latido inmediato
+    logSync('success', '🤖 Robot v333 (Consolidated) iniciado', 'heartbeat');
+
     return () => {
       window.removeEventListener('online', handleStatusChange)
       window.removeEventListener('offline', handleStatusChange)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('trigger-bulk-sync', handleManualSync)
-      clearInterval(interval)
-      clearInterval(bulkInterval)
-      clearInterval(heartbeatInterval)
-      clearInterval(keepAliveInterval)
+      clearInterval(masterInterval)
     }
   }, [])
 

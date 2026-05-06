@@ -1,9 +1,9 @@
 'use client'
 
-import { usePathname, useSearchParams } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { signOut, useSession } from 'next-auth/react'
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, memo } from 'react'
 import { hasModuleAccess } from '@/lib/rbac'
 import { useLocalStorage } from '@/hooks/useLocalStorage'
 import { useLiveQuery } from 'dexie-react-hooks'
@@ -150,9 +150,10 @@ const adminNavItems: NavSection[] = [
   },
 ]
 
-export default function Sidebar() {
+// Fase 7: memo() prevents re-renders from parent layout state changes
+export default memo(function Sidebar() {
   const pathname = usePathname()
-  const searchParams = useSearchParams()
+  // Fase 6: Removed unused useSearchParams() — was causing re-renders on every navigation
   const { data: session, status } = useSession()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [openMenus, setOpenMenus] = useLocalStorage<Record<string, boolean>>('sidebar_open_menus', {
@@ -557,7 +558,7 @@ export default function Sidebar() {
                             <Link
                               key={subItem.href}
                               href={subItem.href}
-                              prefetch={true}
+                              prefetch={false}
                               className={`sidebar-link ${isActive(subItem.href) ? 'active' : ''}`}
                               onClick={() => setMobileOpen(false)}
                               style={{ padding: '8px 12px', fontSize: '0.85rem' }}
@@ -571,7 +572,7 @@ export default function Sidebar() {
                   ) : (
                     <Link
                       href={item.href}
-                      prefetch={true}
+                      prefetch={false}
                       className={`sidebar-link ${isActive(item.href) ? 'active' : ''}`}
                       onClick={() => setMobileOpen(false)}
                     >
@@ -738,4 +739,4 @@ export default function Sidebar() {
       )}
     </>
   )
-}
+})

@@ -1,4 +1,4 @@
-const SW_VERSION = 'v340-cache-first';
+const SW_VERSION = 'v341-throttle';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1639,6 +1639,12 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
         }
       } catch (e) {}
 
+      // v341: Store item size to decide throttling later
+      let lastItemSize = 0;
+      if (item.payload?.media?.fileData) lastItemSize = item.payload.media.fileData.byteLength || 0;
+      else if (item.payload?.fileData) lastItemSize = item.payload.fileData.byteLength || 0;
+      else if (item.payload?.files) lastItemSize = item.payload.files.reduce((acc, f) => acc + (f.fileData?.byteLength || 0), 0);
+
       // v317: Phase 4 - Strict retry limit for production stability
       if (item.attempts >= 5) {
         console.warn(`[SW] Item ${item.id} (${item.type}) permanently failed after 5 attempts.`);
@@ -2200,8 +2206,10 @@ const uploadInChunksSW = async (blob, filename, subfolder = 'uploads', mimeType 
             }
           });
         }
-        // v261: Pacing delay between items to prevent server saturation
-        await new Promise(r => setTimeout(r, 500));
+        // v341: Dynamic Pacing Delay — Give more time to the UI after large uploads
+        // This is crucial to prevent "Network Error" crashes on mobile when navigating during sync.
+        const throttleTime = lastItemSize > 2 * 1024 * 1024 ? 1500 : 500;
+        await new Promise(r => setTimeout(r, throttleTime));
       }
 
         // v316: Enviar señal de fin de ciclo para que la UI se actualice (indicador verde)
