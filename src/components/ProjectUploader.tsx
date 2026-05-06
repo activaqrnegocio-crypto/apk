@@ -219,7 +219,8 @@ export default function ProjectUploader({
           display: 'flex', 
           flexDirection: 'column',
           width: '100%',
-          gap: '12px'
+          gap: '12px',
+          flex: 1
         }}>
           {/* v354: Offline Limit Warning Banner */}
           {typeof navigator !== 'undefined' && !navigator.onLine && (
@@ -231,7 +232,7 @@ export default function ProjectUploader({
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
-              marginBottom: '8px'
+              marginBottom: '4px'
             }}>
               <span style={{ fontSize: '20px' }}>⚠️</span>
               <div>
@@ -336,8 +337,9 @@ export default function ProjectUploader({
                   </button>
                 </>
               )}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
 
           <div 
             className="scrollbar-hide" 
