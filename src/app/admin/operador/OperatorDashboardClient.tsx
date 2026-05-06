@@ -382,6 +382,52 @@ export default function OperatorDashboardClient({
     setCurrentPage(1); // Reset page on search
   }, [searchTerm]);
 
+  // v352: Delete project — same 2-step modal as admin
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteStep, setDeleteStep] = useState(1);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [projectToDelete, setProjectToDelete] = useState<any>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const openDeleteModal = (project: any, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setProjectToDelete(project);
+    setDeleteStep(1);
+    setDeleteConfirmText('');
+    setShowDeleteModal(true);
+  };
+
+  const executeDelete = async () => {
+    if (!projectToDelete) return;
+    if (deleteConfirmText !== (projectToDelete.title || '')) return;
+    
+    setIsDeleting(true);
+    try {
+      if (projectToDelete.isPending) {
+        const numericId = Number(String(projectToDelete.id).replace('pending-', ''));
+        if (!isNaN(numericId)) {
+          await db.outbox.delete(numericId);
+        }
+      } else {
+        const res = await fetch(`/api/projects/${projectToDelete.id}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const data = await res.json();
+          alert(data.error || 'Error al eliminar');
+          return;
+        }
+        await db.projectsCache.delete(projectToDelete.id);
+      }
+    } catch (err) {
+      console.error('[OpDashboard] Delete failed:', err);
+      alert('Error de conexión al eliminar');
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteModal(false);
+      setProjectToDelete(null);
+    }
+  };
+
   const [selectedTask, setSelectedTask] = useState<any>(null)
 
   const canManageCalendar = hasModuleAccess(user, 'calendario')
@@ -938,9 +984,35 @@ export default function OperatorDashboardClient({
                         }
                       }}
                       className="card interactive" 
-                      style={{ textDecoration: 'none', display: 'flex', flexDirection: 'column', opacity: isPending ? 0.8 : 1, cursor: isPending ? 'default' : 'pointer' }}
+                      style={{ textDecoration: 'none', display: 'flex', flexDirection: 'column', opacity: isPending ? 0.8 : 1, cursor: isPending ? 'default' : 'pointer', position: 'relative' }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '15px' }}>
+                      {/* v352: Delete button — opens 2-step confirmation modal */}
+                      <button
+                        onClick={(e) => openDeleteModal(project, e)}
+                        title="Eliminar proyecto"
+                        style={{
+                          position: 'absolute',
+                          top: '8px',
+                          right: '8px',
+                          zIndex: 5,
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          color: '#ef4444',
+                          width: '28px',
+                          height: '28px',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '0.8rem',
+                          opacity: 1,
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        ✕
+                      </button>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '15px', paddingRight: '30px' }}>
                         {isPending ? (
                           <span style={{ backgroundColor: 'rgba(245, 158, 11, 0.9)', color: 'white', padding: '4px 10px', borderRadius: '8px', fontSize: '0.7rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -1142,6 +1214,63 @@ export default function OperatorDashboardClient({
       )}
       
 
+
+      {/* v352: DELETE PROJECT MODAL — same 2-step confirmation as admin */}
+      {showDeleteModal && projectToDelete && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div className="card" style={{ maxWidth: '500px', width: '100%', padding: '40px', border: '1px solid rgba(239, 68, 68, 0.4)', textAlign: 'center' }}>
+            {deleteStep === 1 ? (
+              <>
+                <div style={{ width: '80px', height: '80px', borderRadius: '50%', backgroundColor: 'rgba(239, 68, 68, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 25px auto', color: 'var(--danger)' }}>
+                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                </div>
+                <h3 style={{ fontSize: '1.5rem', marginBottom: '15px' }}>¿Eliminar este proyecto?</h3>
+                <p style={{ color: 'var(--text-muted)', lineHeight: '1.6', marginBottom: '30px' }}>
+                  Estás a punto de borrar <strong>{projectToDelete.title}</strong>.<br/> Todos los datos asociados se destruirán de forma inmediata e irreversible.
+                  {projectToDelete.isPending && <><br/><span style={{ color: '#f59e0b', fontSize: '0.85rem' }}>(Proyecto pendiente de sincronización — se eliminará del dispositivo)</span></>}
+                </p>
+                <div style={{ display: 'flex', gap: '15px' }}>
+                  <button onClick={() => { setShowDeleteModal(false); setProjectToDelete(null); }} style={{ flex: 1, padding: '14px', borderRadius: '10px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'white', cursor: 'pointer' }}>Cancelar</button>
+                  <button onClick={() => setDeleteStep(2)} style={{ flex: 1, padding: '14px', borderRadius: '10px', backgroundColor: 'var(--danger)', border: 'none', color: 'white', fontWeight: 'bold', cursor: 'pointer' }}>Entiendo, continuar</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 style={{ fontSize: '1.3rem', marginBottom: '15px' }}>Verificación Final</h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginBottom: '20px' }}>
+                  Para confirmar la eliminación, escribe el nombre del proyecto:
+                </p>
+                <div style={{ backgroundColor: 'rgba(255,255,255,0.05)', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontWeight: 'bold', color: 'var(--primary)', letterSpacing: '0.5px' }}>
+                  {projectToDelete.title}
+                </div>
+                <input 
+                  type="text" 
+                  autoFocus
+                  placeholder="Escribe el nombre aquí..."
+                  value={deleteConfirmText}
+                  onChange={e => setDeleteConfirmText(e.target.value)}
+                  style={{ width: '100%', padding: '15px', backgroundColor: 'var(--bg-deep)', border: `2px solid ${deleteConfirmText === projectToDelete.title ? 'var(--success)' : 'var(--border-color)'}`, borderRadius: '10px', color: 'white', textAlign: 'center', fontSize: '1.1rem', marginBottom: '25px', outline: 'none' }}
+                />
+                <div style={{ display: 'flex', gap: '15px' }}>
+                  <button 
+                    onClick={() => { setDeleteStep(1); setDeleteConfirmText(''); }} 
+                    style={{ flex: 1, padding: '14px', borderRadius: '10px', background: 'var(--bg-surface)', border: '1px solid var(--border-color)', color: 'white', cursor: 'pointer' }}
+                  >
+                    Atrás
+                  </button>
+                  <button 
+                    onClick={executeDelete}
+                    disabled={isDeleting || deleteConfirmText !== projectToDelete.title}
+                    style={{ flex: 1, padding: '14px', borderRadius: '10px', backgroundColor: deleteConfirmText === projectToDelete.title ? 'var(--danger)' : 'rgba(239, 68, 68, 0.3)', border: 'none', color: 'white', fontWeight: 'bold', cursor: deleteConfirmText === projectToDelete.title ? 'pointer' : 'not-allowed', opacity: deleteConfirmText === projectToDelete.title ? 1 : 0.6 }}
+                  >
+                    {isDeleting ? 'Eliminando...' : 'BORRAR TODO'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .tab-badge {

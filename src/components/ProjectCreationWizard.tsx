@@ -9,6 +9,7 @@ import MediaCapture from '@/components/MediaCapture'
 import BudgetBuilder, { BudgetItem } from '@/components/BudgetBuilder'
 import { generateProfessionalPDF } from '@/lib/pdf-generator'
 import { useLocalStorage } from '@/hooks/useLocalStorage'
+import { useDexieDraft } from '@/hooks/useDexieDraft'
 import { PROJECT_TYPES, translateType, PROJECT_CATEGORIES, translateCategory } from '@/lib/constants'
 import { db } from '@/lib/db'
 import CameraCapture from '@/components/camera/CameraCapture'
@@ -170,7 +171,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
   }, [])
 
   // Step 6+: Files (Persistent)
-  const [uploadedFiles, setUploadedFiles, removeFiles] = useLocalStorage<ProjectFile[]>('project_draft_files', [])
+  const [uploadedFiles, setUploadedFiles, removeFiles] = useDexieDraft<ProjectFile[]>('project_draft_files', [])
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
   const [showGallery, setShowGallery] = useState(false)
   const [showCameraCapture, setShowCameraCapture] = useState(false)

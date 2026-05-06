@@ -80,6 +80,7 @@ export class OfflineDatabase extends Dexie {
   cacheMetadata!: Table<CacheMetadata>;
   usersCache!: Table<UserCache>;
   syncLogs!: Table<SyncLog>;
+  drafts!: Table<{ key: string; value: any }>;
 
 
   constructor() {
@@ -183,6 +184,23 @@ export class OfflineDatabase extends Dexie {
       cacheMetadata: 'id',
       usersCache: 'id, name, role',
       syncLogs: '++id, timestamp, level, type'
+    });
+    // v16: drafts table — stores File objects (IndexedDB structured clone)
+    this.version(16).stores({
+      outbox: '++id, projectId, status, timestamp, type, attempts',
+      auth: 'id',
+      authShadow: 'id',
+      materialsCache: 'id, code, name, category',
+      clientsCache: 'id, name, ruc',
+      quotesCache: 'id, clientName, projectId',
+      projectsCache: 'id, title, lastAccessedAt',
+      appointmentsCache: 'id, projectId, userId',
+      chatCache: 'projectId',
+      dashboardCache: 'id',
+      cacheMetadata: 'id',
+      usersCache: 'id, name, role',
+      syncLogs: '++id, timestamp, level, type',
+      drafts: 'key'  // key-value store for wizard drafts, preserves File objects (structured clone)
     });
 
   }

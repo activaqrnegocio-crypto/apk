@@ -1866,6 +1866,24 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 }), getUploadTimeout(blob.size));
                 if (!res.ok) throw new Error(`Bunny upload failed status ${res.status}`);
                 const finalUrl = `${config.pullZoneUrl}/${folderPath}/${timestamp}-${safeName}`;
+                
+                // v352fix: Verify the uploaded file size matches the original blob.
+                // If sizes don't match, the upload was truncated — throw to trigger retry.
+                try {
+                  const headCheck = await fetchWithTimeout(new Request(finalUrl, { method: 'HEAD' }), 15000);
+                  if (headCheck.ok) {
+                    const contentLength = parseInt(headCheck.headers.get('Content-Length') || '0', 10);
+                    if (contentLength > 0 && Math.abs(contentLength - blob.size) > 1024) {
+                      console.error(`[SW] SIZE MISMATCH after upload! Expected ${blob.size}, got ${contentLength}. Retrying...`);
+                      throw new Error(`Upload size mismatch: expected ${blob.size}, got ${contentLength}`);
+                    }
+                    console.log(`[SW] Verified upload: ${(contentLength/1024/1024).toFixed(1)}MB matches original`);
+                  }
+                } catch (checkErr) {
+                  if (checkErr.message?.includes('size mismatch') || checkErr.message?.includes('SIZE MISMATCH')) throw checkErr;
+                  console.warn('[SW] Could not verify upload size (non-fatal):', checkErr.message);
+                }
+                
                 return finalUrl;
               } catch (e) {
                 console.error('[SW] uploadMediaSW failed:', e.message);
