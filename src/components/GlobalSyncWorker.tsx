@@ -575,8 +575,22 @@ export default function GlobalSyncWorker() {
         if ((currentItem.attempts || 0) >= 5) {
           const minsSinceLastAttempt = (Date.now() - (currentItem.lastAttemptAt || currentItem.timestamp || 0)) / 60000;
           if (minsSinceLastAttempt < 5) {
-            // console.warn(`[Sync] Skipping item ${item.id} after 5 failed attempts (cooling down)`);
             continue;
+          }
+          // v373: After 5+ attempts for media uploads, validate that file data still exists.
+          // If the binary payload is gone (corrupted/GC'd), mark as permanently failed.
+          const isMediaType = currentItem.type === 'GALLERY_UPLOAD' || currentItem.type === 'MEDIA_UPLOAD';
+          if (isMediaType && (currentItem.attempts || 0) >= 8) {
+            const p = currentItem.payload || {};
+            const hasValidData = !!(p.fileData || p.file || p.media?.fileData || p.media?.base64 || 
+              (p.url && !p.url.startsWith('blob:') && !p.url.startsWith('data:') && p.url.startsWith('http')) ||
+              (p.media?.url && !p.media.url.startsWith('blob:') && p.media.url.startsWith('http')));
+            if (!hasValidData) {
+              console.warn(`[Sync] ⛔ Permanently failing media item ${item.id} — file data lost after ${currentItem.attempts} attempts`);
+              await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
+              await logSync('error', `⛔ Descartado: ${item.type} #${item.id} — datos del archivo perdidos`, item.type);
+              continue;
+            }
           }
         }
 
@@ -718,8 +732,18 @@ export default function GlobalSyncWorker() {
 
               delete finalPayload.file;
             } catch (err) {
-              // console.error('Failed single media upload:', err);
-              await db.outbox.update(item.id!, { status: 'pending' });
+              console.error(`[Sync] Failed media upload for ${item.type} #${item.id}:`, err instanceof Error ? err.message : err);
+              // v373: Increment attempts on media failure so cooldown logic works.
+              // Previously this just set 'pending' without tracking attempts → infinite loop.
+              const currentAttempts = (item.attempts || 0) + 1;
+              await db.outbox.update(item.id!, { 
+                status: currentAttempts >= 8 ? 'failed' : 'pending',
+                attempts: currentAttempts,
+                lastAttemptAt: Date.now(),
+                failReason: currentAttempts >= 8 ? 'UPLOAD_FAILED' : undefined
+              });
+              if (ctx) failedContexts.add(ctx);
+              await logSync('warn', `⚠ Media upload falló: ${item.type} #${item.id} (intento ${currentAttempts}/8)`, item.type);
               continue;
             }
           }

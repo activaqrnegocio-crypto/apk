@@ -366,7 +366,7 @@ export default function ProjectChatUnified({
             </button>
           )}
            <div className="project-avatar">
-              {project.title.substring(0, 2).toUpperCase()}
+              {project?.title?.substring(0, 2).toUpperCase() || 'AQ'}
            </div>
            <div className="project-info">
              <h1>{project.title}</h1>

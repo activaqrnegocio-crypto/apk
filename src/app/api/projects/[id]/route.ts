@@ -19,7 +19,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         team: { include: { user: true } },
         gallery: { 
           orderBy: { createdAt: 'desc' },
-          take: 30 // Initial limit for speed
+          take: 150 // v373: Increased from 30 to prevent inconsistent file counts in gallery
         },
         expenses: { 
           include: { user: true }, 

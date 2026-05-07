@@ -187,20 +187,25 @@ export default function ProjectExecutionClient({
     }
   }, [project?.team])
 
-  // v372: Refresh gallery data after sync completes
+  // v373: Refresh gallery data using lightweight endpoint + merge strategy
   const refreshGallery = useCallback(async () => {
     if (!idFromUrl || typeof navigator === 'undefined' || !navigator.onLine) return;
     try {
-      const resp = await fetch(`/api/projects/${idFromUrl}?_t=${Date.now()}`, { cache: 'no-store' });
+      // v373: Use lightweight gallery-only endpoint instead of full project fetch
+      const resp = await fetch(`/api/projects/${idFromUrl}/gallery?_t=${Date.now()}`, { cache: 'no-store' });
       if (!resp.ok) return;
-      const data = await resp.json();
-      if (data?.gallery && Array.isArray(data.gallery)) {
-        // v372: Always set gallery — even if localProject is null (Dexie recovery pending)
+      const freshGallery = await resp.json();
+      if (Array.isArray(freshGallery)) {
         setLocalProject((prev: any) => {
-          if (prev) return { ...prev, gallery: data.gallery };
-          // If localProject is not yet recovered from Dexie, create a minimal object with gallery
-          // so the evidenceGallery doesn't show empty.
-          return { id: idFromUrl, gallery: data.gallery };
+          const existingGallery = prev?.gallery || [];
+          // v373: Merge strategy — use server data as source of truth but don't lose
+          // any items that exist locally but haven't been fetched yet (pagination edge case)
+          const serverIds = new Set(freshGallery.map((g: any) => g.id));
+          const localOnly = existingGallery.filter((g: any) => !serverIds.has(g.id));
+          const mergedGallery = [...freshGallery, ...localOnly];
+          
+          if (prev) return { ...prev, gallery: mergedGallery };
+          return { id: idFromUrl, gallery: mergedGallery };
         });
       }
     } catch(e) { /* silent */ }
@@ -663,36 +668,24 @@ export default function ProjectExecutionClient({
     return () => clearInterval(expInterval)
   }, [mounted, idFromUrl])
 
-  // v370: Refrescar galería si está vacía (post-recovery desde caché que no tenía gallery)
-  // v372: También se ejecuta periódicamente cada 30s para mantener galería actualizada
+  // v373: Refrescar galería periódicamente usando refreshGallery (lightweight + merge)
   useEffect(() => {
     if (!mounted || !idFromUrl || !navigator.onLine) return;
     
-    const fetchGallery = async () => {
-      try {
-        const resp = await fetch(`/api/projects/${idFromUrl}?_t=${Date.now()}`, { cache: 'no-store' });
-        if (!resp.ok) return;
-        const data = await resp.json();
-        if (data?.gallery && Array.isArray(data.gallery)) {
-          setLocalProject((prev: any) => {
-            if (prev) return { ...prev, gallery: data.gallery };
-            return { id: idFromUrl, gallery: data.gallery };
-          });
-        }
-      } catch(e) { /* silent */ }
-    };
-    
     // First fetch after 500ms (for post-recovery)
-    const initialTimer = setTimeout(fetchGallery, 500);
+    const initialTimer = setTimeout(refreshGallery, 500);
     
-    // v372: Periodic refresh every 30s to catch newly synced items
-    const periodicInterval = setInterval(fetchGallery, 30000);
+    // v373: Periodic refresh every 45s (increased from 30s to reduce network pressure during sync)
+    // v373: Skip refresh when outbox is actively syncing to prevent competing for network/memory
+    const periodicInterval = setInterval(() => {
+      if (navigator.onLine && !isSyncingGlobal) refreshGallery();
+    }, 45000);
     
     return () => {
       clearTimeout(initialTimer);
       clearInterval(periodicInterval);
     };
-  }, [mounted, idFromUrl]);
+  }, [mounted, idFromUrl, refreshGallery]);
 
   const allExpenses = useMemo(() => {
     let list = [...localExpenses]
@@ -781,8 +774,14 @@ export default function ProjectExecutionClient({
       } else if (p.fileData) {
         try {
           const data = p.fileData.buffer || p.fileData;
-          const blob = new Blob([data], { type: p.mimeType || 'image/jpeg' });
-          objUrl = URL.createObjectURL(blob);
+          // v373: Skip blob URL for large files (>5MB) to prevent OOM
+          const dataSize = data?.byteLength || data?.length || 0;
+          if (dataSize > 5 * 1024 * 1024) {
+            objUrl = '';
+          } else {
+            const blob = new Blob([data], { type: p.mimeType || 'image/jpeg' });
+            objUrl = URL.createObjectURL(blob);
+          }
         } catch(e) { console.warn("Failed to create preview blob", e); }
       }
 
@@ -837,8 +836,12 @@ export default function ProjectExecutionClient({
       } else if (m.fileData) {
         try {
           const data = m.fileData.buffer || m.fileData;
-          const blob = new Blob([data], { type: m.mimeType || 'image/jpeg' });
-          objUrl = URL.createObjectURL(blob);
+          // v373: Skip blob URL for large files (>5MB) to prevent OOM
+          const dataSize = data?.byteLength || data?.length || 0;
+          if (dataSize <= 5 * 1024 * 1024) {
+            const blob = new Blob([data], { type: m.mimeType || 'image/jpeg' });
+            objUrl = URL.createObjectURL(blob);
+          }
         } catch(e) {}
       }
 
@@ -894,8 +897,15 @@ export default function ProjectExecutionClient({
         try {
           // v321: Robust binary handling
           const rawData = p.fileData.buffer || p.fileData;
-          const blob = new Blob([rawData], { type: p.mimeType || 'image/jpeg' });
-          objUrl = URL.createObjectURL(blob);
+          // v373: Skip blob URL creation for large files (>5MB) to prevent OOM crashes.
+          // Large videos/photos pending sync don't need full previews — use placeholder.
+          const dataSize = rawData?.byteLength || rawData?.length || 0;
+          if (dataSize > 5 * 1024 * 1024) {
+            objUrl = ''; // Will fall through to placeholder below
+          } else {
+            const blob = new Blob([rawData], { type: p.mimeType || 'image/jpeg' });
+            objUrl = URL.createObjectURL(blob);
+          }
         } catch(e) {
           console.error("[UI] Failed to recreate blob preview:", e);
         }
@@ -911,6 +921,7 @@ export default function ProjectExecutionClient({
 
       return {
         id: `pending-ev-${item.id}`, 
+        outboxId: item.id, // v373: Keep real outbox ID for discard action
         url: objUrl || '/placeholder-image.png',
         filename: p.filename || 'Pendiente...', 
         mimeType: p.mimeType || 'image/jpeg',
@@ -918,6 +929,7 @@ export default function ProjectExecutionClient({
         isPending: syncStatus === 'pending',
         isSyncing: syncStatus === 'syncing',
         isFailed: syncStatus === 'failed',
+        failReason: (item as any).failReason || null, // v373: Why it failed
         syncStatus
       }
     })
@@ -2596,7 +2608,7 @@ export default function ProjectExecutionClient({
                             fontSize: '0.65rem',
                             flexShrink: 0
                           }}>
-                            {member.name?.substring(0, 2).toUpperCase()}
+                            {member.name?.substring(0, 2).toUpperCase() || 'U'}
                           </div>
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <div style={{ fontSize: '0.75rem', color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: '500' }}>{member.name}</div>
@@ -3026,13 +3038,28 @@ export default function ProjectExecutionClient({
                       {item.isFailed && (
                         <div style={{ 
                           position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, 
-                          background: 'linear-gradient(135deg, rgba(239,68,68,0.6), rgba(220,38,38,0.4))', 
+                          background: 'linear-gradient(135deg, rgba(239,68,68,0.7), rgba(220,38,38,0.5))', 
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           flexDirection: 'column', gap: '4px',
                           zIndex: 30
                         }}>
                           <span style={{ fontSize: '1.2rem' }}>❌</span>
-                          <span style={{ fontSize: '0.65rem', fontWeight: 'bold', color: 'white', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Falló</span>
+                          <span style={{ fontSize: '0.6rem', fontWeight: 'bold', color: 'white', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            {item.failReason === 'FILE_DATA_LOST' ? 'Archivo perdido' : item.failReason === 'UPLOAD_FAILED' ? 'Error de subida' : 'Falló'}
+                          </span>
+                          {/* v373: Discard button for permanently failed items */}
+                          {item.outboxId && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); db.outbox.delete(item.outboxId).catch(() => {}); }}
+                              style={{
+                                marginTop: '2px', padding: '3px 10px', fontSize: '0.55rem', fontWeight: '700',
+                                backgroundColor: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)',
+                                borderRadius: '12px', cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.5px'
+                              }}
+                            >
+                              Descartar
+                            </button>
+                          )}
                         </div>
                       )}
                       {item.isPending && (
@@ -3238,7 +3265,7 @@ export default function ProjectExecutionClient({
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div style={{ width: '28px', height: '28px', borderRadius: '50%', backgroundColor: 'var(--bg-deep)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', fontWeight: 'bold' }}>
-                          {op.name.substring(0, 2).toUpperCase()}
+                          {op.name?.substring(0, 2).toUpperCase() || 'OP'}
                         </div>
                         <div>
                           <div style={{ fontSize: '0.85rem', fontWeight: isSelected ? 'bold' : 'normal' }}>{op.name}</div>

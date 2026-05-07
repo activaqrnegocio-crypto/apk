@@ -12,6 +12,7 @@ export interface OutboxItem {
   attempts?: number;
   syncId?: string;
   lastAttemptAt?: number;
+  failReason?: string; // v373: Motivo del fallo permanente
 }
 
 export interface AuthCache {

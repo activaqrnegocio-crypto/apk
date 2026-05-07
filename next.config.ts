@@ -52,6 +52,10 @@ const config: NextConfig = {
       },
     ];
   },
+  // v373: Silence Next.js 16 Turbopack/webpack conflict error.
+  // The next-pwa wrapper injects a webpack config internally, but Next 16 defaults to Turbopack.
+  // An empty turbopack config tells Next.js we're aware and it's intentional.
+  turbopack: {},
   experimental: {
     serverActions: {
       bodySizeLimit: '200mb',

@@ -19,7 +19,8 @@ export async function GET(
 
     const gallery = await prisma.projectGalleryItem.findMany({
       where: { projectId },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: 150 // v373: Match main API limit for consistency
     })
 
     return NextResponse.json(gallery)
