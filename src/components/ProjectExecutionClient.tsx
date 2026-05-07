@@ -626,6 +626,28 @@ export default function ProjectExecutionClient({
     return () => clearInterval(expInterval)
   }, [mounted, idFromUrl])
 
+  // v370: Refrescar galería si está vacía (post-recovery desde caché que no tenía gallery)
+  useEffect(() => {
+    if (!mounted || !idFromUrl || !navigator.onLine) return;
+    const hasGallery = (project?.gallery && project.gallery.length > 0) ||
+                       (localProject?.gallery && localProject.gallery.length > 0);
+    if (hasGallery) return; // Ya tenemos datos de galería
+    
+    const fetchGallery = async () => {
+      try {
+        const resp = await fetch(`/api/projects/${idFromUrl}?_t=${Date.now()}`, { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data?.gallery && Array.isArray(data.gallery)) {
+          setLocalProject((prev: any) => prev ? { ...prev, gallery: data.gallery } : prev);
+        }
+      } catch(e) { /* silent */ }
+    };
+    
+    const timer = setTimeout(fetchGallery, 500);
+    return () => clearTimeout(timer);
+  }, [mounted, idFromUrl, project?.gallery?.length, localProject?.gallery?.length]);
+
   const allExpenses = useMemo(() => {
     let list = [...localExpenses]
     pendingItems.filter((item: any) => item.type === 'EXPENSE').forEach((item: any) => {

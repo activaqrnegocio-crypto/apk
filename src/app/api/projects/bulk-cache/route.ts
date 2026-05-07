@@ -120,6 +120,20 @@ export async function GET(request: Request) {
           },
           orderBy: { createdAt: 'desc' },
           take: 15
+        },
+        // v370: Gallery items (planos, finales, evidencias) para visualización offline
+        // Sin esto, la galería siempre se carga desde cero al abrir el proyecto
+        gallery: {
+          select: {
+            id: true,
+            url: true,
+            filename: true,
+            mimeType: true,
+            sizeBytes: true,
+            category: true,
+            createdAt: true
+          },
+          orderBy: { createdAt: 'desc' }
         }
       },
       orderBy: { updatedAt: 'desc' }
