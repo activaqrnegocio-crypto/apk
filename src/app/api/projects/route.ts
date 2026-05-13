@@ -349,8 +349,18 @@ export async function POST(request: Request) {
         }).catch(() => {});
       }
 
-      return newProject
-    }, { timeout: 20000 })
+      // v400: Return full project with all relations so GlobalSyncWorker can cache it correctly
+      return await tx.project.findUnique({
+        where: { id: newProject.id },
+        include: {
+          gallery: true,
+          phases: { orderBy: { displayOrder: 'asc' } },
+          team: { include: { user: { select: { id: true, name: true, role: true, phone: true } } } },
+          client: true,
+          budgetItems: true
+        }
+      })
+    }, { timeout: 30000 })
 
     // 🔔 Notification: Notify assigned team members in background (Non-blocking)
     if (team && team.length > 0) {
@@ -369,7 +379,7 @@ export async function POST(request: Request) {
             '📊 Nuevo Proyecto Asignado',
             `Te asignaron al proyecto: ${title}`,
             `/admin/operador`,
-            `project-new-${project.id}`
+            `project-new-${project?.id}`
           ).catch(e => console.error('Push error:', e));
 
           // WhatsApp
@@ -390,8 +400,8 @@ export async function POST(request: Request) {
     notifyAdmins(
       '🆕 Nuevo Proyecto Creado',
       `${session.user.name} creó: ${title}`,
-      `/admin/proyectos/${project.id}`,
-      `new-project-${project.id}`
+      `/admin/proyectos/${project?.id}`,
+      `new-project-${project?.id}`
     ).catch(e => console.error('Admin notify error:', e));
 
     return NextResponse.json(project, { status: 201 })

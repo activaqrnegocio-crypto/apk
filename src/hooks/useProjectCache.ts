@@ -118,10 +118,12 @@ export function useProjectCache({
   // ─── Dexie Recovery Effect ───
   useEffect(() => {
     const numericId = Number(idFromUrl)
-    if (!numericId || numericId <= 0) return
+    const isPending = typeof idFromUrl === 'string' && idFromUrl.startsWith('pending-')
+    
+    if (!isPending && (!numericId || numericId <= 0)) return
 
     // Already have the correct project (not a skeleton)
-    if (project && Number(project.id) === numericId && !project.isSkeleton) {
+    if (project && (project.id === idFromUrl || Number(project.id) === numericId) && !project.isSkeleton) {
       setIsSyncingOffline(false)
       hasRecoveredRef.current = true
       return
@@ -144,19 +146,38 @@ export function useProjectCache({
           return true
         }
 
-        const cached = await db.projectsCache.get(idFromUrl) ||
-          (!isNaN(numericId) ? await db.projectsCache.get(numericId) : null)
+        let cached = null
+        if (isPending) {
+          // v400: Recover from outbox for newly created offline projects
+          const outboxId = Number(idFromUrl.replace('pending-', ''))
+          const outboxItem = await db.outbox.get(outboxId)
+          if (outboxItem && outboxItem.type === 'PROJECT') {
+            cached = {
+              ...outboxItem.payload,
+              id: idFromUrl,
+              isPending: true,
+              createdAt: new Date(outboxItem.timestamp).toISOString(),
+              updatedAt: new Date(outboxItem.timestamp).toISOString(),
+            }
+          }
+        } else {
+          cached = await db.projectsCache.get(idFromUrl) ||
+                   (!isNaN(numericId) ? await db.projectsCache.get(numericId) : null)
+        }
 
         if (cached && !cancelled) {
           // Normalize: IndexedDB may store older structures without 'user' object
           const normalizedProject = {
             ...cached,
             team: (cached.team || []).map((m: any) => {
+              // Handle both raw IDs (from outbox) and full objects (from cache)
+              const userId = typeof m === 'number' || typeof m === 'string' ? Number(m) : (m.userId || m.id || 0)
               const u = m.user || {};
               return {
                 ...m,
+                userId,
                 user: {
-                  id: u.id || m.userId || m.id || 0,
+                  id: u.id || userId,
                   name: u.name || m.name || 'Operador',
                   phone: u.phone || m.phone || ''
                 }

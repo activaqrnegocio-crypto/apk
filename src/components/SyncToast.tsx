@@ -117,10 +117,9 @@ export default function SyncToast() {
   if (toasts.length === 0) return null
 
   return (
-    <div style={{
+    <div className="sync-toast-container" style={{
       position: 'fixed',
-      bottom: '80px',
-      right: '16px',
+      bottom: '85px',
       zIndex: 99999,
       display: 'flex',
       flexDirection: 'column',
@@ -133,40 +132,46 @@ export default function SyncToast() {
           <div
             key={toast.id}
             onClick={() => removeToast(toast.id)}
+            className="sync-toast-item"
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: '10px',
-              padding: '10px 16px',
-              background: 'rgba(15, 23, 42, 0.95)',
+              padding: '12px 20px',
+              background: 'rgba(15, 23, 42, 0.98)',
               border: `1px solid ${color}44`,
-              borderLeft: `4px solid ${color}`,
-              borderRadius: '12px',
-              boxShadow: `0 8px 32px rgba(0,0,0,0.5), 0 0 20px ${color}22`,
-              backdropFilter: 'blur(12px)',
+              borderLeft: `5px solid ${color}`,
+              borderRadius: '16px',
+              boxShadow: `0 12px 40px rgba(0,0,0,0.6), 0 0 20px ${color}22`,
+              backdropFilter: 'blur(16px)',
               color: '#fff',
-              fontSize: '0.85rem',
-              fontWeight: 500,
+              fontSize: '0.9rem',
+              fontWeight: 600,
               cursor: 'pointer',
               pointerEvents: 'auto',
-              animation: 'syncToastIn 0.3s ease-out',
-              maxWidth: '320px',
-              minWidth: '200px',
+              maxWidth: '350px',
+              minWidth: '220px',
               transition: 'opacity 0.3s, transform 0.3s',
             }}
           >
-            <span style={{ fontSize: '1.2rem', flexShrink: 0 }}>{getIcon(toast.type)}</span>
-            <span style={{ flex: 1, lineHeight: 1.3 }}>{toast.label}</span>
+            <span style={{ fontSize: '1.3rem', flexShrink: 0 }}>{getIcon(toast.type)}</span>
+            <span style={{ flex: 1, lineHeight: 1.4 }}>{toast.label}</span>
             <button
               onClick={(e) => { e.stopPropagation(); removeToast(toast.id) }}
               style={{
-                background: 'none',
+                background: 'rgba(255,255,255,0.05)',
                 border: 'none',
-                color: 'rgba(255,255,255,0.4)',
+                color: 'rgba(255,255,255,0.6)',
                 cursor: 'pointer',
-                padding: '2px',
-                fontSize: '0.8rem',
+                padding: '6px',
+                borderRadius: '50%',
+                fontSize: '0.75rem',
                 flexShrink: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '24px',
+                height: '24px'
               }}
             >
               ✕
@@ -175,9 +180,34 @@ export default function SyncToast() {
         )
       })}
       <style>{`
-        @keyframes syncToastIn {
-          from { opacity: 0; transform: translateX(40px); }
-          to { opacity: 1; transform: translateX(0); }
+        .sync-toast-container {
+          right: 20px;
+          align-items: flex-end;
+        }
+        .sync-toast-item {
+          animation: syncToastInDesktop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes syncToastInDesktop {
+          from { opacity: 0; transform: translateX(50px) scale(0.9); }
+          to { opacity: 1; transform: translateX(0) scale(1); }
+        }
+        @keyframes syncToastInMobile {
+          from { opacity: 0; transform: translateY(20px) scale(0.9); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @media (max-width: 768px) {
+          .sync-toast-container {
+            left: 50% !important;
+            right: auto !important;
+            transform: translateX(-50%);
+            width: calc(100% - 32px) !important;
+            max-width: 350px;
+            align-items: center;
+          }
+          .sync-toast-item {
+            width: 100%;
+            animation: syncToastInMobile 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+          }
         }
       `}</style>
     </div>

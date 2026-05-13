@@ -35,18 +35,42 @@ export function useProjectActions({
       const syncId = generateSyncId()
       const payload = { ...updatedData, syncId }
 
-      // Optimistic Update
-      setLocalProject((prev: any) => ({ ...prev, ...updatedData }))
+      // Optimistic Update UI + Cache
+      const idStr = String(project.id)
+      const isPending = idStr.startsWith('pending-')
+      const numericId = Number(project.id)
 
-      if (typeof navigator !== 'undefined' && navigator.onLine) {
+      if (!isPending && !isNaN(numericId) && numericId > 0) {
+        // Persist to Dexie immediately using update (partial)
+        db.projectsCache.update(numericId, { 
+          ...updatedData, 
+          lastAccessedAt: Date.now() 
+        }).catch(() => {})
+      }
+
+      setLocalProject((prev: any) => {
+        const base = prev || project || {};
+        return { ...base, ...updatedData };
+      })
+
+      if (!isPending && typeof navigator !== 'undefined' && navigator.onLine) {
         const res = await fetch(`/api/projects/${project.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         })
         if (!res.ok) throw new Error('Failed to save project')
+      } else if (isPending) {
+        // v400: Update existing outbox item for pending project
+        const outboxId = Number(idStr.replace('pending-', ''))
+        const item = await db.outbox.get(outboxId)
+        if (item) {
+          await db.outbox.update(outboxId, {
+            payload: { ...item.payload, ...updatedData }
+          })
+        }
       } else {
-        // Offline
+        // Offline regular project
         await db.outbox.add({
           type: 'PROJECT_UPDATE',
           projectId: project.id,
@@ -86,23 +110,50 @@ export function useProjectActions({
           phone: op.phone 
         }))
       
-      setLocalProject((prev: any) => ({ ...prev, team: newTeam }))
+      // Optimistic Update UI + Cache
+      const idStr = String(project.id)
+      const isPending = idStr.startsWith('pending-')
+      const numericId = Number(project.id)
 
-      if (typeof navigator !== 'undefined' && navigator.onLine) {
+      if (!isPending && !isNaN(numericId) && numericId > 0) {
+        db.projectsCache.update(numericId, { 
+          team: newTeam, 
+          lastAccessedAt: Date.now() 
+        }).catch(() => {})
+      }
+
+      setLocalProject((prev: any) => {
+        const base = prev || project || {};
+        return { ...base, team: newTeam };
+      })
+
+      if (!isPending && typeof navigator !== 'undefined' && navigator.onLine) {
         const res = await fetch(`/api/projects/${project.id}/team`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         })
         if (!res.ok) throw new Error('Failed to update team')
+      } else if (isPending) {
+        // v400: Update existing outbox item for pending project
+        const outboxId = Number(idStr.replace('pending-', ''))
+        const item = await db.outbox.get(outboxId)
+        if (item) {
+          // Team in PROJECT outbox is under payload.team (array of strings/ids)
+          await db.outbox.update(outboxId, {
+            payload: { ...item.payload, team: operatorIds }
+          })
+        }
       } else {
-        // Offline
+        // Offline regular project
+        const syncId = generateSyncId()
         await db.outbox.add({
           type: 'TEAM_UPDATE',
           projectId: project.id,
           payload: payload,
           timestamp: Date.now(),
-          status: 'pending'
+          status: 'pending',
+          syncId
         })
         triggerBackgroundSync()
       }

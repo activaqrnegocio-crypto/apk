@@ -1479,8 +1479,14 @@ export default function OperatorDashboardClient({
       {/* Sync Notification Toast */}
       {syncNotification && (
         <div 
-          className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[1000] animate-bounce-in"
-          style={{ width: '90%', maxWidth: '400px' }}
+          className="fixed z-[10000] animate-bounce-in"
+          style={{ 
+            bottom: '100px', 
+            left: '50%', 
+            transform: 'translateX(-50%)',
+            width: 'calc(100% - 40px)', 
+            maxWidth: '400px' 
+          }}
         >
           <div className="bg-green-600 text-white p-4 rounded-2xl shadow-2xl flex items-center gap-4 border border-white/20 backdrop-blur-md">
             <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center text-xl">
@@ -1503,7 +1509,7 @@ export default function OperatorDashboardClient({
       <style jsx global>{`
         @keyframes bounce-in {
           0% { transform: translate(-50%, 100px); opacity: 0; }
-          60% { transform: translate(-50%, -20px); opacity: 1; }
+          60% { transform: translate(-50%, -15px); opacity: 1; }
           100% { transform: translate(-50%, 0); }
         }
         .animate-bounce-in { animation: bounce-in 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }

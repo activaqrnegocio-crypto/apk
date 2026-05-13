@@ -43,9 +43,13 @@ export default function OperatorHeader({ project, isOnline, mounted, localClient
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        <h2 style={{ fontSize: '1.2rem', fontWeight: 'bold', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{project.title}</h2>
+        <h2 style={{ fontSize: '1.2rem', fontWeight: 'bold', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {project?.title || (mounted ? 'Proyecto sin nombre' : 'Cargando...')}
+        </h2>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-          <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{project.clientName || project.client?.name || localClientName}</span>
+          <span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>
+            {project?.clientName || project?.client?.name || localClientName || 'Cliente no especificado'}
+          </span>
         </div>
       </div>
     </div>

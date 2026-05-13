@@ -297,9 +297,35 @@ export default function ProjectExecutionClient({
         }
       } catch (e) {}
     }
-    const expInterval = setInterval(fetchExpenses, 30000) // Fase 5: Reduced from 5s to 30s — expenses rarely change in real-time
-    return () => clearInterval(expInterval)
-  }, [mounted, idFromUrl])
+    const expInterval = setInterval(fetchExpenses, 30000)
+
+    // v400: Listen for background sync successes to refresh UI state
+    const handleSyncSuccess = (e: any) => {
+      const { type, projectId: syncProjectId } = e.detail;
+      if (Number(syncProjectId) === Number(idFromUrl)) {
+        if (type === 'TEAM_UPDATE' || type === 'PROJECT_UPDATE') {
+          // Re-fetch or at least clear skeleton flags if any
+          if (navigator.onLine) {
+            fetch(`/api/projects/${idFromUrl}`)
+              .then(r => r.json())
+              .then(data => {
+                if (data && !data.error) {
+                  setLocalProject(data);
+                  // Update cache too
+                  db.projectsCache.put({ ...data, lastAccessedAt: Date.now() }).catch(() => {});
+                }
+              }).catch(() => {});
+          }
+        }
+      }
+    };
+
+    window.addEventListener('sync-success' as any, handleSyncSuccess);
+    return () => {
+      clearInterval(expInterval)
+      window.removeEventListener('sync-success' as any, handleSyncSuccess);
+    }
+  }, [mounted, idFromUrl, setLocalProject])
 
   // v373: Refrescar galería periódicamente usando refreshGallery (lightweight + merge)
   useEffect(() => {

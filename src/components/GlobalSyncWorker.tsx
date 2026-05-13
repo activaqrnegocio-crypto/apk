@@ -1003,28 +1003,56 @@ export default function GlobalSyncWorker() {
                 hasSyncedAnything = true
                 await logSync('success', `✓ Sincronizado: ${item.type} #${item.id}`, item.type, `Proyecto ${item.projectId}`);
 
+                // v400: If this was a new PROJECT creation, update all other pending items 
+                // in outbox that reference the temporary ID (e.g. "pending-123")
+                if (item.type === 'PROJECT' && resData.id) {
+                  try {
+                    const tempId = `pending-${item.id}`;
+                    const relatedItems = await db.outbox.filter(oi => String(oi.projectId) === tempId).toArray();
+                    if (relatedItems.length > 0) {
+                      console.log(`[Sync] Mapping ${relatedItems.length} items from ${tempId} to real ID ${resData.id}`);
+                      for (const ri of relatedItems) {
+                        await db.outbox.update(ri.id!, { projectId: resData.id });
+                      }
+                    }
+                  } catch (mapErr) {
+                    console.warn('[Sync] Failed to map temporary IDs:', mapErr);
+                  }
+                }
+
                 // v400: Immediately cache synced PROJECT in IndexedDB so it appears
                 // in the operator's list without waiting for the next bulk-sync (15 min)
                 if (item.type === 'PROJECT' && resData.id) {
                   try {
                     const wizardPayload = item.payload || {};
-                    const teamData = (wizardPayload.team || []).map((tid: any) => ({
+                    // v400: Prioritize data from server (resData) but fallback to processed payload
+                    // resData now includes gallery, phases, team due to API update.
+                    const finalTeam = (resData.team && resData.team.length > 0) ? resData.team : (wizardPayload.team || []).map((tid: any) => ({
                       id: 0,
                       userId: Number(tid),
                       user: { id: Number(tid), name: 'Operador', role: 'OPERATOR', phone: '' }
                     }));
+
+                    const finalGallery = (resData.gallery && resData.gallery.length > 0) 
+                      ? resData.gallery 
+                      : (finalPayload.files || wizardPayload.files || []).map((f: any) => ({
+                          id: Math.random(),
+                          url: f.url || '',
+                          filename: f.filename || 'upload',
+                          mimeType: f.mimeType || 'image/jpeg'
+                        }));
                     
                     await db.projectsCache.put({
                       ...resData,
                       id: resData.id,
-                      createdBy: Number(session?.user?.id),
-                      team: teamData,
-                      client: wizardPayload.client || { name: '' },
-                      phases: (wizardPayload.phases || []).map((p: any, i: number) => ({
+                      createdBy: resData.createdBy || Number(session?.user?.id),
+                      team: finalTeam,
+                      client: resData.client || wizardPayload.client || { name: '' },
+                      phases: resData.phases || (wizardPayload.phases || []).map((p: any, i: number) => ({
                         id: 0, title: p.title, status: 'PENDIENTE', displayOrder: i + 1,
                         estimatedDays: p.estimatedDays || 0
                       })),
-                      gallery: (resData.gallery || wizardPayload.files || []),
+                      gallery: finalGallery,
                       isSkeleton: false,
                       lastAccessedAt: Date.now(),
                       chatMessages: [],
@@ -1339,7 +1367,18 @@ export default function GlobalSyncWorker() {
   if (!uploadProgress) return null;
 
   return (
-    <div className="fixed bottom-20 right-4 z-[9999] w-72 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="sync-progress-container fixed bottom-20 right-4 z-[9999] w-72 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <style>{`
+        @media (max-width: 768px) {
+          .sync-progress-container {
+            left: 50% !important;
+            right: auto !important;
+            transform: translateX(-50%);
+            width: calc(100% - 32px) !important;
+            max-width: 350px;
+          }
+        }
+      `}</style>
       <div className="bg-black/80 backdrop-blur-xl border border-white/10 p-5 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
         <div className="flex items-center justify-between mb-3">
           <div className="flex flex-col">
