@@ -233,8 +233,17 @@ export default function MediaCapture({
     let transcribedText = ''
     try {
       const formData = new FormData()
-      // Always send as audio for Groq/Whisper compatibility
-      formData.append('file', new File([audioBlob], 'audio.webm', { type: 'audio/webm' }))
+      
+      // Determine correct extension based on mime type
+      let ext = 'webm'
+      if (audioBlob.type.includes('mp4')) ext = 'm4a'
+      else if (audioBlob.type.includes('mpeg')) ext = 'mp3'
+      else if (audioBlob.type.includes('ogg')) ext = 'ogg'
+      else if (audioBlob.type.includes('wav')) ext = 'wav'
+      else if (audioBlob.type.includes('aac')) ext = 'aac'
+
+      console.log(`MediaCapture: Transcribing blob of type ${audioBlob.type} as audio.${ext}`)
+      formData.append('file', new File([audioBlob], `audio.${ext}`, { type: audioBlob.type }))
 
       const res = await fetch('/api/media/transcribe', {
         method: 'POST',
@@ -243,20 +252,22 @@ export default function MediaCapture({
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}))
-        console.error('Transcription response error:', errData)
-        throw new Error(errData.details || 'Transcription failed')
+        console.error('Transcription API error:', res.status, errData)
+        throw new Error(errData.details || errData.error || `Error ${res.status}: Falló la transcripción`)
       }
       
       const data = await res.json()
       transcribedText = data.text || ''
       setTranscription(transcribedText)
-    } catch (err) {
-      console.error('Transcription error:', err)
-      setTranscription('Error al transcribir.')
+    } catch (err: any) {
+      console.error('Transcription Error:', err)
+      setTranscription(`Error: ${err.message || 'No se pudo transcribir'}`)
     } finally {
       setIsProcessing(false)
-      // ALWAYS call onCapture with the ORIGINAL blob (video or audio) for gallery upload
-      onCapture(originalBlob, mode, transcribedText)
+      // ALWAYS call onCapture, but only with valid text or empty string if it failed
+      // We don't want to pass "Error: ..." as the transcription text to the parent
+      const finalText = transcribedText.startsWith('Error:') ? '' : transcribedText
+      onCapture(originalBlob, mode, finalText)
     }
   }
 

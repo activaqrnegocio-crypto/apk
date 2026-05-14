@@ -70,15 +70,17 @@ export async function POST(req: Request) {
           headers: { 'Authorization': `Bearer ${groqKey}` },
           body: fd
         })
+        
         if (res.ok) {
           const data = await res.json()
           transcribedText = data.text
           console.log('Transcription: Groq OK')
         } else {
-          console.warn('Transcription: Groq failed, status:', res.status)
+          const errorText = await res.text()
+          console.warn('Transcription: Groq failed, status:', res.status, 'body:', errorText.substring(0, 200))
         }
-      } catch (e) {
-        console.warn('Transcription: Groq error, trying fallback...')
+      } catch (e: any) {
+        console.warn('Transcription: Groq error:', e.message || e)
       }
     }
 
@@ -96,15 +98,17 @@ export async function POST(req: Request) {
           headers: { 'Authorization': `Bearer ${openRouterKey}` },
           body: fd
         })
+        
         if (res.ok) {
           const data = await res.json()
           transcribedText = data.text
           console.log('Transcription: OpenRouter OK')
         } else {
-          console.warn('Transcription: OpenRouter failed, status:', res.status)
+          const errorText = await res.text()
+          console.warn('Transcription: OpenRouter failed, status:', res.status, 'body:', errorText.substring(0, 200))
         }
-      } catch (e) {
-        console.warn('Transcription: OpenRouter error, trying Gemini...')
+      } catch (e: any) {
+        console.warn('Transcription: OpenRouter error:', e.message || e)
       }
     }
 
@@ -120,34 +124,45 @@ export async function POST(req: Request) {
           body: JSON.stringify({
             contents: [{
               parts: [
-                { inlineData: { mimeType: contentType, data: base64Audio } },
+                { inlineData: { mimeType: contentType === 'audio/webm' ? 'audio/mpeg' : contentType, data: base64Audio } },
                 { text: 'Transcribe este audio al español exactamente como se dice. Solo devuelve el texto transcrito, nada más.' }
               ]
             }]
           })
         })
+        
         if (res.ok) {
           const data = await res.json()
           transcribedText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null
           if (transcribedText) console.log('Transcription: Gemini OK')
         } else {
-          console.warn('Transcription: Gemini failed, status:', res.status)
+          const errorText = await res.text()
+          console.warn('Transcription: Gemini failed, status:', res.status, 'body:', errorText.substring(0, 200))
         }
-      } catch (e) {
-        console.warn('Transcription: Gemini error')
+      } catch (e: any) {
+        console.warn('Transcription: Gemini error:', e.message || e)
       }
     }
 
     // ========== RESULTADO ==========
     if (!transcribedText) {
-      console.error('Transcription: ALL SERVICES FAILED for audio size:', buffer.byteLength)
-      return NextResponse.json({ error: 'Todos los servicios de transcripción fallaron. Intenta de nuevo.' }, { status: 503 })
+      const keysConfigured = {
+        groq: !!groqKey,
+        openRouter: !!openRouterKey,
+        gemini: !!geminiKey
+      }
+      console.error('Transcription: ALL SERVICES FAILED. Config:', keysConfigured, 'Audio size:', buffer.byteLength)
+      return NextResponse.json({ 
+        error: 'Todos los servicios de transcripción fallaron.',
+        details: 'Verifica las API keys en el servidor.',
+        config: keysConfigured
+      }, { status: 503 })
     }
 
     return NextResponse.json({ text: transcribedText })
 
   } catch (error: any) {
     console.error('Transcription Route Error:', error)
-    return NextResponse.json({ error: 'Error interno del servidor' }, { status: 500 })
+    return NextResponse.json({ error: 'Error interno del servidor', details: error.message }, { status: 500 })
   }
 }

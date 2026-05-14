@@ -1113,7 +1113,13 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                               try {
                                 const isOnline = navigator.onLine;
                                 let url = '';
-                                let filename = `specs-audio-${Date.now()}.webm`;
+                                
+                                // Determine extension
+                                let ext = 'webm';
+                                if (blob.type.includes('mp4')) ext = 'm4a';
+                                else if (blob.type.includes('mpeg')) ext = 'mp3';
+                                
+                                let filename = `specs-audio-${Date.now()}.${ext}`;
 
                                 if (isOnline) {
                                   const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
@@ -1138,13 +1144,16 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                   url: url,
                                   size: blob.size,
                                   category: 'MASTER',
-                                  mimeType: 'audio/webm'
+                                  mimeType: blob.type || 'audio/webm'
                                 }
                                 setUploadedFiles(prev => [...prev, fileObj]);
-                                updateSpec('description', (projectData.technicalSpecs.description || '') + ' ' + text);
+                                
+                                // Only append if text is valid (not empty or error message)
+                                if (text && !text.includes('Error:')) {
+                                  updateSpec('description', (projectData.technicalSpecs.description || '') + (projectData.technicalSpecs.description ? ' ' : '') + text);
+                                }
                               } catch (err) {
                                 console.error('Error handling specs audio:', err);
-                                updateSpec('description', (projectData.technicalSpecs.description || '') + ' ' + text);
                               }
                             }} 
                           />
