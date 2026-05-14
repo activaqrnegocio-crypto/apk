@@ -138,11 +138,7 @@ export default function OperatorGalleryGrid({
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                   </div>
                 )}
-                {item.isRecentlySynced && (
-                  <div style={{ position: 'absolute', top: '8px', right: '8px', zIndex: 10, background: '#22c55e', color: 'white', padding: '4px', borderRadius: '50%', boxShadow: '0 2px 8px rgba(0,0,0,0.4)', display: 'flex' }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                  </div>
-                )}
+
                 {item.isPendingDelete && (
                   <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 11, background: 'rgba(239, 68, 68, 0.4)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div style={{ background: 'var(--danger)', color: 'white', padding: '4px 10px', borderRadius: '20px', fontSize: '0.65rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -209,12 +205,7 @@ export default function OperatorGalleryGrid({
                     )}
                   </div>
                 )}
-                {item.isRecentlySynced && (
-                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'linear-gradient(135deg, rgba(34,197,94,0.4), rgba(21,128,61,0.2))', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-                    <span style={{ fontSize: '1.2rem' }}>✅</span>
-                    <span style={{ fontSize: '0.65rem', fontWeight: 'bold', color: 'white', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sincronizado</span>
-                  </div>
-                )}
+
                 {item.isPending && (
                   <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
                     <span style={{ fontSize: '1.2rem' }}>🕒</span>

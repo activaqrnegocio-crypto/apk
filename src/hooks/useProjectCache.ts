@@ -142,7 +142,7 @@ export function useProjectCache({
         // v375: If we are Online and have real server data, don't overwrite with cache
         const isOnline = typeof navigator !== 'undefined' && navigator.onLine
         if (isOnline && initialProject && !initialProject.isSkeleton && Number(initialProject.id) === numericId) {
-          hasRecoveredRef.current = true // v375: Mark as recovered to stop polling
+          hasRecoveredRef.current = true
           return true
         }
 

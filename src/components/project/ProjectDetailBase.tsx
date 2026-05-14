@@ -280,7 +280,7 @@ export default function ProjectDetailBase({
         }
       })
 
-    const combined = [...baseFiles, ...expenseFiles, ...pendingUploads]
+    const combined = [...pendingUploads, ...baseFiles, ...expenseFiles]
     const seen = new Set()
     return combined.filter(item => {
       const uid = item.id;
@@ -342,7 +342,7 @@ export default function ProjectDetailBase({
         }
       })
 
-    const combined = [...base, ...pendingEvidence]
+    const combined = [...pendingEvidence, ...base]
     const seen = new Set()
     return combined.filter(item => {
       const uid = item.id;
@@ -1096,7 +1096,7 @@ export default function ProjectDetailBase({
 
     // --- OPTIMISTIC UI UPDATE (Igual que en el chat) ---
     const optimisticId = `temp-${syncId}`;
-    const tempMediaUrl = typeof file.url === 'string' && file.url.startsWith('blob:') ? file.url : (file.base64 || file.url);
+    const tempMediaUrl = typeof file.url === 'string' && file.url.startsWith('blob:') ? file.url : ((file as any).base64 || file.url);
     
     const optimisticItem = {
       id: optimisticId,
@@ -1289,22 +1289,29 @@ export default function ProjectDetailBase({
         });
         
         // --- LOCAL FEEDBACK ---
-        const newTeam = availableOperators
+        // v402: Include `user` sub-object for consistent format
+        const newTeam = operators
           .filter((op: any) => selectedTeam.includes(op.id))
-          .map((op: any) => ({ user: op }));
-        
+          .map((op: any) => ({
+            id: op.id,
+            userId: op.id,
+            name: op.name || 'Operador',
+            phone: op.phone,
+            user: { id: op.id, name: op.name || 'Operador', phone: op.phone, role: op.role || 'OPERATOR' }
+          }));
+
         setLocalProject((prev: any) => ({
           ...prev,
           team: newTeam,
           _pendingTeamSync: true
         }));
-        
+
         setIsEditingTeam(false)
         triggerBackgroundSync()
         return
       }
 
-      await fetch(`/api/projects/${project.id}/team`, {
+      const res = await fetch(`/api/projects/${project.id}/team`, {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
@@ -1312,17 +1319,35 @@ export default function ProjectDetailBase({
         },
         body: JSON.stringify({ operatorIds: selectedTeam })
       })
-      
-      const newTeam = availableOperators
-        .filter((op: any) => selectedTeam.includes(op.id))
-        .map((op: any) => ({ user: op }));
-      
-      setLocalProject((prev: any) => ({
-        ...prev,
-        team: newTeam,
-        _pendingTeamSync: false
-      }));
-      
+
+      if (!res.ok) throw new Error('Failed to update team')
+
+      // v403: Re-fetch fresh data from server to guarantee consistency
+      try {
+        const freshRes = await fetch(`/api/projects/${project.id}`, { cache: 'no-store' })
+        if (freshRes.ok) {
+          const freshProject = await freshRes.json()
+          if (freshProject?.id) {
+            setLocalProject((prev: any) => ({ ...(prev || project), ...freshProject, _pendingTeamSync: false }))
+            const numericId = Number(project.id)
+            if (!isNaN(numericId) && numericId > 0) {
+              db.projectsCache.put({ ...freshProject, _pendingTeamSync: false, lastAccessedAt: Date.now() }).catch(() => {})
+            }
+          }
+        }
+      } catch (_) {
+        // Fallback: use locally constructed team
+        const newTeam = operators
+          .filter((op: any) => selectedTeam.includes(op.id))
+          .map((op: any) => ({
+            id: op.id, userId: op.id, name: op.name || 'Operador', phone: op.phone,
+            user: { id: op.id, name: op.name || 'Operador', phone: op.phone, role: op.role || 'OPERATOR' }
+          }));
+        setLocalProject((prev: any) => ({ ...prev, team: newTeam, _pendingTeamSync: false }))
+      }
+
+      // v403: Kill Next.js client router cache so navigating back shows fresh data
+      router.refresh()
       setIsEditingTeam(false)
     } catch (e) {
       console.error('Error guardando equipo:', e);
@@ -3171,7 +3196,11 @@ export default function ProjectDetailBase({
             selectedTeam={selectedTeam}
             isEditingTeam={isEditingTeam}
             isSavingTeam={isSavingTeam}
-            onEdit={() => setIsEditingTeam(true)}
+            onEdit={() => {
+              // v402: Reset selection from current project state
+              setSelectedTeam((project?.team || []).map((t: any) => t.user?.id || t.id || t.userId))
+              setIsEditingTeam(true)
+            }}
             onCancel={() => setIsEditingTeam(false)}
             onSave={handleSaveTeam}
             onToggleMember={(id: number) => {

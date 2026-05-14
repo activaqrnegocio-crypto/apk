@@ -93,6 +93,24 @@ export default function ProjectExecutionClient({
   const [recentlySyncedItems, setRecentlySyncedItems] = useState<any[]>([]) // v400: Bridge for disappearing items
   const [optimisticUploads, setOptimisticUploads] = useState<any[]>([]) // v401: Optimistic UI for online uploads
 
+  // v402: Cache availableOperators for offline (mirrors admin pattern)
+  const cachedOperators = useLiveQuery(() => db.usersCache.toArray()) || [];
+  const resolvedOperators = useMemo(() => {
+    if (availableOperators && availableOperators.length > 0) return availableOperators;
+    return cachedOperators;
+  }, [availableOperators, cachedOperators]);
+
+  // Sync operators to cache when online
+  useEffect(() => {
+    if (availableOperators && availableOperators.length > 0) {
+      db.usersCache.bulkPut(availableOperators.map((u: any) => ({
+        id: u.id,
+        name: u.name,
+        role: u.role || 'OPERATOR'
+      }))).catch(() => {});
+    }
+  }, [availableOperators]);
+
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -485,18 +503,20 @@ export default function ProjectExecutionClient({
     })
     
     // v400: Include recently synced items that might not be in project.gallery yet
+    // v402: No longer mark as isRecentlySynced — show as normal gallery items
     const syncedGallery = recentlySyncedItems.filter(i => {
        const cat = (i.category || 'MASTER').toUpperCase();
        return (cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO') && 
-              !(project?.gallery || []).some((g: any) => g.filename === i.filename);
-    }).map(i => ({ ...i, isRecentlySynced: true }));
+              !(project?.gallery || []).some((g: any) => g.url === i.url || g.filename === i.filename);
+    });
 
     const optimisticMaster = optimisticUploads.filter((item: any) => {
       const cat = (item.category || '').toUpperCase()
       return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO'
     });
 
-    const list = [...baseFiles, ...expenseFiles, ...pendingGallery, ...syncedGallery, ...optimisticMaster]
+    // v403: Optimistic uploads go FIRST to match server order (createdAt DESC = newest first)
+    const list = [...optimisticMaster, ...syncedGallery, ...pendingGallery, ...baseFiles, ...expenseFiles]
     return list.filter((item: any) => {
       const url = (item.url || '').toLowerCase();
       const mime = (item.mimeType || '').toLowerCase();
@@ -509,7 +529,7 @@ export default function ProjectExecutionClient({
       if (galleryFilter === 'DOCS') return !isImage && !isVideo && !isAudio;
       return true;
     })
-  }, [project?.gallery, galleryFilter, localExpenses, pendingItems, optimisticUploads])
+  }, [project?.gallery, galleryFilter, localExpenses, pendingItems, optimisticUploads, recentlySyncedItems])
 
   const chatGallery = useMemo(() => {
     const pendingDeletions = (pendingItems || []).filter((i: any) => i.type === 'GALLERY_DELETE').map((i: any) => i.payload.galleryId);
@@ -626,18 +646,20 @@ export default function ProjectExecutionClient({
     })
 
     // v400: Include recently synced items for Evidence
+    // v402: No longer mark as isRecentlySynced — show as normal gallery items
     const syncedEvidence = recentlySyncedItems.filter(i => {
        const cat = (i.category || 'EVIDENCE').toUpperCase();
        return (cat === 'EVIDENCE' || cat === 'FINALES' || cat === 'ENTREGA' || cat === 'ENTREGA_FINAL' || cat === 'ADJUNTO' || cat === 'MASTER_FINAL') &&
-              !(project?.gallery || []).some((g: any) => g.filename === i.filename);
-    }).map(i => ({ ...i, isRecentlySynced: true }));
+              !(project?.gallery || []).some((g: any) => g.url === i.url || g.filename === i.filename);
+    });
 
     const optimisticEvidence = optimisticUploads.filter((item: any) => {
       const cat = (item.category || '').toUpperCase()
       return cat === 'EVIDENCE' || cat === 'FINALES' || cat === 'ENTREGA' || cat === 'ENTREGA_FINAL' || cat === 'ADJUNTO' || cat === 'MASTER_FINAL'
     });
 
-    const combinedList = [...list, ...pendingEvidence, ...syncedEvidence, ...optimisticEvidence]
+    // v403: Optimistic uploads go FIRST to match server order (createdAt DESC = newest first)
+    const combinedList = [...optimisticEvidence, ...syncedEvidence, ...pendingEvidence, ...list]
     const seen = new Set()
     const uniqueList = combinedList.filter(item => {
       const uid = item.id
@@ -659,7 +681,7 @@ export default function ProjectExecutionClient({
       if (evidenceFilter === 'DOCS') return !isImage && !isVideo && !isAudio;
       return true;
     })
-  }, [project?.gallery, evidenceFilter, pendingItems, optimisticUploads])
+  }, [project?.gallery, evidenceFilter, pendingItems, optimisticUploads, recentlySyncedItems])
 
   const costoExcedido = useMemo(() => {
     const tBudget = project?.estimatedBudget || 0
@@ -1286,9 +1308,19 @@ export default function ProjectExecutionClient({
           })
         })
         if (!res.ok) throw new Error('Refetch')
-        // Remove from optimistic as it's now synced (but might not appear in cache until revalidate, so we bridge it)
+        // v402: Remove from optimistic, bridge as normal item (no green overlay), then refresh from server
         setOptimisticUploads(prev => prev.filter(i => i.id !== optimisticId));
-        setRecentlySyncedItems(prev => [...prev, { ...optimisticItem, isPending: false }]);
+        const serverData = await res.json().catch(() => null);
+        setRecentlySyncedItems(prev => [...prev, {
+          id: serverData?.id || optimisticItem.id,
+          url: serverData?.url || optimisticItem.url,
+          filename: serverData?.filename || optimisticItem.filename,
+          mimeType: serverData?.mimeType || optimisticItem.mimeType,
+          category: optimisticItem.category,
+          isPending: false
+        }]);
+        // Immediately refresh gallery so server item replaces bridge item
+        refreshGallery();
       } catch (err) {
         setOptimisticUploads(prev => prev.filter(i => i.id !== optimisticId));
         await db.transaction('rw', db.outbox, async () => {
@@ -1970,16 +2002,17 @@ export default function ProjectExecutionClient({
                 <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '20px' }}>
                   <ProjectTeamSection 
                     project={project}
-                    operators={availableOperators}
+                    operators={resolvedOperators}
                     selectedTeam={selectedTeamIds}
                     isEditingTeam={isEditingTeam}
                     isSavingTeam={isSavingTeam}
                     onEdit={() => {
-                      setSelectedTeamIds((project?.team || []).map((t: any) => t.id || t.userId))
+                      // v402: Reset selection from current project team state
+                      setSelectedTeamIds((project?.team || []).map((t: any) => t.id || t.userId || t.user?.id))
                       setIsEditingTeam(true)
                     }}
                     onCancel={() => setIsEditingTeam(false)}
-                    onSave={() => handleSaveTeam(selectedTeamIds, availableOperators)}
+                    onSave={() => handleSaveTeam(selectedTeamIds, resolvedOperators)}
                     onToggleMember={(id: number) => {
                       setSelectedTeamIds(prev => prev.includes(id) ? prev.filter(mid => mid !== id) : [...prev, id])
                     }}

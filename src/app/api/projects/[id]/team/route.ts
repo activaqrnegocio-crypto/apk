@@ -5,6 +5,7 @@ import { authOptions } from '@/lib/auth'
 import { isAdmin } from '@/lib/rbac'
 import { notifyUser } from '@/lib/push'
 import { sendWhatsAppMessage } from '@/lib/whatsapp'
+import { revalidatePath } from 'next/cache'
 
 // v262: Cache for idempotency keys to prevent duplicate team updates
 const processedSyncIds = new Map<string, { timestamp: number }>();
@@ -100,6 +101,10 @@ export async function PUT(
         }
       }
     }
+
+    // v402: Force Next.js to purge cache for this project across all views
+    revalidatePath(`/admin/operador/proyecto/${projectId}`)
+    revalidatePath(`/admin/proyectos/${projectId}`)
 
     return NextResponse.json({ success: true, message: 'Equipo actualizado correctamente' })
   } catch (error) {
