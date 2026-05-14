@@ -30,6 +30,15 @@ let lastSyncExecution = 0;
 // v291: Separate throttle for heavy bulk sync to prevent constant re-triggering
 let lastBulkSyncAttempt = 0;
 
+/**
+ * v400: Exported helper to trigger outbox sync from anywhere
+ */
+export function triggerBackgroundSync() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('trigger-outbox-sync'));
+  }
+}
+
 export default function GlobalSyncWorker() {
   const { data: session } = useSession()
   const router = useRouter()
@@ -1299,10 +1308,15 @@ export default function GlobalSyncWorker() {
       startBulkSync([], undefined, e.detail?.force || false);
     };
 
+    const handleOutboxSyncEvent = () => {
+      syncOutbox();
+    };
+
     window.addEventListener('online', handleStatusChange)
     window.addEventListener('offline', handleStatusChange)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('trigger-bulk-sync', handleManualSync)
+    window.addEventListener('trigger-outbox-sync', handleOutboxSyncEvent)
     
     // Initial sync and cache refresh
     if (navigator.onLine) {
@@ -1360,6 +1374,7 @@ export default function GlobalSyncWorker() {
       window.removeEventListener('offline', handleStatusChange)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('trigger-bulk-sync', handleManualSync)
+      window.removeEventListener('trigger-outbox-sync', handleOutboxSyncEvent)
       clearInterval(masterInterval)
     }
   }, [])

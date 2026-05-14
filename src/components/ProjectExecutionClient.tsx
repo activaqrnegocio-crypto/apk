@@ -90,6 +90,7 @@ export default function ProjectExecutionClient({
   const [handleDownloadLoading, setHandleDownloadLoading] = useState<string | null>(null)
   const [isSendingMessage, setIsSendingMessage] = useState(false)
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
+  const [recentlySyncedItems, setRecentlySyncedItems] = useState<any[]>([]) // v400: Bridge for disappearing items
 
   const router = useRouter()
   const pathname = usePathname()
@@ -174,11 +175,28 @@ export default function ProjectExecutionClient({
     window.addEventListener('resize', checkSize)
     
     const handleSyncSuccess = (e: any) => {
-      if (e.detail?.projectId === idFromUrl) {
-        if (e.detail?.type === 'MESSAGE' || e.detail?.type === 'MEDIA_UPLOAD') {
-          // v400: Explicitly refresh gallery and chat when a sync success is detected
-          if (e.detail?.type === 'MEDIA_UPLOAD') refreshGallery()
-          if (e.detail?.type === 'MESSAGE') fetchMessages()
+      const { type, projectId: syncProjectId, payload, result } = e.detail;
+      if (syncProjectId === idFromUrl) {
+        // v400: Add to recently synced to prevent "disappearing" gap
+        if (type === 'MEDIA_UPLOAD' || type === 'GALLERY_UPLOAD' || type === 'MESSAGE') {
+          const syncedItem = {
+            id: `synced-${Date.now()}-${Math.random()}`,
+            url: result?.url || payload?.url || payload?.previewBase64,
+            filename: result?.filename || payload?.filename,
+            mimeType: result?.mimeType || payload?.mimeType,
+            category: result?.category || payload?.category,
+            isSynced: true,
+            timestamp: Date.now()
+          };
+          setRecentlySyncedItems(prev => [...prev, syncedItem]);
+          
+          // Auto-remove after 30s (should be indexed by then)
+          setTimeout(() => {
+             setRecentlySyncedItems(prev => prev.filter(i => i.id !== syncedItem.id));
+          }, 30000);
+
+          if (type === 'MEDIA_UPLOAD' || type === 'GALLERY_UPLOAD') refreshGallery()
+          if (type === 'MESSAGE') fetchMessages()
         }
       }
     }
@@ -464,7 +482,15 @@ export default function ProjectExecutionClient({
         syncStatus
       }
     })
-    const list = [...baseFiles, ...expenseFiles, ...pendingGallery]
+    
+    // v400: Include recently synced items that might not be in project.gallery yet
+    const syncedGallery = recentlySyncedItems.filter(i => {
+       const cat = (i.category || 'MASTER').toUpperCase();
+       return (cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO') && 
+              !(project?.gallery || []).some((g: any) => g.filename === i.filename);
+    }).map(i => ({ ...i, isRecentlySynced: true }));
+
+    const list = [...baseFiles, ...expenseFiles, ...pendingGallery, ...syncedGallery]
     return list.filter((item: any) => {
       const url = (item.url || '').toLowerCase();
       const mime = (item.mimeType || '').toLowerCase();
@@ -592,7 +618,15 @@ export default function ProjectExecutionClient({
         syncStatus
       }
     })
-    const combinedList = [...list, ...pendingEvidence]
+
+    // v400: Include recently synced items for Evidence
+    const syncedEvidence = recentlySyncedItems.filter(i => {
+       const cat = (i.category || 'EVIDENCE').toUpperCase();
+       return (cat === 'EVIDENCE' || cat === 'FINALES' || cat === 'ENTREGA' || cat === 'ENTREGA_FINAL' || cat === 'ADJUNTO' || cat === 'MASTER_FINAL') &&
+              !(project?.gallery || []).some((g: any) => g.filename === i.filename);
+    }).map(i => ({ ...i, isRecentlySynced: true }));
+
+    const combinedList = [...list, ...pendingEvidence, ...syncedEvidence]
     const seen = new Set()
     const uniqueList = combinedList.filter(item => {
       const uid = item.id
@@ -1762,7 +1796,18 @@ export default function ProjectExecutionClient({
                 top: isSmallScreen ? '0' : 'auto',
                 zIndex: 10
             }}>
-              <OperatorSyncBadge globalPending={globalPending} globalFailed={globalFailed} isSyncingGlobal={isSyncingGlobal} isSmallScreen={isSmallScreen} />
+              <OperatorSyncBadge 
+                globalPending={globalPending} 
+                globalFailed={globalFailed} 
+                isSyncingGlobal={isSyncingGlobal} 
+                isSmallScreen={isSmallScreen}
+                onSync={() => {
+                  triggerBackgroundSync();
+                  // Visual feedback
+                  refreshGallery();
+                  fetchMessages();
+                }} 
+              />
 
               {tabs.map(tab => (
                 <button

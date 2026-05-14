@@ -197,15 +197,18 @@ export default function SyncToast() {
         }
         @media (max-width: 768px) {
           .sync-toast-container {
-            left: 50% !important;
-            right: auto !important;
-            transform: translateX(-50%);
-            width: calc(100% - 32px) !important;
-            max-width: 350px;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 95px !important;
+            width: 100% !important;
+            max-width: none !important;
+            padding: 0 16px;
             align-items: center;
+            transform: none !important;
           }
           .sync-toast-item {
             width: 100%;
+            max-width: 380px;
             animation: syncToastInMobile 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
           }
         }

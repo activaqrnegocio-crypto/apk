@@ -363,7 +363,7 @@ export async function POST(request: Request) {
     }, { timeout: 30000 })
 
     // 🔔 Notification: Notify assigned team members in background (Non-blocking)
-    if (team && team.length > 0) {
+    if (project && team && team.length > 0) {
       const creatorId = Number(userId)
       prisma.user.findMany({
         where: { id: { in: team.map((id: any) => Number(id)) } },
@@ -379,7 +379,7 @@ export async function POST(request: Request) {
             '📊 Nuevo Proyecto Asignado',
             `Te asignaron al proyecto: ${title}`,
             `/admin/operador`,
-            `project-new-${project?.id}`
+            `project-new-${project.id}`
           ).catch(e => console.error('Push error:', e));
 
           // WhatsApp
