@@ -566,7 +566,7 @@ export default function ProjectChatUnified({
                      
                      {(m.mimeType?.startsWith('video/') || m.type === 'VIDEO' || (!m.mimeType && m.url?.match(/\.(mp4|mov|webm)$/i))) && (
                        <div className="media-preview video">
-                         <video src={m.url} controls preload="metadata" />
+                         <video src={`${m.url}#t=0.001`} controls preload="metadata" />
                        </div>
                      )}
                      
@@ -835,9 +835,11 @@ export default function ProjectChatUnified({
                           alt="Media"
                         />
                       ) : media.type === 'VIDEOS' ? (
-                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' }}>
-                           <Play size={32} />
-                           <video src={media.url} style={{ display: 'none' }} />
+                        <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' }}>
+                           <video src={`${media.url}#t=0.001`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7 }} preload="metadata" muted playsInline />
+                           <div style={{ position: 'relative', zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: '4px', display: 'flex' }}>
+                             <Play size={24} />
+                           </div>
                         </div>
                       ) : media.type === 'AUDIOS' ? (
                         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
@@ -948,10 +950,11 @@ export default function ProjectChatUnified({
               />
             ) : selectedPreviewMedia.mimeType?.startsWith('video/') || selectedPreviewMedia.type === 'VIDEOS' ? (
               <video 
-                src={selectedPreviewMedia.url} 
+                src={`${selectedPreviewMedia.url}#t=0.001`} 
                 controls 
                 autoPlay 
                 playsInline
+                preload="metadata"
                 style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: '12px', outline: 'none', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }} 
               />
             ) : selectedPreviewMedia.mimeType?.startsWith('audio/') || selectedPreviewMedia.type === 'AUDIOS' ? (

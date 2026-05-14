@@ -50,27 +50,67 @@ export function useCamera() {
 
   const takePhoto = useCallback((): Blob | null => {
     if (!videoRef.current) return null
+    const video = videoRef.current
     const canvas = document.createElement('canvas')
-    canvas.width = videoRef.current.videoWidth
-    canvas.height = videoRef.current.videoHeight
-    canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0)
     
+    const MAX_DIM = 1280
+    let width = video.videoWidth
+    let height = video.videoHeight
+    
+    if (width > MAX_DIM || height > MAX_DIM) {
+      if (width > height) {
+        height = Math.round((height * MAX_DIM) / width)
+        width = MAX_DIM
+      } else {
+        width = Math.round((width * MAX_DIM) / height)
+        height = MAX_DIM
+      }
+    }
+    
+    canvas.width = width
+    canvas.height = height
+    canvas.getContext('2d')?.drawImage(video, 0, 0, width, height)
+    
+    // Note: toBlob is async, this function will return null. Use takePhotoAsync instead.
     let blob: Blob | null = null
-    canvas.toBlob((b) => { blob = b }, 'image/jpeg', 0.92)
+    canvas.toBlob((b) => { blob = b }, 'image/jpeg', 0.8)
     return blob
   }, [])
 
   const takePhotoAsync = useCallback((): Promise<Blob> => {
     return new Promise((resolve, reject) => {
       if (!videoRef.current) return reject('Sin video')
+      const video = videoRef.current
       const canvas = document.createElement('canvas')
-      canvas.width = videoRef.current.videoWidth
-      canvas.height = videoRef.current.videoHeight
-      canvas.getContext('2d')?.drawImage(videoRef.current, 0, 0)
+      
+      const MAX_DIM = 1280
+      let width = video.videoWidth
+      let height = video.videoHeight
+      
+      if (width > MAX_DIM || height > MAX_DIM) {
+        if (width > height) {
+          height = Math.round((height * MAX_DIM) / width)
+          width = MAX_DIM
+        } else {
+          width = Math.round((width * MAX_DIM) / height)
+          height = MAX_DIM
+        }
+      }
+      
+      canvas.width = width
+      canvas.height = height
+      
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'medium'
+        ctx.drawImage(video, 0, 0, width, height)
+      }
+      
       canvas.toBlob((blob) => {
         if (blob) resolve(blob)
         else reject('Error al capturar foto')
-      }, 'image/jpeg', 0.92)
+      }, 'image/jpeg', 0.8)
     })
   }, [])
 

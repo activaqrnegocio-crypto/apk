@@ -486,7 +486,8 @@ export default function ProjectExecutionClient({
         isPending: syncStatus === 'pending',
         isSyncing: syncStatus === 'syncing',
         isFailed: syncStatus === 'failed',
-        syncStatus
+        syncStatus,
+        createdAt: new Date(item.timestamp || Date.now()).toISOString()
       }
     })
     
@@ -516,6 +517,10 @@ export default function ProjectExecutionClient({
       if (galleryFilter === 'AUDIOS') return isAudio;
       if (galleryFilter === 'DOCS') return !isImage && !isVideo && !isAudio;
       return true;
+    }).sort((a: any, b: any) => {
+      const dateA = new Date(a.createdAt || a.date || a.timestamp || 0).getTime()
+      const dateB = new Date(b.createdAt || b.date || b.timestamp || 0).getTime()
+      return dateB - dateA
     })
   }, [project?.gallery, galleryFilter, localExpenses, pendingItems, optimisticUploads, recentlySyncedItems])
 
@@ -629,7 +634,8 @@ export default function ProjectExecutionClient({
         isSyncing: syncStatus === 'syncing',
         isFailed: syncStatus === 'failed',
         failReason: (item as any).failReason || null, // v373: Why it failed
-        syncStatus
+        syncStatus,
+        createdAt: new Date(item.timestamp || Date.now()).toISOString()
       }
     })
 
@@ -656,8 +662,14 @@ export default function ProjectExecutionClient({
       return true
     })
 
-    if (evidenceFilter === 'ALL') return uniqueList
-    return uniqueList.filter((item: any) => {
+    const sortedUniqueList = uniqueList.sort((a: any, b: any) => {
+      const dateA = new Date(a.createdAt || a.date || a.timestamp || 0).getTime()
+      const dateB = new Date(b.createdAt || b.date || b.timestamp || 0).getTime()
+      return dateB - dateA
+    });
+
+    if (evidenceFilter === 'ALL') return sortedUniqueList
+    return sortedUniqueList.filter((item: any) => {
       const url = (item.url || '').toLowerCase();
       const mime = (item.mimeType || '').toLowerCase();
       const isImage = mime.startsWith('image/') || url.match(/\.(jpg|jpeg|png|gif|webp|heic|svg)$/);
@@ -1234,14 +1246,41 @@ export default function ProjectExecutionClient({
         return
       }
 
-      // Online path
-      galleryPayload.url = file.url;
+      // Online path — resolve blob: or raw File → base64 so the gallery API can upload to Bunny
+      let resolvedUrl = file.url;
+      const anyFileRef = file as any;
+      if (anyFileRef.file instanceof File || anyFileRef.file instanceof Blob) {
+        // Camera capture / file picker — raw File object available
+        resolvedUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target?.result as string);
+          reader.onerror = () => resolve(file.url); // fallback to original
+          reader.readAsDataURL(anyFileRef.file);
+        });
+      } else if (file.url && file.url.startsWith('blob:')) {
+        // Blob URL — fetch and convert
+        try {
+          const blobResp = await fetch(file.url);
+          const blob = await blobResp.blob();
+          resolvedUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target?.result as string);
+            reader.onerror = () => resolve(file.url);
+            reader.readAsDataURL(blob);
+          });
+        } catch { /* keep original url, API may handle it */ }
+      }
+      galleryPayload.url = resolvedUrl;
 
       // --- OPTIMISTIC UI UPDATE ---
       const optimisticId = `temp-${syncId}`;
+      // For the preview thumbnail we still use the original local blob/file URL (fast)
+      const previewUrl = anyFileRef.file instanceof File
+        ? URL.createObjectURL(anyFileRef.file)
+        : (file.url || resolvedUrl);
       const optimisticItem = {
         id: optimisticId,
-        url: file.url,
+        url: previewUrl,
         filename: galleryPayload.filename || file.filename || 'Archivo Multimedia',
         mimeType: galleryPayload.mimeType || file.mimeType,
         category: galleryPayload.category,

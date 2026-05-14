@@ -24,7 +24,7 @@ export default function ProjectTeamSection({
   // Sync local selection with project team when not editing
   useEffect(() => {
     if (!isEditing && project?.team) {
-      setSelectedIds(project.team.map((t: any) => t.id || t.userId || t.user?.id))
+      setSelectedIds(project.team.map((t: any) => t.userId || t.user?.id || t.id))
     }
   }, [project?.team, isEditing])
 
@@ -49,7 +49,11 @@ export default function ProjectTeamSection({
         }));
 
       // 2. ACTUALIZAR CACHÉ DEXIE AL INSTANTE (Para que al recargar siga ahí)
-      const numericId = Number(project.id)
+      let numericId = Number(project.id);
+      if (isNaN(numericId) && typeof project.id === 'string' && project.id.startsWith('pending-')) {
+        numericId = Number(project.id.replace('pending-', ''));
+      }
+      
       if (!isNaN(numericId) && numericId > 0) {
         await db.projectsCache.update(numericId, { 
           team: newTeam, 
@@ -78,7 +82,7 @@ export default function ProjectTeamSection({
 
         if (!isOnline) {
           await db.outbox.add({
-            projectId: numericId,
+            projectId: project.id,
             type: 'TEAM_UPDATE',
             payload,
             status: 'pending',
@@ -119,7 +123,7 @@ export default function ProjectTeamSection({
         } catch (e) {
           // Fallback a outbox si falla la red
           await db.outbox.add({
-            projectId: numericId,
+            projectId: project.id,
             type: 'TEAM_UPDATE',
             payload,
             status: 'pending',
@@ -163,10 +167,11 @@ export default function ProjectTeamSection({
             {(project?.team || []).map((member: any) => {
               const name = member.user?.name || member.name || 'Operador';
               const phone = member.user?.phone || member.phone || 'Sin número';
+              const memberUserId = member.userId || member.user?.id || member.id;
               const initials = name.substring(0,2).toUpperCase();
               
               return (
-                <div key={member.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px', backgroundColor: 'var(--bg-surface)', borderRadius: '8px' }}>
+                <div key={memberUserId} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px', backgroundColor: 'var(--bg-surface)', borderRadius: '8px' }}>
                   <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'var(--bg-card)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', fontWeight: 'bold' }}>
                     {initials}
                   </div>

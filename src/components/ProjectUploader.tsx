@@ -451,10 +451,17 @@ export default function ProjectUploader({
                   if (realMime.startsWith('image/')) {
                     return <img src={file.url} alt={fileName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
                   } else if (realMime.startsWith('video/')) {
+                    const rawFile = (file as any).file;
+                    const videoSrc = (rawFile instanceof File || rawFile instanceof Blob)
+                      ? URL.createObjectURL(rawFile)
+                      : file.url;
                     return (
-                      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
-                        <VideoIcon size={40} />
-                        <div style={{ position: 'absolute', bottom: '8px', left: '8px', background: 'rgba(0,0,0,0.5)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.6rem', color: 'white' }}>
+                      <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#000' }}>
+                        <video src={`${videoSrc}#t=0.001`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7 }} preload="metadata" muted playsInline />
+                        <div style={{ position: 'relative', zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: '4px', display: 'flex' }}>
+                          <VideoIcon size={24} />
+                        </div>
+                        <div style={{ position: 'absolute', bottom: '8px', left: '8px', background: 'rgba(0,0,0,0.5)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.6rem', color: 'white', zIndex: 2 }}>
                           {fileName}
                         </div>
                       </div>
@@ -520,11 +527,11 @@ export default function ProjectUploader({
                   : selectedFileForPreview.url;
                 return (
               <video 
-                src={videoSrc} 
+                src={`${videoSrc}#t=0.001`} 
                 controls 
                 autoPlay 
                 playsInline
-                preload="auto"
+                preload="metadata"
                 style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: '8px', outline: 'none' }}
                 onClick={(e) => e.stopPropagation()}
                 // v353fix: Do NOT revoke blob URL while video is playing!

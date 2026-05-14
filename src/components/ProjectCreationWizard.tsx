@@ -1195,7 +1195,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                         <div className="scrollbar-hide" style={{ display: 'flex', gap: '12px', overflowX: 'auto', paddingBottom: '5px' }}>
                           {uploadedFiles.map((f, idx) => (
                             <div 
-                              key={f.id || idx} 
+                              key={(f as any).id || idx} 
                               style={{ 
                                 flexShrink: 0, width: '80px', height: '80px', borderRadius: '12px', 
                                 overflow: 'hidden', position: 'relative', border: '2px solid var(--border)',

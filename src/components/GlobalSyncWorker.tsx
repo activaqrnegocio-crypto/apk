@@ -1080,11 +1080,57 @@ export default function GlobalSyncWorker() {
                 // v407: Clear pending sync flags for team/project updates
                 if (item.type === 'TEAM_UPDATE' && item.projectId) {
                   try {
-                    const numericId = Number(item.projectId);
+                    let numericId = Number(item.projectId);
+                    // For projects created offline, item.projectId might be e.g. "pending-123"
+                    if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
+                      numericId = Number(String(item.projectId).replace('pending-', ''));
+                    }
                     if (!isNaN(numericId)) {
                       await db.projectsCache.update(numericId, { _pendingTeamSync: false });
                     }
                   } catch (cacheErr) {}
+                }
+
+                // v409: Update projectsCache gallery for media uploads so they persist before reload
+                if ((item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD') && item.projectId) {
+                  try {
+                    let numericId = Number(item.projectId);
+                    if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
+                      numericId = Number(String(item.projectId).replace('pending-', ''));
+                    }
+                    if (!isNaN(numericId) && resData && resData.id) {
+                      const proj = await db.projectsCache.get(numericId);
+                      if (proj) {
+                        const newGallery = proj.gallery ? [...proj.gallery] : [];
+                        if (!newGallery.some(g => g.id === resData.id)) {
+                          newGallery.push(resData);
+                          // Maintain newest first sort order
+                          newGallery.sort((a, b) => new Date(b.createdAt || Date.now()).getTime() - new Date(a.createdAt || Date.now()).getTime());
+                          await db.projectsCache.update(numericId, { gallery: newGallery });
+                        }
+                      }
+                    }
+                  } catch (err) {}
+                }
+
+                if (item.type === 'MESSAGE' && item.projectId) {
+                  try {
+                    let numericId = Number(item.projectId);
+                    if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
+                      numericId = Number(String(item.projectId).replace('pending-', ''));
+                    }
+                    if (!isNaN(numericId) && resData && resData.id) {
+                      const proj = await db.projectsCache.get(numericId);
+                      if (proj) {
+                        const newMessages = proj.chatMessages ? [...proj.chatMessages] : [];
+                        if (!newMessages.some(m => m.id === resData.id)) {
+                          newMessages.push(resData);
+                          newMessages.sort((a, b) => new Date(a.createdAt || Date.now()).getTime() - new Date(b.createdAt || Date.now()).getTime());
+                          await db.projectsCache.update(numericId, { chatMessages: newMessages });
+                        }
+                      }
+                    }
+                  } catch (err) {}
                 }
                 if (typeof window !== 'undefined') {
                   const syncLabel = item.type === 'GALLERY_UPLOAD' ? 'Archivo subido a galería' :
@@ -1105,7 +1151,9 @@ export default function GlobalSyncWorker() {
                   window.dispatchEvent(new CustomEvent('sync-success', { detail: { 
                     type: item.type, 
                     projectId: eventProjectId, 
-                    label: syncLabel 
+                    label: syncLabel,
+                    payload: finalPayload,
+                    result: resData
                   } }))
                 }
               } else {
@@ -1119,6 +1167,17 @@ export default function GlobalSyncWorker() {
                  // Permanent client error (400, 403, 404) -> Drop it so it doesn't loop forever
                  await db.outbox.delete(item.id!)
                  await logSync('error', `✗ Descartado: ${item.type} #${item.id} (HTTP ${status})`, item.type);
+                 
+                 // Clear stuck sync flags
+                 if (item.type === 'TEAM_UPDATE' && item.projectId) {
+                   try {
+                     let numericId = Number(item.projectId);
+                     if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
+                       numericId = Number(String(item.projectId).replace('pending-', ''));
+                     }
+                     if (!isNaN(numericId)) await db.projectsCache.update(numericId, { _pendingTeamSync: false });
+                   } catch (err) {}
+                 }
                } else {
                  // Server errors (500+) -> mark as failed and increment attempts
                  if (ctx) failedContexts.add(ctx); // v272: block dependents
