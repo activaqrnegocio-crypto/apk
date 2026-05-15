@@ -539,7 +539,12 @@ export default function GlobalSyncWorker() {
           continue;
         }
         const stuckTime = now - item.lastAttemptAt;
-        if (stuckTime > 120000) { // Stuck for more than 2 minutes
+        // v440: Dynamic stuck threshold — scale with file size so large videos
+        // are not retried too early (which would cause duplicate uploads).
+        // Formula: max(120s, 3s per MB). A 200MB video: max(120, 600) = 10 min.
+        const stuckPayloadSize = item.payload?.sizeBytes || item.payload?.file?.size || 0;
+        const stuckThresholdMs = Math.max(120000, Math.ceil(stuckPayloadSize / (1024 * 1024)) * 3000);
+        if (stuckTime > stuckThresholdMs) {
           await db.outbox.update(item.id!, { status: 'pending' });
         }
       }
@@ -772,7 +777,6 @@ export default function GlobalSyncWorker() {
             } catch (err) {
               console.error(`[Sync] Failed media upload for ${item.type} #${item.id}:`, err instanceof Error ? err.message : err);
               // v373: Increment attempts on media failure so cooldown logic works.
-              // Previously this just set 'pending' without tracking attempts → infinite loop.
               const currentAttempts = (item.attempts || 0) + 1;
               await db.outbox.update(item.id!, { 
                 status: currentAttempts >= 8 ? 'failed' : 'pending',
@@ -780,7 +784,12 @@ export default function GlobalSyncWorker() {
                 lastAttemptAt: Date.now(),
                 failReason: currentAttempts >= 8 ? 'UPLOAD_FAILED' : undefined
               });
-              if (ctx) failedContexts.add(ctx);
+              // v440: GALLERY_UPLOAD and MEDIA_UPLOAD are INDEPENDENT items.
+              // A failed photo/video must NOT block other photos/videos of the same project.
+              // Only block if it's an ordered dependency type (PROJECT, DAY_START, etc.)
+              if (ctx && item.type !== 'GALLERY_UPLOAD' && item.type !== 'MEDIA_UPLOAD') {
+                failedContexts.add(ctx);
+              }
               await logSync('warn', `⚠ Media upload falló: ${item.type} #${item.id} (intento ${currentAttempts}/8)`, item.type);
               continue;
             }

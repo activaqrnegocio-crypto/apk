@@ -105,6 +105,13 @@ export async function uploadToBunnyClientSide(
   // which prevents browsers from doing Range requests (needed for streaming/seeking).
   const uploadContentType = processedMime || processedFile.type || 'application/octet-stream';
   
+  // v440: Dynamic timeout — prevents small/medium files from hanging indefinitely on bad connections.
+  // Formula: max(120s, 4s per MB). A 30MB video → 120s. A 45MB video → 180s.
+  const fileSizeMB = Math.ceil(processedFile.size / (1024 * 1024));
+  const directUploadTimeoutMs = Math.max(120000, fileSizeMB * 4000);
+  const directUploadController = new AbortController();
+  const directUploadTimeoutId = setTimeout(() => directUploadController.abort(), directUploadTimeoutMs);
+
   const response = await fetch(uploadUrl, {
     method: 'PUT',
     headers: {
@@ -112,7 +119,9 @@ export async function uploadToBunnyClientSide(
       'Content-Type': uploadContentType,
     },
     body: processedFile,
+    signal: directUploadController.signal,
   });
+  clearTimeout(directUploadTimeoutId);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -165,8 +174,15 @@ export async function uploadInChunks(
     let success = false;
     let attempts = 0;
 
+    // v440: Per-chunk timeout — max(60s, 2s per MB of chunk size).
+    // A 10MB chunk on a slow 100KB/s connection takes ~100s, but we give margin.
+    const chunkSizeMB = Math.ceil(chunk.size / (1024 * 1024));
+    const chunkTimeoutMs = Math.max(60000, chunkSizeMB * 2000);
+
     while (!success && attempts < 3) {
       attempts++;
+      const chunkController = new AbortController();
+      const chunkTimeoutId = setTimeout(() => chunkController.abort(), chunkTimeoutMs);
       try {
         const formData = new FormData();
         formData.append('chunk', chunk);
@@ -179,8 +195,10 @@ export async function uploadInChunks(
         const res = await fetch('/api/upload/chunk', {
           method: 'POST',
           body: formData,
-          priority: 'high' // v355: Priority for network
+          priority: 'high',
+          signal: chunkController.signal,
         });
+        clearTimeout(chunkTimeoutId);
 
         if (!res.ok) throw new Error(`Status ${res.status}`);
 
@@ -194,10 +212,12 @@ export async function uploadInChunks(
           return { url: data.url };
         }
       } catch (err) {
-        console.warn(`[Storage] Chunk ${i} attempt ${attempts} failed:`, err);
+        clearTimeout(chunkTimeoutId);
+        const isAbort = err instanceof Error && err.name === 'AbortError';
+        console.warn(`[Storage] Chunk ${i} attempt ${attempts} failed${isAbort ? ' (timeout)' : ''}:`, err);
         if (attempts >= 3) throw new Error(`Chunk ${i} failed after 3 attempts`);
-        // Wait 1s before retry
-        await new Promise(r => setTimeout(r, 1000));
+        // Wait 2s before retry (increased from 1s for network recovery)
+        await new Promise(r => setTimeout(r, 2000));
       }
     }
   }

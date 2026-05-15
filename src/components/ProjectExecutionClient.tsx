@@ -352,15 +352,44 @@ export default function ProjectExecutionClient({
     }
   }, [mounted, idFromUrl, setLocalProject])
 
-  // v373: Refrescar galería periódicamente usando refreshGallery (lightweight + merge)
+  // v440: On mount, immediately read from Dexie cache to show files synced while user was away.
+  // The Worker already updates db.projectsCache when it syncs a GALLERY_UPLOAD.
+  // Without this, the component waits 500ms then fetches from API (which can be stale).
   useEffect(() => {
-    if (!mounted || !idFromUrl || !navigator.onLine) return;
-    
-    // First fetch after 500ms (for post-recovery)
+    if (!mounted || !idFromUrl) return;
+
+    const applyDexieCache = async () => {
+      try {
+        const cached = await db.projectsCache.get(Number(idFromUrl));
+        if (cached?.gallery && cached.gallery.length > 0) {
+          setLocalProject((prev: any) => {
+            if (!prev) return prev;
+            const existingIds = new Set((prev.gallery || []).map((g: any) => String(g.id)));
+            const newItems = cached.gallery.filter((g: any) => !existingIds.has(String(g.id)));
+            if (newItems.length > 0) {
+              console.log(`[Gallery] 🗃 Merged ${newItems.length} synced item(s) from Dexie cache on mount`);
+              return { ...prev, gallery: [...newItems, ...(prev.gallery || [])] };
+            }
+            return prev;
+          });
+        }
+      } catch (e) {}
+    };
+    applyDexieCache();
+
+    // Listen for force-gallery-refresh from SyncToast click
+    const handleForceRefresh = (e: any) => {
+      const { projectId: evtProjectId } = e.detail || {};
+      if (!evtProjectId || String(evtProjectId) === String(idFromUrl)) {
+        refreshGallery();
+      }
+    };
+    window.addEventListener('force-gallery-refresh', handleForceRefresh);
+
+    // First API fetch after 500ms (for post-recovery)
     const initialTimer = setTimeout(refreshGallery, 500);
     
-    // v373: Periodic refresh every 45s (increased from 30s to reduce network pressure during sync)
-    // v373: Skip refresh when outbox is actively syncing to prevent competing for network/memory
+    // v373: Periodic refresh every 45s — skip when outbox is actively syncing
     const periodicInterval = setInterval(() => {
       if (navigator.onLine && !isSyncingGlobal) refreshGallery();
     }, 45000);
@@ -368,6 +397,7 @@ export default function ProjectExecutionClient({
     return () => {
       clearTimeout(initialTimer);
       clearInterval(periodicInterval);
+      window.removeEventListener('force-gallery-refresh', handleForceRefresh);
     };
   }, [mounted, idFromUrl, refreshGallery]);
 

@@ -8,6 +8,7 @@ interface ToastMessage {
   type: string
   success: boolean
   timestamp: number
+  projectId?: string | number  // v440: For gallery toasts — force refresh on click
 }
 
 let toastIdCounter = 0
@@ -69,9 +70,9 @@ export default function SyncToast() {
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
-  const addToast = useCallback((label: string, type: string, success: boolean) => {
+  const addToast = useCallback((label: string, type: string, success: boolean, projectId?: string | number) => {
     const id = ++toastIdCounter
-    const toast: ToastMessage = { id, label, type, success, timestamp: Date.now() }
+    const toast: ToastMessage = { id, label, type, success, timestamp: Date.now(), projectId }
     
     setToasts(prev => {
       const next = [...prev, toast]
@@ -87,7 +88,8 @@ export default function SyncToast() {
   useEffect(() => {
     const handleSyncSuccess = (e: any) => {
       if (e.detail?.label) {
-        addToast(e.detail.label, e.detail.type, true)
+        // v440: Pass projectId for gallery types so clicking the toast refreshes gallery
+        addToast(e.detail.label, e.detail.type, true, e.detail.projectId)
       }
     }
     window.addEventListener('sync-success', handleSyncSuccess)
@@ -128,10 +130,20 @@ export default function SyncToast() {
     }}>
       {toasts.map(toast => {
         const color = getColor(toast.type)
+        const isGalleryType = toast.type === 'GALLERY_UPLOAD' || toast.type === 'MEDIA_UPLOAD';
         return (
           <div
             key={toast.id}
-            onClick={() => removeToast(toast.id)}
+            onClick={() => {
+              if (isGalleryType && toast.projectId) {
+                // v440: Dispatch force-gallery-refresh so ProjectExecutionClient
+                // shows the synced photo/video immediately without manual refresh
+                window.dispatchEvent(new CustomEvent('force-gallery-refresh', {
+                  detail: { projectId: toast.projectId }
+                }));
+              }
+              removeToast(toast.id);
+            }}
             className="sync-toast-item"
             style={{
               display: 'flex',
@@ -147,7 +159,7 @@ export default function SyncToast() {
               color: '#fff',
               fontSize: '0.9rem',
               fontWeight: 600,
-              cursor: 'pointer',
+              cursor: isGalleryType ? 'pointer' : 'default',
               pointerEvents: 'auto',
               maxWidth: '350px',
               minWidth: '220px',
@@ -155,7 +167,14 @@ export default function SyncToast() {
             }}
           >
             <span style={{ fontSize: '1.3rem', flexShrink: 0 }}>{getIcon(toast.type)}</span>
-            <span style={{ flex: 1, lineHeight: 1.4 }}>{toast.label}</span>
+            <span style={{ flex: 1, lineHeight: 1.4 }}>
+              {toast.label}
+              {isGalleryType && (
+                <span style={{ display: 'block', fontSize: '0.7rem', color: `${color}cc`, marginTop: '2px', fontWeight: 400 }}>
+                  Toca para ver →
+                </span>
+              )}
+            </span>
             <button
               onClick={(e) => { e.stopPropagation(); removeToast(toast.id) }}
               style={{
