@@ -13,7 +13,6 @@ export interface OutboxItem {
   syncId?: string;
   lastAttemptAt?: number;
   failReason?: string; // v373: Motivo del fallo permanente
-  binaryFile?: File | Blob | null; // v500: Turbo Sync Native Binary
 }
 
 export interface AuthCache {

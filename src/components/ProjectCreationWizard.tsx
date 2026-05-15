@@ -385,18 +385,53 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
         // Large files (>10MB) keep the raw File object via structured clone — IndexedDB
         // preserves it natively. The Service Worker checks `item.payload.files[i].file`
         // first, and falls back to fileData.buffer for small files.
-        // Turbo Binary Sync: Process files for offline outbox storage
-        for (let i = 0; i < offlinePayload.files.length; i++) {
-          const f = offlinePayload.files[i];
-          const rawFile = f.file || null;
+        const SMALL_BATCH_SIZE = 3;
+        let processedCount = 0;
+        
+        for (let i = 0; i < payload.files.length; i++) {
+          const f = payload.files[i] as any;
           
-          if (rawFile) {
-            // Store reference to raw file for the SyncWorker to handle
-            offlinePayload.files[i].binaryFile = rawFile;
-            // Clear URL to avoid storing massive strings if it's a dataURL
-            if (offlinePayload.files[i].url?.startsWith('data:')) {
-               offlinePayload.files[i].url = '';
+          // Only process small files (<10MB) with arrayBuffer
+          if (!(f.file instanceof File) || f.file.size <= 0 || f.file.size > SMALL_FILE_LIMIT) {
+            // Large file: keep blob: URL for preview, raw File for structured clone
+            if (f.file instanceof File && f.file.size > SMALL_FILE_LIMIT) {
+              // Clear base64 URLs for large files (they're too big for the payload)
+              if (offlinePayload.files[i].url?.startsWith('data:')) {
+                offlinePayload.files[i].url = ''; // blob: URL or raw File will be used by SW
+              }
+              // Release blob URL from memory after we've stored the reference
+              if (f.url?.startsWith('blob:')) {
+                // Keep the blob: URL - it will be released when the page unloads
+                // The raw File object in `.file` is what the SW uses for upload
+              }
             }
+            continue; // Skip arrayBuffer for large files
+          }
+
+          try {
+            // Process in batches of 3 with GC delay between batches
+            offlinePayload.files[i].fileData = {
+              buffer: await f.file.arrayBuffer(),
+              type: f.file.type,
+              name: f.file.name,
+              size: f.file.size
+            };
+            
+            // Clear base64 URL to save space since we have the binary
+            if (offlinePayload.files[i].url?.startsWith('data:')) {
+              offlinePayload.files[i].url = '';
+            }
+            
+            processedCount++;
+            
+            // Every SMALL_BATCH_SIZE files, yield to let the GC breathe
+            // This prevents "Aw, Snap!" crashes on mobile devices
+            if (processedCount % SMALL_BATCH_SIZE === 0) {
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          } catch (e) {
+            console.warn(`[Wizard] Could not read file ${f.filename} for offline storage:`, e);
+            // Fallback: keep the raw File object - SW will handle it
           }
         }
 
@@ -408,15 +443,22 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
           status: 'pending'
         })
         
+        // v268: Aggressive Background Sync Trigger (same as Calendar)
         if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
           try {
             const reg = await navigator.serviceWorker.ready;
-            if ('sync' in reg) await (reg as any).sync.register('sync-outbox');
-            if (navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage({ type: 'FORCE_SYNC_OUTBOX' });
-          } catch (e) { console.warn('Background sync registration failed:', e); }
+            if ('sync' in reg) {
+              await (reg as any).sync.register('sync-outbox');
+            }
+            if (navigator.serviceWorker.controller) {
+              navigator.serviceWorker.controller.postMessage({ type: 'FORCE_SYNC_OUTBOX' });
+            }
+          } catch (e) {
+            console.warn('Background sync registration failed:', e);
+          }
         }
         
-        // Clear local draft data
+        // Clear local draft data after successful outbox add
         setStep(1)
         removeProjectData()
         removeClientData()
@@ -1215,8 +1257,11 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                     url = result.url;
                                     filename = result.filename;
                                   } else {
-                                    // Turbo Sync: Keep the raw blob, don't convert to string!
-                                    url = URL.createObjectURL(blob);
+                                    url = await new Promise((resolve) => {
+                                      const reader = new FileReader();
+                                      reader.onload = () => resolve(reader.result as string);
+                                      reader.readAsDataURL(blob);
+                                    });
                                   }
 
                                   const fileObj: any = {
@@ -1224,7 +1269,6 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                      name: filename,
                                      type: 'IMAGE',
                                      url: url,
-                                     file: blob, // Store raw blob for Turbo Sync
                                      size: blob.size,
                                      category: 'MASTER',
                                      mimeType: 'image/jpeg'
@@ -1249,8 +1293,11 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                     url = result.url;
                                     filename = result.filename;
                                   } else {
-                                    // Turbo Sync: Keep raw blob
-                                    url = URL.createObjectURL(blob);
+                                    url = await new Promise((resolve) => {
+                                      const reader = new FileReader();
+                                      reader.onload = () => resolve(reader.result as string);
+                                      reader.readAsDataURL(blob);
+                                    });
                                   }
 
                                   const fileObj: any = {
@@ -1258,7 +1305,6 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                      name: filename,
                                      type: 'VIDEO',
                                      url: url,
-                                     file: blob, // Store raw blob
                                      size: blob.size,
                                      category: 'MASTER',
                                      mimeType: blob.type
