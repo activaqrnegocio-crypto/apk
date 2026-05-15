@@ -559,49 +559,67 @@ export default function OperatorDashboardClient({
     
     setIsDeleting(true);
     try {
-      if (projectToDelete.isPending) {
-        const numericId = Number(String(projectToDelete.id).replace('pending-', ''));
+      const pId = projectToDelete.id;
+      const isPending = projectToDelete.isPending === true || String(pId).startsWith('pending-');
+
+      if (isPending) {
+        // v420: For pending projects, just remove from outbox and local cache
+        const numericId = Number(String(pId).replace('pending-', ''));
         if (!isNaN(numericId)) {
           await db.outbox.delete(numericId);
         }
       } else {
-        const res = await fetch(`/api/projects/${projectToDelete.id}`, { method: 'DELETE' });
-        if (!res.ok) {
-          const data = await res.json();
-          alert(data.error || 'Error al eliminar');
-          return;
+        // v421: Try online delete first, fallback to outbox if offline
+        let success = false;
+        try {
+          const res = await fetch(`/api/projects/${pId}`, { method: 'DELETE' });
+          if (res.ok) success = true;
+        } catch (e) {
+          console.warn('[Delete] Fetch failed, queuing for sync...');
         }
-        await db.projectsCache.delete(projectToDelete.id);
+
+        if (!success) {
+          // Queue in outbox if fetch failed or returned error (offline case)
+          await db.outbox.add({
+            type: 'PROJECT_DELETE',
+            projectId: Number(pId),
+            payload: { id: pId },
+            timestamp: Date.now(),
+            status: 'pending'
+          });
+        }
       }
 
-      // v355: CRITICAL - Clean snapshots to prevent "ghost projects"
-      // Remove from emergency list immediately
-      setEmergencyProjects(prev => prev ? prev.filter(p => p.id !== projectToDelete.id) : []);
+      // v422: Deep cleanup of local tables to free space
+      await db.projectsCache.delete(pId);
+      await db.chatCache.delete(pId);
+      // Clean appointments associated with this project locally
+      const apptsToDelete = await db.appointmentsCache.where('projectId').equals(Number(pId)).toArray();
+      if (apptsToDelete.length > 0) {
+        await db.appointmentsCache.bulkDelete(apptsToDelete.map(a => a.id));
+      }
+
+      // Cleanup snapshots to prevent "ghost projects"
+      setEmergencyProjects(prev => prev ? prev.filter(p => p.id !== pId) : []);
       
-      // Update localStorage snapshot
       try {
         const saved = localStorage.getItem('last_op_projects_snapshot');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
-            const filtered = parsed.filter(p => {
-              // Handle both normal and pending IDs
-              const pId = p.isPending ? `pending-${p.id}` : p.id;
-              const delId = projectToDelete.isPending ? projectToDelete.id : projectToDelete.id;
-              return pId !== delId && p.id !== projectToDelete.id;
-            });
+            const filtered = parsed.filter(p => p.id !== pId);
             localStorage.setItem('last_op_projects_snapshot', JSON.stringify(filtered));
           }
         }
       } catch (e) {}
 
-    } catch (err) {
-      console.error('[OpDashboard] Delete failed:', err);
-      alert('Error de conexión al eliminar');
-    } finally {
-      setIsDeleting(false);
       setShowDeleteModal(false);
       setProjectToDelete(null);
+    } catch (err) {
+      console.error('[OpDashboard] Delete failed:', err);
+      alert('Error al intentar eliminar el proyecto localmente');
+    } finally {
+      setIsDeleting(false);
     }
   };
 

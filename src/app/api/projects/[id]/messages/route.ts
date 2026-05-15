@@ -104,9 +104,58 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const session = await getServerSession(authOptions)
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
       
-    const { phaseId, content, type, lat, lng, media, createdAt, extraData } = await req.json()
+    // v430: Support BOTH JSON and FormData for Turbo Sync (avoiding Base64 crashes)
+    let phaseId, content, type, lat, lng, createdAt, extraData, mediaPayload;
+    let mediaUrl = null;
     const projectId = Number(id)
     const userId = Number(session.user.id)
+
+    const contentType = req.headers.get('content-type') || '';
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await req.formData();
+      phaseId = formData.get('phaseId');
+      content = formData.get('content') as string;
+      type = formData.get('type') as string;
+      lat = formData.get('lat');
+      lng = formData.get('lng');
+      createdAt = formData.get('createdAt') as string;
+      const extraDataRaw = formData.get('extraData') as string;
+      extraData = extraDataRaw ? JSON.parse(extraDataRaw) : null;
+      
+      const file = formData.get('file') as File;
+      if (file) {
+        const buffer = Buffer.from(await file.arrayBuffer());
+        mediaUrl = await uploadToBunny(buffer, file.name || 'upload.jpg', `projects/${projectId}/chat`);
+        mediaPayload = {
+          filename: file.name,
+          mimeType: file.type,
+          url: mediaUrl
+        };
+      }
+    } else {
+      const body = await req.json();
+      phaseId = body.phaseId;
+      content = body.content;
+      type = body.type;
+      lat = body.lat;
+      lng = body.lng;
+      createdAt = body.createdAt;
+      extraData = body.extraData;
+      mediaPayload = body.media;
+
+      if (mediaPayload && mediaPayload.base64) {
+        try {
+          const parts = mediaPayload.base64.split(',')
+          if (parts.length > 1) {
+            const buffer = Buffer.from(parts[1], 'base64')
+            mediaUrl = await uploadToBunny(buffer, mediaPayload.filename || 'upload.jpg', `projects/${projectId}/chat`)
+          }
+        } catch (uploadError) {
+          console.error('Error uploading to Bunny:', uploadError)
+          throw new Error('Failed to upload file to storage')
+        }
+      }
+    }
     
     const userRole = (session.user as any).role
     if (userRole !== 'ADMIN' && userRole !== 'ADMINISTRADORA' && userRole !== 'SUPERADMIN') {
@@ -123,27 +172,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       }
     }
 
-    let mediaUrl = null
-    if (media && media.base64) {
-      try {
-        const parts = media.base64.split(',')
-        if (parts.length > 1) {
-          const buffer = Buffer.from(parts[1], 'base64')
-          mediaUrl = await uploadToBunny(buffer, media.filename || 'upload.jpg', `projects/${projectId}/chat`)
-        } else {
-          console.warn('Invalid base64 format received')
-        }
-      } catch (uploadError) {
-        console.error('Error uploading to Bunny:', uploadError)
-        // We can continue or throw. Let's throw to give feedback to the client.
-        throw new Error('Failed to upload file to storage')
-      }
-    }
-
     // Determine type if not provided
     let finalType = type
-    if (!finalType && (mediaUrl || media?.url)) {
-      const mime = media?.mimeType || ''
+    if (!finalType && (mediaUrl || mediaPayload?.url)) {
+      const mime = mediaPayload?.mimeType || ''
       if (mime.startsWith('image/')) finalType = 'IMAGE'
       else if (mime.startsWith('video/')) finalType = 'VIDEO'
       else if (mime.includes('pdf')) finalType = 'DOCUMENT'
@@ -157,17 +189,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         projectId,
         userId,
         phaseId: phaseId ? Number(phaseId) : null,
-        content: content || (mediaUrl || media?.url ? '' : null),
+        content: content || (mediaUrl || mediaPayload?.url ? '' : null),
         type: finalType,
         lat: lat ? Number(lat) : null,
         lng: lng ? Number(lng) : null,
         extraData: extraData ? (typeof extraData === 'string' ? extraData : JSON.stringify(extraData)) : undefined,
         createdAt: createdAt ? new Date(createdAt) : undefined,
-        media: (mediaUrl || (media && media.url)) ? {
+        media: (mediaUrl || (mediaPayload && mediaPayload.url)) ? {
           create: {
-            url: mediaUrl || media.url,
-            filename: media.filename || 'upload.jpg',
-            mimeType: media.mimeType || 'image/jpeg'
+            url: mediaUrl || mediaPayload.url,
+            filename: mediaPayload.filename || 'upload.jpg',
+            mimeType: mediaPayload.mimeType || 'image/jpeg'
           }
         } : undefined
       },
@@ -202,7 +234,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           description: content || 'Gasto registrado desde chat',
           category: extraData.category || 'OTRO',
           date: extraData.date ? new Date(extraData.date) : new Date(),
-          receiptUrl: mediaUrl || (media && media.url), // Fix: attach the photo to the expense record too
+          receiptUrl: mediaUrl || (mediaPayload && mediaPayload.url), // Fix: attach the photo to the expense record too
           lat: lat ? Number(lat) : null,
           lng: lng ? Number(lng) : null,
         }
@@ -229,7 +261,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       pushBody,
       `URL_PROJECT_CHAT:${projectId}`,
       `chat-${projectId}`,
-      mediaUrl || (media && media.url) || undefined
+      mediaUrl || (mediaPayload && mediaPayload.url) || undefined
     )
 
     return NextResponse.json(msg)

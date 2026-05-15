@@ -526,752 +526,239 @@ export default function GlobalSyncWorker() {
   const syncOutbox = async () => {
     if (typeof window === 'undefined' || !navigator.onLine || outboxLock.current) return
     
-    // v365: Reset stuck 'syncing' items — only if they have lastAttemptAt (were actually claimed)
-    // Increased to 120s to allow large media uploads to complete
+    // v365: Reset stuck 'syncing' items
     try {
       const stuckItems = await db.outbox.where('status').equals('syncing').toArray();
       const now = Date.now();
       for (const item of stuckItems) {
-        // Only reset if lastAttemptAt is set (item was actually claimed for processing)
         if (!item.lastAttemptAt) {
-          // Item was marked 'syncing' without lastAttemptAt — legacy; reset it
           await db.outbox.update(item.id!, { status: 'pending' });
           continue;
         }
-        const stuckTime = now - item.lastAttemptAt;
-        if (stuckTime > 120000) { // Stuck for more than 2 minutes
+        if (now - item.lastAttemptAt > 180000) { // Increased to 3min for turbo
           await db.outbox.update(item.id!, { status: 'pending' });
         }
       }
     } catch (e) { /* ignore */ }
 
-    // Cross-tab and remount lock
     const now = Date.now()
-    if (now - lastSyncExecution < 1500) {
-      // v400: Reduced throttle to 1.5s for faster sync pickup
-      return
-    }
-
+    if (now - lastSyncExecution < 1000) return // v500: Snappier 1s throttle
+    
     const lastSyncStart = localStorage.getItem('global_sync_lock')
-    if (lastSyncStart && (now - Number(lastSyncStart)) < 8000) {
-      // v282: Reduced cross-tab lock from 30s to 8s so items flow continuously
-      return
-    }
+    if (lastSyncStart && (now - Number(lastSyncStart)) < 5000) return // v500: Lower lock for higher throughput
+    
     localStorage.setItem('global_sync_lock', String(now))
     lastSyncExecution = now;
-
     outboxLock.current = true
+
     try {
-      // v369: Fetch ALL items to properly detect 'syncing' items and preserve chronolocical order.
-      // Otherwise, we wouldn't see the 'syncing' items blocking the queue!
       const items = await db.outbox.toArray();
-      
-      const pendingOrFailed = items.filter(i => i.status === 'pending' || i.status === 'failed');
-      if (pendingOrFailed.length === 0) {
+      const eligible = items.filter(i => i.status === 'pending' || i.status === 'failed');
+      if (eligible.length === 0) {
         localStorage.removeItem('global_sync_lock')
         return
       }
 
-      // v333: Log visible en /admin/debug/sync
-      const itemTypes = [...new Set(items.map(i => i.type))].join(', ');
-      await logSync('info', `Procesando ${items.length} ítems en cola [${itemTypes}]`, 'outbox', `Items: ${items.length}`);
+      // Sort chronologically
+      eligible.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
-      // v272: Sort chronologically (FIFO) — critical for dependency order
-      // DAY_START must sync before EXPENSE/MESSAGE, PROJECT before PHASE_CREATE, etc.
-      items.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      // v500: TURBO GROUPING — Group by projectId for parallel execution
+      const groups: Record<string, typeof eligible> = {};
+      eligible.forEach(item => {
+        const key = item.projectId ? String(item.projectId) : 'global';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(item);
+      });
 
-      let hasSyncedAnything = false
-      const failedContexts = new Set<string>(); // v272: Track failed projects/contexts
-      const syncingContexts = new Set<string>(); // v369: Track currently syncing projects to preserve strictly chronological order
+      const groupIds = Object.keys(groups);
+      let hasSyncedAnything = false;
+      const failedProjects = new Set<string>();
 
-      // First pass: identify any project/context that already has a 'syncing' item
-      for (const item of items) {
-        if (item.status === 'syncing') {
-          const ctx = item.projectId ? `proj-${item.projectId}` : (item.type === 'DAY_START' || item.type === 'DAY_END' ? 'day-record' : null);
-          if (ctx) syncingContexts.add(ctx);
-        }
-      }
-
-      for (const item of items) {
-        const ctx = item.projectId ? `proj-${item.projectId}` : (item.type === 'DAY_START' || item.type === 'DAY_END' ? 'day-record' : null);
+      // v500: Parallel pool — Process 3 projects at once
+      const CONCURRENCY = 3;
+      for (let i = 0; i < groupIds.length; i += CONCURRENCY) {
+        const batch = groupIds.slice(i, i + CONCURRENCY);
         
-        // v369: If this project has ANY earlier item that failed OR is currently syncing, skip this item!
-        // This PREVENTS text messages from bypassing large image uploads!
-        if (ctx && (failedContexts.has(ctx) || (item.status !== 'syncing' && syncingContexts.has(ctx)))) {
-          continue;
-        }
-
-        // Double check status hasn't changed by another process (sanity check)
-        const currentItem = await db.outbox.get(item.id!)
-        if (!currentItem || currentItem.status === 'syncing') continue
-
-        // v280: Prevent infinite retries, but don't block forever. Cool down for 5 mins after 5 attempts.
-        if ((currentItem.attempts || 0) >= 5) {
-          const minsSinceLastAttempt = (Date.now() - (currentItem.lastAttemptAt || currentItem.timestamp || 0)) / 60000;
-          if (minsSinceLastAttempt < 5) {
-            continue;
-          }
-          // v373: After 5+ attempts for media uploads, validate that file data still exists.
-          // If the binary payload is gone (corrupted/GC'd), mark as permanently failed.
-          const isMediaType = currentItem.type === 'GALLERY_UPLOAD' || currentItem.type === 'MEDIA_UPLOAD';
-          if (isMediaType && (currentItem.attempts || 0) >= 8) {
-            const p = currentItem.payload || {};
-            const hasValidData = !!(p.fileData || p.file || p.media?.fileData || p.media?.base64 || 
-              (p.url && !p.url.startsWith('blob:') && !p.url.startsWith('data:') && p.url.startsWith('http')) ||
-              (p.media?.url && !p.media.url.startsWith('blob:') && p.media.url.startsWith('http')));
-            if (!hasValidData) {
-              console.warn(`[Sync] ⛔ Permanently failing media item ${item.id} — file data lost after ${currentItem.attempts} attempts`);
-              await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
-              await logSync('error', `⛔ Descartado: ${item.type} #${item.id} — datos del archivo perdidos`, item.type);
-              continue;
-            }
-          }
-        }
-
-        try {
-          await db.outbox.update(item.id!, { status: 'syncing', lastAttemptAt: Date.now() })
-          let endpoint = ''
-          let method = 'POST'
+        await Promise.all(batch.map(async (projectId) => {
+          const projectItems = groups[projectId];
           
-          if (item.type === 'QUOTE') { endpoint = '/api/quotes' }
-          else if (item.type === 'MATERIAL') { endpoint = '/api/materials' }
-          else if (item.type === 'MESSAGE' || item.type === 'MEDIA_UPLOAD' || item.type === 'LOCATION') { endpoint = `/api/projects/${item.projectId}/messages` }
-          else if (item.type === 'EXPENSE') { 
-            if (item.payload.id) {
-              endpoint = `/api/projects/${item.projectId}/expenses/${item.payload.id}`;
-              method = 'PATCH';
-            } else {
-              endpoint = `/api/projects/${item.projectId}/expenses`;
-              method = 'POST';
-            }
-          }
-          else if (item.type === 'EXPENSE_DELETE') {
-            endpoint = `/api/projects/${item.projectId}/expenses/${item.payload.expenseId}`;
-            method = 'DELETE';
-          }
-          else if (item.type === 'DAY_START') { endpoint = `/api/day-records` }
-          else if (item.type === 'DAY_END') { endpoint = `/api/day-records`; method = 'PUT' }
-          else if (item.type === 'PHASE_COMPLETE' || item.type === 'PHASE_UPDATE') { 
-            endpoint = `/api/projects/${item.projectId}/phases/${item.payload.phaseId}`; 
-            method = 'PATCH' 
-          }
-          else if (item.type === 'PHASE_CREATE') {
-            endpoint = `/api/projects/${item.projectId}/phases`;
-            method = 'POST'
-          }
-          else if (item.type === 'PROJECT') { endpoint = '/api/projects' }
-          else if (item.type === 'PROJECT_UPDATE') { endpoint = `/api/projects/${item.projectId}`; method = 'PATCH' }
-          else if (item.type === 'TEAM_UPDATE') { endpoint = `/api/projects/${item.projectId}/team`; method = 'PUT' }
-          else if (item.type === 'TASK') {
-            if (!item.payload.isNew && (item.payload.id || item.payload._id)) {
-              endpoint = `/api/appointments/${item.payload.id || item.payload._id}`
-              method = 'PATCH'
-            } else {
-              endpoint = '/api/appointments'
-            }
-          }
-          else if (item.type === 'TASK_STATUS_TOGGLE') { endpoint = `/api/appointments/${item.payload.appointmentId}`; method = 'PATCH' }
-          else if (item.type === 'GALLERY_UPLOAD') { endpoint = `/api/projects/${item.projectId}/gallery` }
-          else if (item.type === 'GALLERY_DELETE') { endpoint = `/api/projects/${item.projectId}/gallery/${item.payload.galleryId}`; method = 'DELETE' }
-          else if (item.type === 'GALLERY_RENAME') { 
-            endpoint = `/api/projects/${item.projectId}/gallery/${item.payload.galleryId}`; 
-            method = 'PATCH' 
-          }
-          
-          let finalPayload = { ...item.payload }
-          
-          // --- NEW: UNIFIED MEDIA SYNC LOGIC ---
-          const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
-          
-          // 1. Handle single media (MESSAGE, MEDIA_UPLOAD, EXPENSE, GALLERY_UPLOAD)
-          const hasBase64 = !!(finalPayload.media?.base64 || 
-                            (item.type === 'GALLERY_UPLOAD' && finalPayload.url?.startsWith('data:')) ||
-                            finalPayload.receiptPhoto?.startsWith('data:'));
-          
-          const hasBlobUrl = !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
-                             (typeof finalPayload.url === 'string' && finalPayload.url.startsWith('blob:')) ||
-                             (typeof finalPayload.receiptPhoto === 'string' && finalPayload.receiptPhoto.startsWith('blob:')));
+          // Inside a project group, we MUST process sequentially to maintain order
+          for (const item of projectItems) {
+            if (failedProjects.has(projectId)) break;
 
-          const hasBinaryData = !!(finalPayload.media?.fileData || 
-                                 finalPayload.fileData || 
-                                 finalPayload.receiptFileData);
-
-          const hasRawFile = !!finalPayload.file;
-
-          if (hasBase64 || hasBlobUrl || hasBinaryData || hasRawFile) {
             try {
-              let uploadFile: File | Blob;
-              let finalFilename: string = '';
+              // Mark as syncing
+              await db.outbox.update(item.id!, { status: 'syncing', lastAttemptAt: Date.now() });
 
-              if (hasBase64 || hasBlobUrl || hasBinaryData) {
-                const source = finalPayload.media?.fileData || 
-                               finalPayload.fileData || 
-                               finalPayload.receiptFileData ||
-                               finalPayload.media?.base64 || 
-                               finalPayload.media?.url || 
-                               finalPayload.url || 
-                               finalPayload.receiptPhoto;
-                
-                if (source && (source instanceof ArrayBuffer || source instanceof Uint8Array)) {
-                  const mime = finalPayload.media?.mimeType || 
-                               finalPayload.fileData?.type || 
-                               finalPayload.receiptFileData?.type || 
-                               'application/octet-stream';
-                  uploadFile = new Blob([source as any], { type: mime });
-                } else if (source && typeof source === 'object' && (source as any).buffer) {
-                  // Caso: Estructura { buffer, type, name }
-                  const s = source as any;
-                  uploadFile = new Blob([s.buffer], { type: s.type || 'application/octet-stream' });
-                  if (s.name) finalFilename = s.name;
-                } else {
-                  const resB64 = await fetch(source as string);
-                  uploadFile = await resB64.blob();
-                }
-                
-                if (!finalFilename) {
-                  finalFilename = finalPayload.media?.filename || 
-                                  finalPayload.media?.fileName || 
-                                  finalPayload.fileData?.name ||
-                                  finalPayload.filename || 
-                                  `sync_${Date.now()}.jpg`;
-                }
-              } else {
-                uploadFile = finalPayload.file;
-                finalFilename = finalPayload.file.name || `sync_legacy_${Date.now()}`;
-              }
-
-              const folder = item.projectId ? `projects/${item.projectId}` : 'general';
-              const uploadResult = await uploadToBunnyClientSide(uploadFile, finalFilename, folder);
+              let endpoint = '';
+              let method = 'POST';
               
-              if (item.type === 'EXPENSE') {
-                finalPayload.receiptPhoto = uploadResult.url;
-                if (finalPayload.receiptFileData) finalPayload.receiptFileData = null; 
-              } else if (item.type === 'GALLERY_UPLOAD') {
-                finalPayload.url = uploadResult.url;
-                if (finalPayload.fileData) finalPayload.fileData = null; 
-              } else {
-                finalPayload.media = { 
-                  ...finalPayload.media,
-                  url: uploadResult.url, 
-                  filename: finalFilename, 
-                  mimeType: uploadResult.mimeType,
-                  type: uploadResult.type,
-                  base64: undefined,
-                  fileData: null // v355: Memory release
-                };
+              // Endpoints selection
+              if (item.type === 'QUOTE') { endpoint = '/api/quotes' }
+              else if (item.type === 'MATERIAL') { endpoint = '/api/materials' }
+              else if (item.type === 'MESSAGE' || item.type === 'MEDIA_UPLOAD' || item.type === 'LOCATION') { endpoint = `/api/projects/${item.projectId}/messages` }
+              else if (item.type === 'EXPENSE') { 
+                if (item.payload.id) { endpoint = `/api/projects/${item.projectId}/expenses/${item.payload.id}`; method = 'PATCH'; }
+                else { endpoint = `/api/projects/${item.projectId}/expenses`; method = 'POST'; }
               }
-              
-              // v355: Allow GC to kick in
-              await new Promise(resolve => setTimeout(resolve, 100));
+              else if (item.type === 'EXPENSE_DELETE') { endpoint = `/api/projects/${item.projectId}/expenses/${item.payload.expenseId}`; method = 'DELETE'; }
+              else if (item.type === 'DAY_START') { endpoint = `/api/day-records` }
+              else if (item.type === 'DAY_END') { endpoint = `/api/day-records`; method = 'PUT' }
+              else if (item.type === 'PHASE_COMPLETE' || item.type === 'PHASE_UPDATE') { endpoint = `/api/projects/${item.projectId}/phases/${item.payload.phaseId}`; method = 'PATCH'; }
+              else if (item.type === 'PHASE_CREATE') { endpoint = `/api/projects/${item.projectId}/phases`; method = 'POST'; }
+              else if (item.type === 'PROJECT') { endpoint = '/api/projects' }
+              else if (item.type === 'PROJECT_UPDATE') { endpoint = `/api/projects/${item.projectId}`; method = 'PATCH' }
+              else if (item.type === 'TEAM_UPDATE') { endpoint = `/api/projects/${item.projectId}/team`; method = 'PUT' }
+              else if (item.type === 'TASK') {
+                if (!item.payload.isNew && (item.payload.id || item.payload._id)) { endpoint = `/api/appointments/${item.payload.id || item.payload._id}`; method = 'PATCH'; }
+                else { endpoint = '/api/appointments'; }
+              }
+              else if (item.type === 'TASK_STATUS_TOGGLE') { endpoint = `/api/appointments/${item.payload.appointmentId}`; method = 'PATCH' }
+              else if (item.type === 'GALLERY_UPLOAD') { endpoint = `/api/projects/${item.projectId}/gallery` }
+              else if (item.type === 'GALLERY_DELETE') { endpoint = `/api/projects/${item.projectId}/gallery/${item.payload.galleryId}`; method = 'DELETE' }
+              else if (item.type === 'GALLERY_RENAME') { endpoint = `/api/projects/${item.projectId}/gallery/${item.payload.galleryId}`; method = 'PATCH'; }
 
-              delete finalPayload.file;
-            } catch (err) {
-              console.error(`[Sync] Failed media upload for ${item.type} #${item.id}:`, err instanceof Error ? err.message : err);
-              // v373: Increment attempts on media failure so cooldown logic works.
-              // Previously this just set 'pending' without tracking attempts → infinite loop.
-              const currentAttempts = (item.attempts || 0) + 1;
-              await db.outbox.update(item.id!, { 
-                status: currentAttempts >= 8 ? 'failed' : 'pending',
-                attempts: currentAttempts,
-                lastAttemptAt: Date.now(),
-                failReason: currentAttempts >= 8 ? 'UPLOAD_FAILED' : undefined
-              });
-              if (ctx) failedContexts.add(ctx);
-              await logSync('warn', `⚠ Media upload falló: ${item.type} #${item.id} (intento ${currentAttempts}/8)`, item.type);
-              continue;
-            }
-          }
+              let finalPayload = { ...item.payload };
 
-          // 2. Handle multiple media (TASK / CALENDAR)
-          if (item.type === 'TASK' && (finalPayload.attachments || finalPayload.attachmentLinks || finalPayload.files)) {
-            try {
-              // v360: Robust deduplication — prioritize binary sources (fileData) > base64 > url
-              const rawSources = [
-                ...(finalPayload.attachments || []), 
-                ...(finalPayload.attachmentLinks || []),
-                ...(finalPayload.files || [])
-              ];
-              
-              const sourceMap = new Map<string, any>();
-              for (const att of rawSources) {
-                if (!att.name) continue;
-                const existing = sourceMap.get(att.name);
+              // v500: Binary & Multi-File Skip — If we have binaryFile or a PROJECT with multiple files
+              if (!item.binaryFile || item.type === 'PROJECT') {
+                const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
                 
-                // Score source quality
-                const getScore = (a: any) => {
-                  const src = a.fileData || a.data || a.base64 || a.url || '';
-                  if (a.fileData || (typeof src === 'object' && src.buffer)) return 3;
-                  if (typeof src === 'string' && src.startsWith('data:')) return 2;
-                  if (typeof src === 'string' && src.startsWith('blob:')) return 1;
-                  if (typeof src === 'string' && src.startsWith('http')) return 0;
-                  return -1;
-                };
-
-                if (!existing || getScore(att) > getScore(existing)) {
-                  sourceMap.set(att.name, att);
-                }
-              }
-
-              const uniqueSources = Array.from(sourceMap.values());
-              const uploadedFiles = [];
-
-              for (const att of uniqueSources) {
-                const sourceData = att.fileData || att.data || att.base64 || att.url;
-                if (!sourceData) continue;
-
-                let finalUrl = '';
-                const isBinary = (sourceData instanceof ArrayBuffer || sourceData instanceof Uint8Array || (typeof sourceData === 'object' && sourceData.buffer));
-                const isBase64 = typeof sourceData === 'string' && sourceData.startsWith('data:');
-                const isBlobUrl = typeof sourceData === 'string' && sourceData.startsWith('blob:');
-                const isRawFile = sourceData instanceof Blob;
-
-                if (isBinary || isBase64 || isBlobUrl || isRawFile) {
-                  let blob: Blob;
-                  if (isRawFile) {
-                    blob = sourceData;
-                  } else if (isBinary) {
-                    const buffer = (sourceData as any).buffer || sourceData;
-                    blob = new Blob([buffer], { type: att.type || 'application/octet-stream' });
-                  } else {
-                    const res = await fetch(sourceData as string);
-                    blob = await res.blob();
+                // --- MULTI-FILE PROJECT SYNC (NEW TURBO PATH) ---
+                if (item.type === 'PROJECT' && finalPayload.files && Array.isArray(finalPayload.files)) {
+                  for (let fi = 0; fi < finalPayload.files.length; fi++) {
+                    const f = finalPayload.files[fi];
+                    // If it has a binary file reference, upload it now
+                    if (f.binaryFile || f.file) {
+                      try {
+                        const fileToUpload = f.binaryFile || f.file;
+                        const filename = f.filename || (fileToUpload instanceof File ? fileToUpload.name : `file_${fi}_${Date.now()}.jpg`);
+                        const folder = `projects/temp_${item.id}`;
+                        const uploadResult = await uploadToBunnyClientSide(fileToUpload, filename, folder);
+                        
+                        // Replace binary reference with the real URL
+                        finalPayload.files[fi].url = uploadResult.url;
+                        finalPayload.files[fi].mimeType = uploadResult.mimeType || f.mimeType;
+                        finalPayload.files[fi].binaryFile = undefined;
+                        finalPayload.files[fi].file = undefined;
+                      } catch (uploadErr) {
+                        console.error(`[SyncProject] File ${fi} failed:`, uploadErr);
+                        // Skip this file for now, or throw to retry the whole project later
+                      }
+                    }
                   }
-                  
-                  const uploadResult = await uploadToBunnyClientSide(blob, att.name, 'appointments');
-                  finalUrl = uploadResult.url;
-                  // Memory release
-                  if (att.fileData) att.fileData = null;
-                  await new Promise(resolve => setTimeout(resolve, 50));
-                } else if (typeof sourceData === 'string' && sourceData.startsWith('http')) {
-                  finalUrl = sourceData;
                 }
 
-                if (finalUrl) {
-                  uploadedFiles.push({ 
-                    url: finalUrl, 
-                    type: att.type || (att.name.match(/\.(mp4|mov|webm)$/i) ? 'video' : 'image'), 
-                    name: att.name 
-                  });
+                // Unified Media Sync (Legacy Path / Single File)
+                const hasMedia = !!(finalPayload.media?.base64 || finalPayload.media?.url?.startsWith('blob:') || finalPayload.media?.fileData || finalPayload.file || finalPayload.receiptFileData || finalPayload.fileData);
+                
+                if (hasMedia && item.type !== 'PROJECT') {
+                  try {
+                    let uploadFile: File | Blob;
+                    let finalFilename: string = '';
+                    const source = finalPayload.media?.fileData || finalPayload.fileData || finalPayload.receiptFileData || finalPayload.media?.base64 || finalPayload.media?.url || finalPayload.url || finalPayload.receiptPhoto;
+                    
+                    if (source && (source instanceof ArrayBuffer || source instanceof Uint8Array || (typeof source === 'object' && (source as any).buffer))) {
+                      const s = (source as any).buffer ? source as any : { buffer: source, type: 'application/octet-stream', name: '' };
+                      uploadFile = new Blob([s.buffer], { type: s.type || 'application/octet-stream' });
+                      finalFilename = s.name || `sync_${Date.now()}.jpg`;
+                    } else if (finalPayload.file) {
+                      uploadFile = finalPayload.file;
+                      finalFilename = finalPayload.file.name;
+                    } else {
+                      const resB64 = await fetch(source as string);
+                      uploadFile = await resB64.blob();
+                      finalFilename = finalPayload.media?.filename || `sync_${Date.now()}.jpg`;
+                    }
+
+                    const folder = item.projectId ? `projects/${item.projectId}` : 'general';
+                    const uploadResult = await uploadToBunnyClientSide(uploadFile, finalFilename, folder);
+                    
+                    if (item.type === 'EXPENSE') { finalPayload.receiptPhoto = uploadResult.url; }
+                    else if (item.type === 'GALLERY_UPLOAD') { finalPayload.url = uploadResult.url; }
+                    else {
+                      finalPayload.media = { ...finalPayload.media, url: uploadResult.url, filename: finalFilename, mimeType: uploadResult.mimeType, type: uploadResult.type, base64: undefined, fileData: null };
+                    }
+                  } catch (err) {
+                    throw new Error(`Media upload failed: ${err instanceof Error ? err.message : 'Unknown'}`);
+                  }
                 }
               }
 
-              // v360: Re-standardize payload with NO OVERLAPS
-              // 'files' is the source of truth for the DB
-              // 'attachments' (images/docs) and 'attachmentLinks' (videos) are for WA and legacy UI
-              finalPayload.files = uploadedFiles;
-              finalPayload.attachments = uploadedFiles
-                .filter(f => f.type !== 'video' && f.type !== 'audio')
-                .map(f => ({ data: f.url, type: f.type, name: f.name }));
+              // Final Transmission
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), item.binaryFile ? 120000 : 30000);
               
-              finalPayload.attachmentLinks = uploadedFiles
-                .filter(f => f.type === 'video' || f.type === 'audio')
-                .map(f => ({ url: f.url, type: f.type, name: f.name }));
+              let res;
+              if (item.binaryFile) {
+                const formData = new FormData();
+                const fullPayload = {
+                  ...finalPayload,
+                  lat: (item.lat !== null && item.lat !== undefined) ? item.lat : finalPayload.lat, 
+                  lng: (item.lng !== null && item.lng !== undefined) ? item.lng : finalPayload.lng, 
+                  createdAt: item.timestamp ? new Date(item.timestamp).toISOString() : undefined,
+                  isOfflineSync: true 
+                };
+                Object.keys(fullPayload).forEach(key => {
+                  if (key === 'files') return;
+                  const val = (fullPayload as any)[key];
+                  formData.append(key, typeof val === 'object' ? JSON.stringify(val) : String(val));
+                });
+                formData.append('file', item.binaryFile);
+                res = await fetch(endpoint, { method, headers: { 'x-sync-id': item.syncId || `sync-${item.id}-${item.timestamp}` }, body: formData, signal: controller.signal });
+              } else {
+                res = await fetch(endpoint, {
+                  method,
+                  headers: { 'Content-Type': 'application/json', 'x-sync-id': item.syncId || `sync-${item.id}-${item.timestamp}` },
+                  body: JSON.stringify({ ...finalPayload, lat: item.lat, lng: item.lng, isOfflineSync: true }),
+                  signal: controller.signal
+                });
+              }
+              clearTimeout(timeoutId);
 
-            } catch (err) {
-              console.error('[Sync] Failed TASK media sync:', err);
-              await db.outbox.update(item.id!, { status: 'pending' });
-              continue;
-            }
-          }
-          
-          if (endpoint) {
-             // v260: Clean client-only fields from TASK payloads before sending
-             if (item.type === 'TASK') {
-               delete finalPayload.isNew
-               delete finalPayload.mediaFiles
-               delete finalPayload.previews
-               // Clean isOffline markers from files array
-               if (Array.isArray(finalPayload.files)) {
-                 finalPayload.files = finalPayload.files.map((f: any) => {
-                   const { isOffline, isNew: _n, ...clean } = f
-                   return clean
-                 })
-               }
-               // v370: Also clean attachmentLinks/attachments of offline flags
-               if (Array.isArray(finalPayload.attachmentLinks)) {
-                 finalPayload.attachmentLinks = finalPayload.attachmentLinks.map((a: any) => {
-                   const { isOffline, isNew: _n, ...clean } = a
-                   return clean
-                 })
-               }
-               if (Array.isArray(finalPayload.attachments)) {
-                 finalPayload.attachments = finalPayload.attachments.map((a: any) => {
-                   const { isOffline, isNew: _n, ...clean } = a
-                   return clean
-                 })
-               }
-             }
-
-             // v353: Handle PROJECT files — upload each file's binary data to Bunny
-             // When created offline, files have fileData: { buffer, type, name } instead of URLs
-             if (item.type === 'PROJECT' && Array.isArray(finalPayload.files)) {
-               try {
-                 const processedFiles: any[] = [];
-
-                 // v400: Classify files into uploadable vs pass-through
-                 const toUpload: { index: number; f: any }[] = [];
-                 const passThrough: { index: number; result: any }[] = [];
-
-                 for (let fi = 0; fi < finalPayload.files.length; fi++) {
-                   const f = finalPayload.files[fi];
-                   if ((f.fileData && f.fileData.buffer) || (f.file instanceof File || f.file instanceof Blob)) {
-                     toUpload.push({ index: fi, f });
-                   } else if (f.url && f.url.startsWith('data:')) {
-                     passThrough.push({ index: fi, result: { url: f.url, filename: f.filename, mimeType: f.mimeType, type: f.type, category: f.category, size: f.size } });
-                   } else if (f.url && f.url.startsWith('http')) {
-                     passThrough.push({ index: fi, result: f });
-                   }
-                 }
-
-                 // v400: Upload in parallel batches of 3 for speed
-                 const UPLOAD_BATCH = 3;
-                 const uploadResults: { index: number; result: any }[] = [];
-
-                 for (let bi = 0; bi < toUpload.length; bi += UPLOAD_BATCH) {
-                   const batch = toUpload.slice(bi, bi + UPLOAD_BATCH);
-                   const batchResults = await Promise.all(batch.map(async ({ index: fi, f }) => {
-                     if (f.fileData && f.fileData.buffer) {
-                       const blob = new Blob([f.fileData.buffer], { type: f.fileData.type || f.mimeType || 'application/octet-stream' });
-                       const uploadResult = await uploadToBunnyClientSide(blob, f.fileData.name || f.filename, 'projects');
-                       const result = {
-                         url: uploadResult.url,
-                         filename: f.filename || f.fileData.name,
-                         mimeType: uploadResult.mimeType,
-                         type: uploadResult.type,
-                         category: f.category,
-                         size: f.size
-                       };
-                       // Memory release
-                       f.fileData.buffer = null;
-                       f.fileData = null;
-                       return { index: fi, result };
-                     } else {
-                       // File or Blob
-                       const uploadResult = await uploadToBunnyClientSide(f.file, f.filename || f.file.name, 'projects');
-                       const result = {
-                         url: uploadResult.url,
-                         filename: f.filename || f.file.name,
-                         mimeType: uploadResult.mimeType || f.file.type,
-                         type: uploadResult.type,
-                         category: f.category,
-                         size: f.file.size
-                       };
-                       f.file = null;
-                       return { index: fi, result };
-                     }
-                   }));
-                   uploadResults.push(...batchResults);
-                   // GC breathing room between batches
-                   await new Promise(resolve => setTimeout(resolve, 100));
-                 }
-
-                 // Reassemble in original order
-                 const allResults = [...uploadResults, ...passThrough].sort((a, b) => a.index - b.index);
-                 for (const { result } of allResults) {
-                   processedFiles.push(result);
-                 }
-                 finalPayload.files = processedFiles;
-               } catch (err) {
-                 console.error('[Sync] Failed to upload PROJECT files:', err);
-                 await db.outbox.update(item.id!, { status: 'pending' });
-                 continue;
-               }
-             }
-
-             // v356: Re-check if item was already synced by Service Worker or another tab
-             const recheckItem = await db.outbox.get(item.id!);
-             if (!recheckItem || recheckItem.status !== 'syncing') {
-               console.log(`[Sync] Item ${item.id} already processed or status changed, skipping.`);
-               continue;
-             }
-
-             // v365: AbortController with 60s timeout to prevent hanging requests
-             const controller = new AbortController();
-             const timeoutId = setTimeout(() => controller.abort(), 30000);
-             const res = await fetch(endpoint, {
-                 method,
-                 headers: { 
-                   'Content-Type': 'application/json',
-                   'x-sync-id': item.syncId || `sync-${item.id}-${item.timestamp}` 
-                 },
-                 body: JSON.stringify({ 
-                   ...finalPayload, 
-                   lat: (item.lat !== null && item.lat !== undefined) ? item.lat : finalPayload.lat, 
-                   lng: (item.lng !== null && item.lng !== undefined) ? item.lng : finalPayload.lng, 
-                   createdAt: item.timestamp ? new Date(item.timestamp).toISOString() : undefined,
-                   isOfflineSync: true 
-                 }),
-                 signal: controller.signal
-             })
-             clearTimeout(timeoutId);
               if (res.ok) {
                 const resData = await res.json().catch(() => ({}));
-                // v366: CRITICAL IDEMPOTENCY FIX
-                if (resData.isDuplicate && resData.id === 0) {
-                  console.log(`[Sync] Item ${item.id} still pending on server (id: 0). Skipping.`);
-                  await db.outbox.update(item.id!, { status: 'pending' });
-                  continue;
-                }
-
-                await db.outbox.delete(item.id!)
-                hasSyncedAnything = true
-                await logSync('success', `✓ Sincronizado: ${item.type} #${item.id}`, item.type, `Proyecto ${item.projectId}`);
-
-                // v400: If this was a new PROJECT creation, update all other pending items 
-                // in outbox that reference the temporary ID (e.g. "pending-123")
-                if (item.type === 'PROJECT' && resData.id) {
-                  try {
-                    const tempId = `pending-${item.id}`;
-                    const relatedItems = await db.outbox.filter(oi => String(oi.projectId) === tempId).toArray();
-                    if (relatedItems.length > 0) {
-                      console.log(`[Sync] Mapping ${relatedItems.length} items from ${tempId} to real ID ${resData.id}`);
-                      for (const ri of relatedItems) {
-                        await db.outbox.update(ri.id!, { projectId: resData.id });
-                      }
-                    }
-                  } catch (mapErr) {
-                    console.warn('[Sync] Failed to map temporary IDs:', mapErr);
-                  }
-                }
-
-                // v410: Immediately cache synced PROJECT in IndexedDB so it appears
-                // in the operator's list without waiting for the next bulk-sync (15 min)
-                if (item.type === 'PROJECT' && resData.id) {
-                  try {
-                    const wizardPayload = item.payload || {};
-                    const finalTeam = (resData.team && resData.team.length > 0) ? resData.team : (wizardPayload.team || []).map((tid: any) => ({
-                      id: 0,
-                      userId: Number(tid),
-                      user: { id: Number(tid), name: 'Operador', role: 'OPERATOR', phone: '' }
-                    }));
-
-                    const finalGallery = (resData.gallery && resData.gallery.length > 0) 
-                      ? resData.gallery 
-                      : (finalPayload.files || wizardPayload.files || []).map((f: any) => ({
-                          id: Math.random(),
-                          url: f.url || '',
-                          filename: f.filename || 'upload',
-                          mimeType: f.mimeType || 'image/jpeg'
-                        }));
-                    
-                    // v411: IMPORTANT — Before putting the new real record, delete the temporary one
-                    // to avoid having duplicate projects in cache (one with timestamp, one with real ID)
-                    // which causes the 'infinite syncing' loop in the UI.
-                    const tempId = item.id; // item.id is the timestamp for offline projects
-                    if (tempId && tempId !== resData.id) {
-                      await db.projectsCache.delete(Number(tempId)).catch(() => {});
-                      await db.chatCache.delete(Number(tempId)).catch(() => {});
-                    }
-
-                    await db.projectsCache.put({
-                      ...resData,
-                      id: resData.id,
-                      createdBy: resData.createdBy || Number(session?.user?.id),
-                      team: finalTeam,
-                      client: resData.client || wizardPayload.client || { name: '' },
-                      phases: resData.phases || (wizardPayload.phases || []).map((p: any, i: number) => ({
-                        id: 0, title: p.title, status: 'PENDIENTE', displayOrder: i + 1,
-                        estimatedDays: p.estimatedDays || 0
-                      })),
-                      gallery: finalGallery,
-                      isSkeleton: false,
-                      lastAccessedAt: Date.now(),
-                      chatMessages: [],
-                      unreadCount: 0
-                    });
-                    
-                    const u = session?.user as any;
-                    const cacheKey = `projects_bulk_${u?.id || 'default'}`;
-                    const meta = await db.cacheMetadata.get(cacheKey);
-                    if (meta) {
-                      await db.cacheMetadata.update(cacheKey, { lastSync: 0, count: (meta.count || 0) + 1 });
-                    }
-                  } catch (cacheErr) {
-                    console.warn('[Sync] Failed to cache synced project:', cacheErr);
-                  }
-                }
-
-                // v412: CRITICAL — After successful team update, clear flag and fetch FRESH data
-                if (item.type === 'TEAM_UPDATE' && item.projectId) {
-                  try {
-                    let numericId = Number(item.projectId);
-                    if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
-                      numericId = Number(String(item.projectId).replace('pending-', ''));
-                    }
-                    
-                    if (!isNaN(numericId)) {
-                      // 1. CLEAR FLAG IMMEDIATELY so UI stops spinning
-                      await db.projectsCache.update(numericId, { _pendingTeamSync: false });
-
-                      // 2. Try to hydrate with fresh server data (names, IDs, etc.)
-                      const freshProjRes = await fetch(`/api/projects/${numericId}`, { cache: 'no-store' });
-                      if (freshProjRes.ok) {
-                        const freshData = await freshProjRes.json();
-                        if (freshData && freshData.id) {
-                          await db.projectsCache.update(numericId, { 
-                            ...freshData,
-                            _pendingTeamSync: false 
-                          });
-                        }
-                      }
-                    }
-                  } catch (cacheErr) {
-                    console.error('[Sync] Team hydration error:', cacheErr);
-                    // Flag is already cleared in step 1, so UI is safe
-                  }
-                }
-
-                // v409: Update projectsCache gallery for media uploads so they persist before reload
-                if ((item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD') && item.projectId) {
-                  try {
-                    let numericId = Number(item.projectId);
-                    if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
-                      numericId = Number(String(item.projectId).replace('pending-', ''));
-                    }
-                    if (!isNaN(numericId) && resData && resData.id) {
-                      const proj = await db.projectsCache.get(numericId);
-                      if (proj) {
-                        const newGallery = proj.gallery ? [...proj.gallery] : [];
-                        if (!newGallery.some(g => g.id === resData.id)) {
-                          newGallery.push(resData);
-                          // Maintain newest first sort order
-                          newGallery.sort((a, b) => new Date(b.createdAt || Date.now()).getTime() - new Date(a.createdAt || Date.now()).getTime());
-                          await db.projectsCache.update(numericId, { gallery: newGallery });
-                        }
-                      }
-                    }
-                  } catch (err) {}
-                }
-
-                if (item.type === 'MESSAGE' && item.projectId) {
-                  try {
-                    let numericId = Number(item.projectId);
-                    if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
-                      numericId = Number(String(item.projectId).replace('pending-', ''));
-                    }
-                    if (!isNaN(numericId) && resData && resData.id) {
-                      const proj = await db.projectsCache.get(numericId);
-                      if (proj) {
-                        const newMessages = proj.chatMessages ? [...proj.chatMessages] : [];
-                        if (!newMessages.some(m => m.id === resData.id)) {
-                          newMessages.push(resData);
-                          newMessages.sort((a, b) => new Date(a.createdAt || Date.now()).getTime() - new Date(b.createdAt || Date.now()).getTime());
-                          await db.projectsCache.update(numericId, { chatMessages: newMessages });
-                        }
-                      }
-                    }
-                  } catch (err) {}
-                }
+                await db.outbox.delete(item.id!);
+                hasSyncedAnything = true;
+                
+                // Trigger success event for UI
                 if (typeof window !== 'undefined') {
-                  const syncLabel = item.type === 'GALLERY_UPLOAD' ? 'Archivo subido a galería' :
-                                    item.type === 'MESSAGE' ? 'Mensaje sincronizado' :
-                                    item.type === 'MEDIA_UPLOAD' ? 'Multimedia sincronizada' :
-                                    item.type === 'PROJECT' ? 'Proyecto creado' :
-                                    item.type === 'EXPENSE' ? 'Gasto sincronizado' :
-                                    item.type === 'TASK' ? 'Tarea sincronizada' :
-                                    item.type === 'DAY_START' ? 'Jornada iniciada' :
-                                    item.type === 'DAY_END' ? 'Jornada finalizada' :
-                                    item.type === 'TEAM_UPDATE' ? 'Equipo actualizado' :
-                                    item.type === 'GALLERY_DELETE' ? 'Archivo eliminado' :
-                                    item.type === 'GALLERY_RENAME' ? 'Archivo renombrado' :
-                                    item.type === 'PHASE_COMPLETE' ? 'Fase completada' :
-                                    item.type === 'PHASE_CREATE' ? 'Fase creada' :
-                                    `Item sincronizado (${item.type})`;
-                  const eventProjectId = item.type === 'PROJECT' ? (resData?.id || item.projectId) : item.projectId;
-                  window.dispatchEvent(new CustomEvent('sync-success', { detail: { 
-                    type: item.type, 
-                    projectId: eventProjectId, 
-                    label: syncLabel,
-                    payload: finalPayload,
-                    result: resData
-                  } }))
+                  window.dispatchEvent(new CustomEvent('sync-success', { detail: { type: item.type, projectId: item.projectId, result: resData } }));
+                }
+
+                // Project ID mapping (if created offline)
+                if (item.type === 'PROJECT' && resData.id) {
+                  const tempId = `pending-${item.id}`;
+                  await db.outbox.filter(oi => String(oi.projectId) === tempId).modify({ projectId: resData.id });
                 }
               } else {
-               const status = res.status
-               if (status === 401 || status === 429) {
-                 // Unauthorized or rate limited -> keep pending and retry later
-                 if (ctx) failedContexts.add(ctx); // v272: block dependents
-                 await db.outbox.update(item.id!, { status: 'pending' })
-                 await logSync('warn', `⚠ Rate-limited: ${item.type} #${item.id} (HTTP ${status})`, item.type);
-               } else if (status >= 400 && status < 500) {
-                 // Permanent client error (400, 403, 404) -> Drop it so it doesn't loop forever
-                 await db.outbox.delete(item.id!)
-                 await logSync('error', `✗ Descartado: ${item.type} #${item.id} (HTTP ${status})`, item.type);
-                 
-                 // Clear stuck sync flags
-                 if (item.type === 'TEAM_UPDATE' && item.projectId) {
-                   try {
-                     let numericId = Number(item.projectId);
-                     if (isNaN(numericId) && String(item.projectId).startsWith('pending-')) {
-                       numericId = Number(String(item.projectId).replace('pending-', ''));
-                     }
-                     if (!isNaN(numericId)) await db.projectsCache.update(numericId, { _pendingTeamSync: false });
-                   } catch (err) {}
-                 }
-               } else {
-                 // Server errors (500+) -> mark as failed and increment attempts
-                 if (ctx) failedContexts.add(ctx); // v272: block dependents
-                 await db.outbox.update(item.id!, { 
-                   status: 'failed',
-                   attempts: (item.attempts || 0) + 1,
-                   lastAttemptAt: Date.now()
-                 })
-                 await logSync('error', `✗ Error servidor: ${item.type} #${item.id} (HTTP ${status})`, item.type);
-               }
-             }
+                const status = res.status;
+                if (status >= 400 && status < 500 && status !== 429) {
+                  await db.outbox.delete(item.id!); // Permanent failure
+                } else {
+                  throw new Error(`HTTP ${status}`);
+                }
+              }
+            } catch (e) {
+              console.error(`[TurboSync] Item ${item.id} failed:`, e);
+              failedProjects.add(projectId);
+              await db.outbox.update(item.id!, { status: 'failed', attempts: (item.attempts || 0) + 1, lastAttemptAt: Date.now() });
+            }
           }
-          
-          // v365: Increased pacing delay to prevent connection saturation
-          await new Promise(r => setTimeout(r, 300));
-       } catch (e) {
-          // v272: Mark context as failed so dependents are skipped
-          if (ctx) failedContexts.add(ctx);
-          await logSync('error', `✗ Excepción: ${item.type} #${item.id} — ${e instanceof Error ? e.message : 'Unknown'}`, item.type);
-          await db.outbox.update(item.id!, { 
-            status: 'pending',
-            attempts: (item.attempts || 0) + 1,
-            lastAttemptAt: Date.now()
-          })
-       }
-    }
-
-    // v338: NO hacer router.refresh() aquí — causa recarga completa de página
-    // en admin/proyectos y rompe la experiencia. En su lugar, emitimos un evento
-    // ligero para que los componentes se actualicen solos si lo necesitan.
-    if (hasSyncedAnything && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('outbox-items-synced', { 
-        detail: { timestamp: Date.now() } 
-      }));
-    }
-
-    // v282/v302: Fix Infinite Sync Loop.
-    // We already iterated through all items in the queue. 
-    // If there are still items left, they are either in cooling down state or blocked by dependencies.
-    // Do NOT schedule an immediate 3s re-run blindly, as this causes the UI to loop infinitely.
-    try {
-      const remainingEligible = await db.outbox
-        .where('status')
-        .anyOf(['pending', 'failed'])
-        .filter(item => {
-           // Only count items that are NOT in a cooldown
-           const attempts = item.attempts || 0;
-           if (attempts >= 5) {
-             const minsSinceLastAttempt = (Date.now() - (item.lastAttemptAt || item.timestamp || 0)) / 60000;
-             if (minsSinceLastAttempt < 5) return false;
-           }
-           // Only count items that we haven't already tried in this exact run and failed
-           return item.lastAttemptAt ? (Date.now() - item.lastAttemptAt > 10000) : true;
-        })
-        .count();
-
-      if (remainingEligible > 0) {
-        setTimeout(() => syncOutbox(), 5000);
+        }));
       }
-    } catch (e) { /* ignore */ }
+
+      if (hasSyncedAnything && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('outbox-items-synced', { detail: { timestamp: Date.now() } }));
+      }
+
+      // Re-schedule if there's more work
+      const remaining = await db.outbox.where('status').anyOf(['pending', 'failed']).count();
+      if (remaining > 0) setTimeout(() => syncOutbox(), 5000);
 
     } finally {
-      outboxLock.current = false
-      localStorage.removeItem('global_sync_lock')
+      outboxLock.current = false;
+      localStorage.removeItem('global_sync_lock');
     }
   }
 

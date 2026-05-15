@@ -78,26 +78,59 @@ export async function POST(
       return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
     }
 
-    let { url, filename, mimeType, sizeBytes, category, createdAt } = await request.json()
+    // v430: Support BOTH JSON and FormData for Turbo Sync (avoiding Base64 crashes)
+    let url, filename, mimeType, sizeBytes, category, createdAt;
 
-    if (!url) {
-      return NextResponse.json({ error: 'Faltan datos de la imagen' }, { status: 400 })
+    const contentType = request.headers.get('content-type') || '';
+    if (contentType.includes('multipart/form-data')) {
+      const formData = await request.formData();
+      const file = formData.get('file') as File;
+      category = formData.get('category') as string;
+      createdAt = formData.get('createdAt') as string;
+
+      if (!file) {
+        return NextResponse.json({ error: 'No se recibió ningún archivo' }, { status: 400 });
+      }
+
+      const { uploadToBunny } = await import('@/lib/bunny');
+      const buffer = Buffer.from(await file.arrayBuffer());
+      filename = file.name || `upload_${Date.now()}`;
+      mimeType = file.type;
+      sizeBytes = file.size;
+
+      try {
+        url = await uploadToBunny(buffer, filename, `projects/${projectId}/gallery`);
+      } catch (uploadErr) {
+        console.error('Error uploading binary to Bunny:', uploadErr);
+        return NextResponse.json({ error: 'Error al subir a BunnyCDN' }, { status: 500 });
+      }
+    } else {
+      // Legacy JSON / Base64 fallback
+      const body = await request.json();
+      url = body.url;
+      filename = body.filename;
+      mimeType = body.mimeType;
+      sizeBytes = body.sizeBytes;
+      category = body.category;
+      createdAt = body.createdAt;
+
+      if (url && url.startsWith('data:')) {
+        const { uploadToBunny } = await import('@/lib/bunny')
+        try {
+          const matches = url.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/)
+          if (matches && matches.length === 3) {
+            const buffer = Buffer.from(matches[2], 'base64')
+            url = await uploadToBunny(buffer, filename || `gallery_${Date.now()}.jpg`, `projects/${projectId}/gallery`)
+          }
+        } catch (error) {
+          console.error('Error uploading Base64 to Bunny:', error)
+          return NextResponse.json({ error: 'Error al subir archivo a BunnyCDN' }, { status: 500 })
+        }
+      }
     }
 
-    // 0. Handle Base64 uploads (offline sync fallback)
-    if (url.startsWith('data:')) {
-      const { uploadToBunny } = await import('@/lib/bunny')
-      try {
-        const matches = url.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/)
-        if (matches && matches.length === 3) {
-          const buffer = Buffer.from(matches[2], 'base64')
-          const uploadResult = await uploadToBunny(buffer, filename || `gallery_${Date.now()}.jpg`, `projects/${projectId}/gallery`)
-          url = uploadResult // Now it's a URL string
-        }
-      } catch (error) {
-        console.error('Error uploading Base64 to Bunny:', error)
-        return NextResponse.json({ error: 'Error al subir archivo a BunnyCDN' }, { status: 500 })
-      }
+    if (!url) {
+      return NextResponse.json({ error: 'Faltan datos de la imagen o archivo' }, { status: 400 })
     }
 
     const newItem = await prisma.projectGalleryItem.create({

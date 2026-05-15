@@ -67,27 +67,7 @@ export default function OperatorGalleryGrid({
         showGrid={false}
       />
 
-      <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', padding: '10px 0', marginBottom: '10px' }}>
-        {(['ALL', 'IMAGES', 'VIDEOS', 'AUDIOS', 'DOCS'] as const).map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              padding: '6px 12px',
-              borderRadius: '20px',
-              fontSize: '0.75rem',
-              whiteSpace: 'nowrap',
-              backgroundColor: filter === f ? 'var(--primary)' : 'rgba(255,255,255,0.05)',
-              color: filter === f ? 'white' : 'var(--text-muted)',
-              border: 'none',
-              cursor: 'pointer',
-              transition: 'all 0.2s'
-            }}
-          >
-            {f === 'ALL' ? 'Todos' : f === 'IMAGES' ? 'Fotos' : f === 'VIDEOS' ? 'Videos' : f === 'AUDIOS' ? 'Audios' : 'Docs'}
-          </button>
-        ))}
-      </div>
+      {/* Filtros eliminados por ser redundantes */}
 
       {items.length === 0 ? (
         <div style={{ padding: '20px', textAlign: 'center', border: '2px dashed rgba(255,255,255,0.05)', borderRadius: '12px', opacity: 0.6 }}>

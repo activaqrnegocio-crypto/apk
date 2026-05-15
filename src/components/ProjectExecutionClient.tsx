@@ -916,163 +916,129 @@ export default function ProjectExecutionClient({
     // --- ASYNC BACKGROUND PROCESSING ---
     const processMessage = async () => {
       try {
-        // v408: Geolocation removed to avoid browser prompts on every message
         let location: any = null
         if (extraData?.lat && extraData?.lng) {
           location = { lat: extraData.lat, lng: extraData.lng }
         }
 
-      let mediaData: any = null
-      let uploadErrorOccurred = false;
-      
-      // Mandatory Compression
-      let processedMedia = mediaFile;
-      let finalFilename = mediaFile?.name || 'archivo';
-
-      if (mediaFile && navigator.onLine) {
-        try {
-          const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
-          
-          if (isCompressibleImage(mediaFile)) {
-            processedMedia = (await optimizedCompress(mediaFile)) as File;
-            finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".webp"
-          }
-
-          const uploadResult = await uploadToBunnyClientSide(processedMedia!, finalFilename, `projects/${project.id}/chat`)
-          mediaData = {
-            url: uploadResult.url,
-            filename: uploadResult.filename,
-            mimeType: uploadResult.mimeType,
-            type: uploadResult.type, // Include the detected type
-            category: 'CHAT'
-          }
-        } catch (uploadError) {
-          console.error('[CHAT] Upload error:', uploadError)
-          uploadErrorOccurred = true;
-        }
-      } else if (mediaFile && !navigator.onLine) {
-        uploadErrorOccurred = true; 
-      }
-
-      const cleanExtraData = extraData ? { ...extraData } : undefined;
-      if (cleanExtraData && cleanExtraData.file) delete cleanExtraData.file;
-
-      const payload: any = { 
-        projectId: project.id,
-        content: msgToSend,
-        type: determinedType,
-        phaseId: phaseIdToSend,
-        extraData: cleanExtraData,
-        sequence: currentSeq,
-        syncId,
-        media: mediaData
-      }
-
-      // --- OFFLINE OR UPLOAD ERROR FALLBACK ---
-      if (!navigator.onLine || uploadErrorOccurred) {
-         
-         // 1. PREPARAR EL ARCHIVO FUERA DE LA TRANSACCIÓN (Para evitar TransactionInactiveError)
-         if (mediaFile) {
-            try {
-              const prep = await prepareFileForOutbox(mediaFile);
-              payload.media = {
-                filename: prep.filename,
-                mimeType: prep.mimeType,
-                type: determinedType,
-                category: 'CHAT',
-                storageType: prep.storageType
-              };
-              
-              if (prep.storageType === 'base64') {
-                payload.media.base64 = prep.data;
-              } else {
-                payload.media.fileData = prep.data;
-              }
-            } catch (e) {
-              console.warn('[Offline] Media preparation failed:', e);
-            }
-         }
-
-         // 2. ABRIR LA TRANSACCIÓN Y GUARDAR
-         await db.transaction('rw', db.outbox, async () => {
-           await db.outbox.add({
-              type: 'MESSAGE',
-              projectId: project.id,
-              payload: payload,
-              timestamp: Date.now(),
-              lat: extraData?.lat ?? location?.lat,
-              lng: extraData?.lng ?? location?.lng,
-              status: 'pending',
-              syncId
-           })
-         });
-         
-         setLocalChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'pending_sync' } : m))
-         triggerBackgroundSync()
-         return
-      }
-
-      // --- ONLINE SEND ---
-      try {
-        const res = await fetch(`/api/projects/${project.id}/messages`, {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'x-sync-id': syncId 
-            },
-            body: JSON.stringify({ ...payload, lat: extraData?.lat ?? location?.lat, lng: extraData?.lng ?? location?.lng })
-        })
+        let mediaData: any = null
+        let uploadErrorOccurred = false;
         
-        if (res.ok) {
-          const createdMsg = await res.json()
-          setLocalChat(prev => prev.map(m => m.id === tempId ? {
-            ...createdMsg,
-            isMe: true,
-            userName: session?.user?.name || 'Yo',
-            userBranch: (session?.user as any)?.branch || null
-          } : m))
-          
-          if (payload.type === 'EXPENSE_LOG') {
-            // v373: Removed revalidateRoute — expense state already synced locally
-          }
-        } else {
-          throw new Error('Server error')
-        }
-      } catch (e) {
-         
-         // 1. PREPARAR FALLBACK FUERA DE LA TRANSACCIÓN
-         if (mediaFile && !payload.media?.base64 && !payload.media?.fileData) {
-           try {
-             const fileToStore = isCompressibleImage(mediaFile) ? await optimizedCompress(mediaFile) : mediaFile;
-             const base64 = await blobToBase64(fileToStore);
-             payload.media = {
-               base64: base64,
-               filename: mediaFile.name,
-               mimeType: mediaFile.type || (isCompressibleImage(mediaFile) ? 'image/webp' : 'application/octet-stream'),
-               category: 'CHAT'
-             };
-           } catch (err) { 
-             console.warn('[Offline] Serialisation fallback failed:', err); 
-           }
-         }
+        // --- ONLINE UPLOAD ATTEMPT ---
+        if (mediaFile && navigator.onLine) {
+          try {
+            const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
+            let processedMedia = mediaFile;
+            let finalFilename = mediaFile.name;
+            
+            if (isCompressibleImage(mediaFile)) {
+              processedMedia = (await optimizedCompress(mediaFile)) as File;
+              finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".webp"
+            }
 
-         // 2. ABRIR TRANSACCIÓN Y GUARDAR
-         await db.transaction('rw', db.outbox, async () => {
-           await db.outbox.add({
-              type: 'MESSAGE',
-              projectId: project.id,
-              payload: payload,
-              timestamp: Date.now(),
-              lat: extraData?.lat ?? location?.lat,
-              lng: extraData?.lng ?? location?.lng,
-              status: 'pending',
-              syncId
-           })
-         });
-         
-         setLocalChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'pending_sync' } : m))
-         triggerBackgroundSync()
-      }
+            const uploadResult = await uploadToBunnyClientSide(processedMedia, finalFilename, `projects/${project.id}/chat`)
+            mediaData = {
+              url: uploadResult.url,
+              filename: uploadResult.filename,
+              mimeType: uploadResult.mimeType,
+              type: uploadResult.type,
+              category: 'CHAT'
+            }
+          } catch (uploadError) {
+            console.error('[CHAT] Online upload failed, falling back to outbox:', uploadError)
+            uploadErrorOccurred = true;
+          }
+        } else if (mediaFile && !navigator.onLine) {
+          uploadErrorOccurred = true; 
+        }
+
+        const cleanExtraData = extraData ? { ...extraData } : undefined;
+        if (cleanExtraData && cleanExtraData.file) delete cleanExtraData.file;
+
+        const payload: any = { 
+          projectId: project.id,
+          content: msgToSend,
+          type: determinedType,
+          phaseId: phaseIdToSend,
+          extraData: cleanExtraData,
+          sequence: currentSeq,
+          syncId,
+          media: mediaData
+        }
+
+        // --- OFFLINE OR UPLOAD ERROR FALLBACK ---
+        if (!navigator.onLine || uploadErrorOccurred) {
+           await db.transaction('rw', db.outbox, async () => {
+             await db.outbox.add({
+                type: 'MESSAGE',
+                projectId: project.id,
+                payload: payload,
+                binaryFile: mediaFile || null,
+                timestamp: Date.now(),
+                lat: extraData?.lat ?? location?.lat,
+                lng: extraData?.lng ?? location?.lng,
+                status: 'pending',
+                syncId
+             })
+           });
+           
+           setLocalChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'pending_sync' } : m))
+           triggerBackgroundSync()
+           return
+        }
+
+        // --- ONLINE SEND ---
+        try {
+          const formData = new FormData();
+          formData.append('phaseId', String(phaseIdToSend || ''));
+          formData.append('content', msgToSend || '');
+          formData.append('type', determinedType || '');
+          const finalLat = extraData?.lat ?? location?.lat;
+          const finalLng = extraData?.lng ?? location?.lng;
+          if (finalLat) formData.append('lat', String(finalLat));
+          if (finalLng) formData.append('lng', String(finalLng));
+          if (extraData) formData.append('extraData', JSON.stringify(cleanExtraData));
+          
+          if (mediaFile) {
+            formData.append('file', mediaFile);
+          }
+
+          const res = await fetch(`/api/projects/${project.id}/messages`, {
+              method: 'POST',
+              headers: { 'x-sync-id': syncId },
+              body: formData
+          })
+          
+          if (res.ok) {
+            const createdMsg = await res.json()
+            setLocalChat(prev => prev.map(m => m.id === tempId ? {
+              ...createdMsg,
+              isMe: true,
+              userName: session?.user?.name || 'Yo',
+              userBranch: (session?.user as any)?.branch || null
+            } : m))
+          } else {
+            throw new Error('Server error, retry via outbox')
+          }
+        } catch (e) {
+           // Final fallback to Outbox
+           await db.transaction('rw', db.outbox, async () => {
+             await db.outbox.add({
+                type: 'MESSAGE',
+                projectId: project.id,
+                payload: payload,
+                binaryFile: mediaFile || null,
+                timestamp: Date.now(),
+                lat: extraData?.lat ?? location?.lat,
+                lng: extraData?.lng ?? location?.lng,
+                status: 'pending',
+                syncId
+             })
+           });
+           
+           setLocalChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'pending_sync' } : m))
+           triggerBackgroundSync()
+        }
       } catch (outerError) {
         console.error("Critical chat error:", outerError);
         setLocalChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m))
@@ -1144,212 +1110,116 @@ export default function ProjectExecutionClient({
 
   const processSingleUpload = async (file: ProjectFile) => {
     setLoading(true)
-
+    const anyFileRef = file as any;
+    const syncId = `gallery-${project.id}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    
     try {
-      // v408: Geolocation removed for faster uploads
-      let location: any = null;
-      
       const isOffline = !navigator.onLine
-      const syncId = `gallery-${project.id}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+      let location: any = null;
 
       let galleryPayload: any = {
-        filename: file.filename,
-        mimeType: file.mimeType,
-        category: file.category || 'EVIDENCE',
-        phaseId: undefined,
-        url: ''
+        filename: file.filename || anyFileRef.file?.name || 'Archivo',
+        mimeType: file.mimeType || anyFileRef.file?.type || 'image/jpeg',
+        category: file.category || 'MASTER',
+        phaseId: undefined
       };
 
+      const binaryFile = (anyFileRef.file instanceof File || anyFileRef.file instanceof Blob) 
+        ? anyFileRef.file 
+        : null;
+
+      // --- OFFLINE PATH ---
       if (isOffline) {
-        try {
-          // v354: Large file support — prevent browser crashes with 500MB+ files
-          const OFFLINE_MAX_SIZE = 300 * 1024 * 1024; // 300MB
-          const fileSize = (file as any).size || (file as any).file?.size || 0;
-          
-          if (fileSize > OFFLINE_MAX_SIZE) {
-            alert(`El archivo "${file.filename}" (${(fileSize / (1024*1024)).toFixed(0)} MB) es demasiado grande para guardar offline. \n\nLímite Offline: 300MB (Aprox. 5 min de video). \n\nPor favor conéctate a internet para subir archivos más pesados.`);
-            setLoading(false);
-            return;
-          }
-
-          // v301/v321: Use consistent preparation helper for Gallery, preferring the raw File object.
-          let fileToPrepare: File;
-          const anyFile = file as any;
-          if (anyFile.file && anyFile.file instanceof File) {
-            fileToPrepare = anyFile.file;
-          } else if (file.url && file.url.startsWith('blob:')) {
-            try {
-              const res = await fetch(file.url);
-              const blob = await res.blob();
-              fileToPrepare = new File([blob], file.filename, { type: file.mimeType });
-            } catch(e) {
-              console.warn("Failed to fetch blob URL", e);
-              fileToPrepare = new File([], file.filename, { type: file.mimeType });
-            }
-          } else if (file.url && file.url.startsWith('data:')) {
-            try {
-              const res = await fetch(file.url);
-              const blob = await res.blob();
-              fileToPrepare = new File([blob], file.filename, { type: file.mimeType });
-            } catch(e) {
-              fileToPrepare = new File([], file.filename, { type: file.mimeType });
-            }
-          } else {
-            fileToPrepare = new File([], file.filename, { type: file.mimeType });
-          }
-          
-          const prep = await prepareFileForOutbox(fileToPrepare);
-          galleryPayload.filename = prep.filename;
-          galleryPayload.mimeType = prep.mimeType;
-          galleryPayload.storageType = prep.storageType;
-          
-          // v353: Handle each storage type correctly
-          if (prep.storageType === 'file') {
-            // Large files: store as File object via structured clone (no base64 conversion!)
-            // The GlobalSyncWorker will read the File when it's time to upload to Bunny.
-            galleryPayload.url = ''; // Will be replaced by Bunny URL during sync
-            galleryPayload.fileData = { 
-              buffer: await fileToPrepare.arrayBuffer(), 
-              type: prep.mimeType, 
-              name: prep.filename 
-            };
-          } else {
-            // Small files (< 10MB): base64 is fine
-            galleryPayload.url = prep.data;
-            galleryPayload.fileData = null;
-          }
-        } catch (e: any) {
-          console.warn('[Gallery] Offline preparation failed:', e);
-          if (e?.message?.includes('ARCHIVO_MUY_GRANDE')) {
-            alert(e.message);
-            setLoading(false);
-            return;
-          }
-          galleryPayload.url = file.url; // Fallback
-        }
-
         await db.transaction('rw', db.outbox, async () => {
           await db.outbox.add({
             type: 'GALLERY_UPLOAD',
             projectId: project.id,
             payload: galleryPayload,
+            binaryFile: binaryFile,
             timestamp: Date.now(),
             lat: location?.lat,
             lng: location?.lng,
             status: 'pending',
             syncId
           })
-          console.log('[Outbox] Guardado offline:', galleryPayload.filename);
         })
         setLoading(false)
         triggerBackgroundSync()
         return
       }
 
-      // Online path — resolve blob: or raw File → base64 so the gallery API can upload to Bunny
-      let resolvedUrl = file.url;
-      const anyFileRef = file as any;
-      if (anyFileRef.file instanceof File || anyFileRef.file instanceof Blob) {
-        // Camera capture / file picker — raw File object available
-        resolvedUrl = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = (e) => resolve(e.target?.result as string);
-          reader.onerror = () => resolve(file.url); // fallback to original
-          reader.readAsDataURL(anyFileRef.file);
-        });
-      } else if (file.url && file.url.startsWith('blob:')) {
-        // Blob URL — fetch and convert
-        try {
-          const blobResp = await fetch(file.url);
-          const blob = await blobResp.blob();
-          resolvedUrl = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target?.result as string);
-            reader.onerror = () => resolve(file.url);
-            reader.readAsDataURL(blob);
-          });
-        } catch { /* keep original url, API may handle it */ }
-      }
-      galleryPayload.url = resolvedUrl;
-
-      // --- OPTIMISTIC UI UPDATE ---
+      // --- ONLINE PATH (Direct FormData) ---
       const optimisticId = `temp-${syncId}`;
-      // For the preview thumbnail we still use the original local blob/file URL (fast)
-      const previewUrl = anyFileRef.file instanceof File
-        ? URL.createObjectURL(anyFileRef.file)
-        : (file.url || resolvedUrl);
+      const previewUrl = binaryFile ? URL.createObjectURL(binaryFile) : (file.url || '');
+      
       const optimisticItem = {
         id: optimisticId,
         url: previewUrl,
-        filename: galleryPayload.filename || file.filename || 'Archivo Multimedia',
-        mimeType: galleryPayload.mimeType || file.mimeType,
+        filename: galleryPayload.filename,
+        mimeType: galleryPayload.mimeType,
         category: galleryPayload.category,
-        isPending: true // For visual indicator "Subiendo..."
+        isPending: true
       };
       
       setOptimisticUploads(prev => [...prev, optimisticItem]);
 
       try {
+        const formData = new FormData();
+        formData.append('filename', galleryPayload.filename);
+        formData.append('mimeType', galleryPayload.mimeType);
+        formData.append('category', galleryPayload.category);
+        if (location?.lat) formData.append('lat', String(location.lat));
+        if (location?.lng) formData.append('lng', String(location.lng));
+        
+        if (binaryFile) {
+          formData.append('file', binaryFile);
+        } else {
+          formData.append('url', file.url || '');
+        }
+
         const res = await fetch(`/api/projects/${project.id}/gallery`, {
           method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'x-sync-id': syncId
-          },
-          body: JSON.stringify({ 
-            ...galleryPayload,
-            lat: location?.lat,
-            lng: location?.lng
-          })
+          headers: { 'x-sync-id': syncId },
+          body: formData
         })
-        if (!res.ok) throw new Error('Refetch')
-        // v402: Remove from optimistic, bridge as normal item (no green overlay), then refresh from server
+        
+        if (!res.ok) throw new Error('Retry via Outbox')
+
         setOptimisticUploads(prev => prev.filter(i => i.id !== optimisticId));
         const serverData = await res.json().catch(() => null);
+        
         const bridgeItem = {
-          id: serverData?.id || optimisticItem.id,
-          url: serverData?.url || optimisticItem.url,
+          id: serverData?.id || optimisticId,
+          url: serverData?.url || previewUrl,
           filename: serverData?.filename || optimisticItem.filename,
           mimeType: serverData?.mimeType || optimisticItem.mimeType,
           category: optimisticItem.category,
           isPending: false
         };
+        
         setRecentlySyncedItems(prev => [...prev, bridgeItem]);
 
-        // v410: Persist to Dexie cache so the item survives navigation without full reload
-        try {
-          const numericId = Number(project.id);
-          if (!isNaN(numericId)) {
-            const cached = await db.projectsCache.get(numericId);
-            if (cached) {
-              const existingGallery: any[] = cached.gallery || [];
-              // Only add if not already present (idempotent)
-              const alreadyIn = existingGallery.some((g: any) =>
-                (serverData?.id && g.id === serverData.id) ||
-                g.url === bridgeItem.url
-              );
-              if (!alreadyIn) {
-                const newGallery = [bridgeItem, ...existingGallery];
-                await db.projectsCache.update(numericId, { gallery: newGallery });
-              }
-            }
+        // Sync to local cache
+        const numericId = Number(project.id);
+        if (!isNaN(numericId)) {
+          const cached = await db.projectsCache.get(numericId);
+          if (cached) {
+            await db.projectsCache.update(numericId, { 
+              gallery: [bridgeItem, ...(cached.gallery || [])] 
+            });
           }
-        } catch (cacheErr) {
-          console.warn('[Gallery] Failed to update local cache:', cacheErr);
         }
-
-        // Immediately refresh gallery so server item replaces bridge item
         refreshGallery();
       } catch (err) {
+        // Fallback to Outbox
         setOptimisticUploads(prev => prev.filter(i => i.id !== optimisticId));
         await db.transaction('rw', db.outbox, async () => {
           await db.outbox.add({
             type: 'GALLERY_UPLOAD',
             projectId: project.id,
             payload: galleryPayload,
+            binaryFile: binaryFile,
             timestamp: Date.now(),
-            lat: location?.lat,
-            lng: location?.lng,
             status: 'pending',
             syncId
           })
@@ -1357,7 +1227,7 @@ export default function ProjectExecutionClient({
         triggerBackgroundSync()
       }
     } catch (e) {
-      console.error(e)
+      console.error('[Gallery] Upload fatal error:', e)
     } finally {
       setLoading(false)
     }
