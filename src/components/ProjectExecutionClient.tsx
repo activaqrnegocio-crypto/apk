@@ -1264,17 +1264,13 @@ export default function ProjectExecutionClient({
           galleryPayload.mimeType = prep.mimeType;
           galleryPayload.storageType = prep.storageType;
           
-          // v443: Handle each storage type correctly
-          if (prep.storageType === 'arraybuffer') {
-            // v443: Store ArrayBuffer — universally reliable in IndexedDB.
-            // File objects lose their data on many Android browsers after structured clone.
-            galleryPayload.url = ''; // Will be replaced by Bunny URL during sync
+          // v444: Handle each storage type
+          if (prep.storageType === 'cache') {
+            // Large files: data is in Cache API, only save the key in IndexedDB
+            galleryPayload.url = '';
             galleryPayload.file = null;
-            galleryPayload.fileData = { 
-              buffer: prep.data, 
-              type: prep.mimeType, 
-              name: prep.filename 
-            };
+            galleryPayload.fileData = null;
+            galleryPayload.cacheKey = prep.cacheKey; // Key to retrieve from Cache API
           } else {
             // Small files (< 10MB): base64 is fine
             galleryPayload.url = prep.data;
@@ -1288,7 +1284,24 @@ export default function ProjectExecutionClient({
             setLoading(false);
             return;
           }
-          galleryPayload.url = file.url; // Fallback
+          // v444: Last resort — try to save via Cache API directly
+          try {
+            const anyFile = file as any;
+            const rawFile = anyFile.file;
+            if (rawFile && rawFile.size > 0) {
+              const { saveFileToCache } = await import('@/lib/offline-utils');
+              const cacheKey = `fallback-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              await saveFileToCache(cacheKey, rawFile);
+              galleryPayload.url = '';
+              galleryPayload.cacheKey = cacheKey;
+              galleryPayload.filename = file.filename;
+              galleryPayload.mimeType = file.mimeType;
+            } else {
+              galleryPayload.url = file.url;
+            }
+          } catch {
+            galleryPayload.url = file.url;
+          }
         }
 
         await db.transaction('rw', db.outbox, async () => {

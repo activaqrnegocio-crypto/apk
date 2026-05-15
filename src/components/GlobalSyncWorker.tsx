@@ -692,11 +692,14 @@ export default function GlobalSyncWorker() {
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
           
           // 1. Handle single media (MESSAGE, MEDIA_UPLOAD, EXPENSE, GALLERY_UPLOAD)
-          // v443: Detection priority:
-          //   1. fileData.buffer (ArrayBuffer) — new reliable format for large files
-          //   2. Raw File/Blob — legacy or direct input
-          //   3. base64 data URLs — small files
-          //   4. blob: URLs — session-only, unreliable after reload
+          // v444: Detection priority:
+          //   0. cacheKey → Cache API (large files saved to disk, ZERO RAM)
+          //   1. fileData.buffer → ArrayBuffer (legacy)
+          //   2. Raw File/Blob → legacy or direct input
+          //   3. base64 data URLs → small files
+          //   4. blob: URLs → session-only, unreliable
+          
+          const hasCacheKey = !!(finalPayload.cacheKey);
           
           const hasBinaryData = !!(
             (finalPayload.fileData && finalPayload.fileData.buffer) ||
@@ -713,32 +716,44 @@ export default function GlobalSyncWorker() {
                             (item.type === 'GALLERY_UPLOAD' && finalPayload.url?.startsWith('data:')) ||
                             finalPayload.receiptPhoto?.startsWith('data:'));
           
-          const hasBlobUrl = !hasRawFile && !hasBinaryData && !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
+          const hasBlobUrl = !hasRawFile && !hasBinaryData && !hasCacheKey && !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
                              (typeof finalPayload.url === 'string' && finalPayload.url.startsWith('blob:')) ||
                              (typeof finalPayload.receiptPhoto === 'string' && finalPayload.receiptPhoto.startsWith('blob:')));
 
-          if (hasBinaryData || hasRawFile || hasBase64 || hasBlobUrl) {
+          if (hasCacheKey || hasBinaryData || hasRawFile || hasBase64 || hasBlobUrl) {
             try {
               let uploadFile: File | Blob;
               let finalFilename: string = '';
 
-              // v443: PRIORITY 1 — ArrayBuffer in fileData (most reliable for offline)
-              if (hasBinaryData) {
+              // v444: PRIORITY 0 — Cache API (large files stored to disk)
+              if (hasCacheKey) {
+                const { getFileFromCache, deleteFileFromCache } = await import('@/lib/offline-utils');
+                const cached = await getFileFromCache(finalPayload.cacheKey);
+                if (!cached || cached.size === 0) {
+                  console.error(`[Sync] Cache API: file not found for key ${finalPayload.cacheKey}`);
+                  await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
+                  await logSync('error', `Cache perdido: ${item.type} #${item.id}`, item.type);
+                  continue;
+                }
+                uploadFile = cached;
+                finalFilename = finalPayload.filename || `sync_${Date.now()}`;
+                console.log(`[Sync] Using Cache API: ${finalFilename} (${(cached.size/1024/1024).toFixed(1)}MB)`);
+              }
+              // PRIORITY 1 — ArrayBuffer in fileData (legacy)
+              else if (hasBinaryData) {
                 const source = finalPayload.fileData || finalPayload.media?.fileData || finalPayload.receiptFileData;
                 if (source && source.buffer) {
                   uploadFile = new Blob([source.buffer], { type: source.type || 'application/octet-stream' });
                   finalFilename = source.name || finalPayload.filename || `sync_${Date.now()}`;
-                  console.log(`[Sync] Using ArrayBuffer: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)`);
                 } else if (source instanceof ArrayBuffer || source instanceof Uint8Array) {
-                  const mime = finalPayload.media?.mimeType || finalPayload.mimeType || 'application/octet-stream';
-                  uploadFile = new Blob([source as any], { type: mime });
+                  uploadFile = new Blob([source as any], { type: finalPayload.mimeType || 'application/octet-stream' });
                   finalFilename = finalPayload.filename || `sync_${Date.now()}`;
-                  console.log(`[Sync] Using raw ArrayBuffer: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)`);
                 } else {
                   throw new Error('fileData exists but has no valid buffer');
                 }
+                console.log(`[Sync] Using ArrayBuffer: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)`);
               }
-              // PRIORITY 2 — Raw File/Blob (legacy items or direct input)
+              // PRIORITY 2 — Raw File/Blob
               else if (hasRawFile) {
                 uploadFile = rawFileObj as Blob;
                 finalFilename = rawFileObj.name || finalPayload.filename || `sync_${Date.now()}`;
@@ -760,7 +775,6 @@ export default function GlobalSyncWorker() {
                   console.error(`[Sync] Cannot fetch media source: ${sourceStr}`, fetchErr);
                   if (typeof source === 'string' && source.startsWith('blob:')) {
                     await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
-                    await logSync('error', `Blob URL expirado para ${item.type} #${item.id}`, item.type);
                     continue;
                   }
                   throw fetchErr;
@@ -794,6 +808,15 @@ export default function GlobalSyncWorker() {
                 finalPayload.mimeType = uploadResult.mimeType;
                 if (finalPayload.fileData) finalPayload.fileData = null;
                 if (finalPayload.file) finalPayload.file = null;
+                // v444: Clean Cache API after successful upload
+                if (finalPayload.cacheKey) {
+                  try {
+                    const { deleteFileFromCache } = await import('@/lib/offline-utils');
+                    await deleteFileFromCache(finalPayload.cacheKey);
+                    console.log(`[Sync] Cache cleaned: ${finalPayload.cacheKey}`);
+                  } catch {}
+                  delete finalPayload.cacheKey;
+                }
               } else {
                 finalPayload.media = { 
                   ...finalPayload.media,
@@ -1062,6 +1085,7 @@ export default function GlobalSyncWorker() {
                delete finalPayload.file;
                delete finalPayload.fileData;
                delete finalPayload.rawFile;
+               delete finalPayload.cacheKey;
                if (typeof finalPayload.base64 === 'string' && finalPayload.base64.length > 200) {
                  delete finalPayload.base64;
                }

@@ -1109,17 +1109,15 @@ export default function ProjectDetailBase({
           }
 
           await db.transaction('rw', db.outbox, async () => {
-            // v443: Convert raw File/Blob to ArrayBuffer for reliable IndexedDB storage.
-            // File objects lose their data on many Android browsers after structured clone.
-            let fileDataForStorage: any = null;
+            // v444: Store large files in Cache API (zero RAM), only save key in IndexedDB
+            let cacheKey: string | null = null;
             const fileObj = rawFileObject;
-            if (fileObj && fileObj.size > 0) {
-              const buffer = await (fileObj as Blob).arrayBuffer();
-              fileDataForStorage = {
-                buffer: buffer,
-                type: file.mimeType || fileObj.type || 'application/octet-stream',
-                name: file.filename || (fileObj as File).name || `file_${Date.now()}`
-              };
+            if (fileObj && fileObj.size > 0 && fileObj.size > 10 * 1024 * 1024) {
+              // Large file — use Cache API
+              const { saveFileToCache } = await import('@/lib/offline-utils');
+              cacheKey = `offline-media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              await saveFileToCache(cacheKey, fileObj);
+              console.log(`[Gallery] Saved ${file.filename} (${(fileObj.size/1024/1024).toFixed(1)}MB) to Cache API`);
             }
             
             await db.outbox.add({
@@ -1130,7 +1128,8 @@ export default function ProjectDetailBase({
                  url: processedUrl, 
                  base64: processedUrl || null, 
                  file: null,
-                 fileData: fileDataForStorage,
+                 fileData: null,
+                 cacheKey: cacheKey, // Key to retrieve from Cache API (null for small files)
                  category 
                },
                timestamp: Date.now(),
