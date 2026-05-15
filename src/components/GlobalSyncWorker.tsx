@@ -689,11 +689,21 @@ export default function GlobalSyncWorker() {
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
           
           // 1. Handle single media (MESSAGE, MEDIA_UPLOAD, EXPENSE, GALLERY_UPLOAD)
+          // v441: CRITICAL FIX — Detect raw File/Blob FIRST (before base64/blob URL checks)
+          // IndexedDB structured clone preserves File content but may lose the File prototype,
+          // so we use duck-typing (.size + .slice) instead of instanceof.
+          const rawFileObj = finalPayload.file;
+          const hasRawFile = !!(rawFileObj && typeof rawFileObj === 'object' && 
+            typeof rawFileObj.size === 'number' && rawFileObj.size > 0 &&
+            typeof rawFileObj.slice === 'function');
+
           const hasBase64 = !!(finalPayload.media?.base64 || 
                             (item.type === 'GALLERY_UPLOAD' && finalPayload.url?.startsWith('data:')) ||
                             finalPayload.receiptPhoto?.startsWith('data:'));
           
-          const hasBlobUrl = !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
+          // v441: blob: URLs are session-only — they DIE after page reload.
+          // If we have a raw file object, IGNORE the blob URL and use the file directly.
+          const hasBlobUrl = !hasRawFile && !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
                              (typeof finalPayload.url === 'string' && finalPayload.url.startsWith('blob:')) ||
                              (typeof finalPayload.receiptPhoto === 'string' && finalPayload.receiptPhoto.startsWith('blob:')));
 
@@ -701,15 +711,17 @@ export default function GlobalSyncWorker() {
                                  finalPayload.fileData || 
                                  finalPayload.receiptFileData);
 
-          // v430: Detect raw File/Blob objects (from IndexedDB structured clone)
-          const hasRawFile = !!(finalPayload.file && (finalPayload.file instanceof File || finalPayload.file instanceof Blob || finalPayload.file.size > 0));
-
-          if (hasBase64 || hasBlobUrl || hasBinaryData || hasRawFile) {
+          if (hasRawFile || hasBase64 || hasBlobUrl || hasBinaryData) {
             try {
               let uploadFile: File | Blob;
               let finalFilename: string = '';
 
-              if (hasBase64 || hasBlobUrl || hasBinaryData) {
+              // v441: Prioritize raw File object — it's the most reliable source
+              if (hasRawFile) {
+                uploadFile = rawFileObj as Blob;
+                finalFilename = rawFileObj.name || finalPayload.filename || `sync_${Date.now()}`;
+                console.log(`[Sync] Using raw File object for ${finalFilename} (${(rawFileObj.size/1024/1024).toFixed(1)}MB)`);
+              } else if (hasBase64 || hasBlobUrl || hasBinaryData) {
                 const source = finalPayload.media?.fileData || 
                                finalPayload.fileData || 
                                finalPayload.receiptFileData ||
@@ -730,8 +742,22 @@ export default function GlobalSyncWorker() {
                   uploadFile = new Blob([s.buffer], { type: s.type || 'application/octet-stream' });
                   if (s.name) finalFilename = s.name;
                 } else {
-                  const resB64 = await fetch(source as string);
-                  uploadFile = await resB64.blob();
+                  // v441: If source is a blob: URL, it may have expired. Try fetching it,
+                  // but if it fails, mark as FILE_DATA_LOST immediately.
+                  try {
+                    const resB64 = await fetch(source as string);
+                    uploadFile = await resB64.blob();
+                  } catch (fetchErr) {
+                    const sourceStr = String(source || '').slice(0, 50);
+                    console.error(`[Sync] Cannot fetch media source: ${sourceStr}`, fetchErr);
+                    // If blob: URL expired, the file is unrecoverable
+                    if (typeof source === 'string' && source.startsWith('blob:')) {
+                      await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
+                      await logSync('error', `⛔ Blob URL expirado para ${item.type} #${item.id} — datos perdidos`, item.type);
+                      continue;
+                    }
+                    throw fetchErr;
+                  }
                 }
                 
                 if (!finalFilename) {
@@ -742,22 +768,34 @@ export default function GlobalSyncWorker() {
                                   `sync_${Date.now()}.jpg`;
                 }
               } else {
-                // v430: File object from IndexedDB (structured clone preserves File/Blob)
-                uploadFile = finalPayload.file;
-                finalFilename = finalPayload.file.name || finalPayload.filename || `sync_${Date.now()}`;
+                // Should never reach here, but just in case
+                throw new Error('No valid file source found');
               }
 
               const folder = item.projectId ? `projects/${item.projectId}` : 'general';
 
-              // v440: Resumable upload — read persisted state from outbox item
-              // On first attempt: no resumeState, uploadInChunks generates a fresh uploadId
-              // On retry: reuse the same uploadId + skip already-uploaded chunks
-              const resumeState = (finalPayload.resumeUpload?.uploadId)
+              // v441: ALWAYS use resumable chunked upload for files > 10MB from the sync worker.
+              // This is the offline→online path — reliability matters more than speed.
+              // For files ≤ 10MB, direct PUT is fine (photos, small docs).
+              const isLargeFile = uploadFile.size > 10 * 1024 * 1024; // 10MB threshold
+              
+              // Read persisted resume state from previous attempt (if any)
+              let resumeState = (finalPayload.resumeUpload?.uploadId)
                 ? {
                     uploadId: finalPayload.resumeUpload.uploadId as string,
                     completedChunks: (finalPayload.resumeUpload.completedChunks as number[]) || []
                   }
                 : undefined;
+
+              // v441: For large files on FIRST attempt, create a fresh resumeState
+              // so that uploadToBunnyClientSide routes to chunked upload
+              if (isLargeFile && !resumeState) {
+                resumeState = {
+                  uploadId: crypto.randomUUID(),
+                  completedChunks: []
+                };
+                console.log(`[Sync] Large file detected (${(uploadFile.size/1024/1024).toFixed(1)}MB), using chunked upload. uploadId=${resumeState.uploadId.slice(0,8)}`);
+              }
 
               // Callback: save chunk progress back into the outbox item after each chunk
               const onChunkSuccess = async (chunkIndex: number, uploadId: string, completedChunks: number[]) => {
