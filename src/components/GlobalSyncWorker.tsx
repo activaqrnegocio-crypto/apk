@@ -864,56 +864,76 @@ export default function GlobalSyncWorker() {
                 if (!sourceData) continue;
 
                 let finalUrl = '';
-                const isBinary = (sourceData instanceof ArrayBuffer || sourceData instanceof Uint8Array || (typeof sourceData === 'object' && sourceData.buffer));
+                // v443: Robust detection for binary/blob data
+                const isBlob = sourceData instanceof Blob;
+                const isArrayBuffer = sourceData instanceof ArrayBuffer || (sourceData && typeof sourceData === 'object' && 'byteLength' in sourceData);
                 const isBase64 = typeof sourceData === 'string' && sourceData.startsWith('data:');
                 const isBlobUrl = typeof sourceData === 'string' && sourceData.startsWith('blob:');
-                const isRawFile = sourceData instanceof Blob;
 
-                if (isBinary || isBase64 || isBlobUrl || isRawFile) {
+                if (isBlob || isArrayBuffer || isBase64 || isBlobUrl) {
                   let blob: Blob;
-                  if (isRawFile) {
-                    blob = sourceData;
-                  } else if (isBinary) {
-                    const buffer = (sourceData as any).buffer || sourceData;
-                    blob = new Blob([buffer], { type: att.type || 'application/octet-stream' });
+                  if (isBlob) {
+                    blob = sourceData as Blob;
+                  } else if (isArrayBuffer) {
+                    blob = new Blob([sourceData as any], { type: att.type || 'application/octet-stream' });
                   } else {
                     const res = await fetch(sourceData as string);
                     blob = await res.blob();
                   }
                   
+                  // Use standardized upload with long timeout
                   const uploadResult = await uploadToBunnyClientSide(blob, att.name, 'appointments');
                   finalUrl = uploadResult.url;
-                  // Memory release
+                  
+                  // Release memory immediately
                   if (att.fileData) att.fileData = null;
-                  await new Promise(resolve => setTimeout(resolve, 50));
+                  if (att.data) att.data = null;
+                  if (att.base64) att.base64 = null;
+                  
+                  await new Promise(resolve => setTimeout(resolve, 500)); // Network-friendly delay
                 } else if (typeof sourceData === 'string' && sourceData.startsWith('http')) {
                   finalUrl = sourceData;
                 }
 
                 if (finalUrl) {
-                  uploadedFiles.push({ 
-                    url: finalUrl, 
-                    type: att.type || (att.name.match(/\.(mp4|mov|webm)$/i) ? 'video' : 'image'), 
-                    name: att.name 
-                  });
+                  const fileName = (att.name || '').toLowerCase();
+                  const originalType = (att.type || '').toLowerCase();
+                  
+                  // v443: Standardize to UPPERCASE types for system consistency
+                  let type = 'DOCUMENT';
+                  if (originalType.includes('video') || fileName.match(/\.(mp4|mov|avi|webm|mkv|3gp|m4v)$/)) {
+                    type = 'VIDEO';
+                  } else if (originalType.includes('image') || fileName.match(/\.(jpg|jpeg|png|gif|webp|heic|svg)$/)) {
+                    type = 'IMAGE';
+                  } else if (originalType.includes('audio') || fileName.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/)) {
+                    type = 'AUDIO';
+                  }
+
+                  uploadedFiles.push({ url: finalUrl, type, name: att.name });
                 }
               }
 
-              // v360: Re-standardize payload with NO OVERLAPS
-              // 'files' is the source of truth for the DB
-              // 'attachments' (images/docs) and 'attachmentLinks' (videos) are for WA and legacy UI
+              // v443: Re-standardize payload properties to match AppointmentModal expectations
               finalPayload.files = uploadedFiles;
-              finalPayload.attachments = uploadedFiles
-                .filter(f => f.type !== 'video' && f.type !== 'audio')
-                .map(f => ({ data: f.url, type: f.type, name: f.name }));
+              finalPayload.attachments = uploadedFiles.map(f => ({ 
+                data: f.url, 
+                url: f.url, // Provide both for safety
+                type: f.type, 
+                name: f.name 
+              }));
               
               finalPayload.attachmentLinks = uploadedFiles
-                .filter(f => f.type === 'video' || f.type === 'audio')
-                .map(f => ({ url: f.url, type: f.type, name: f.name }));
+                .filter(f => f.type === 'VIDEO' || f.type === 'AUDIO')
+                .map(f => ({ url: f.url, data: f.url, type: f.type, name: f.name }));
 
             } catch (err) {
               console.error('[Sync] Failed TASK media sync:', err);
-              await db.outbox.update(item.id!, { status: 'pending' });
+              const currentAttempts = (item.attempts || 0) + 1;
+              await db.outbox.update(item.id!, { 
+                status: currentAttempts >= 10 ? 'failed' : 'pending',
+                attempts: currentAttempts,
+                lastAttemptAt: Date.now()
+              });
               continue;
             }
           }
@@ -1032,8 +1052,28 @@ export default function GlobalSyncWorker() {
              // v430: Dynamic timeout — 120s for gallery/media uploads, 30s for text-only items
              // A 50MB video on 4G (5Mbps) takes ~80s. 30s timeout was causing false 'failed' status.
              const isMediaItem = item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD';
+
+             // v443: CRITICAL - Strip ALL binary data before JSON.stringify.
+             // After Bunny upload, payload only needs CDN URL + metadata.
+             if (isMediaItem) {
+               delete finalPayload.file;
+               delete finalPayload.fileData;
+               delete finalPayload.rawFile;
+               if (typeof finalPayload.base64 === 'string' && finalPayload.base64.length > 200) {
+                 delete finalPayload.base64;
+               }
+               if (finalPayload.media) {
+                 delete finalPayload.media.fileData;
+                 delete finalPayload.media.base64;
+                 if (finalPayload.media.url?.startsWith('blob:') || finalPayload.media.url?.startsWith('data:')) {
+                   delete finalPayload.media.url;
+                 }
+               }
+               console.log(`[Sync] POST payload cleaned: url=${(finalPayload.url || '').slice(0, 80)}, filename=${finalPayload.filename}`);
+             }
+
              const controller = new AbortController();
-             const timeoutMs = isMediaItem ? 120000 : 30000;
+             const timeoutMs = isMediaItem ? 60000 : 30000;
              const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
              const res = await fetch(endpoint, {
                  method,
