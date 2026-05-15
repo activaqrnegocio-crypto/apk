@@ -478,17 +478,27 @@ export default function ProjectExecutionClient({
       // v329: Only show in Planos if it strictly belongs here. Don't steal from Finales.
       return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO';
     }).map((item: any) => {
-      // v317: Use persistent preview logic
+      // v441: CRITICAL FIX — Detect raw File object for preview
       let objUrl = '';
       const p = item.payload || {};
-      if (p.url && !p.url.startsWith('blob:')) {
+      
+      // v441: Priority 1 — Raw File object (from structured clone in IndexedDB)
+      const rawFile = p.file;
+      const hasRawFile = !!(rawFile && typeof rawFile === 'object' && 
+        typeof rawFile.size === 'number' && rawFile.size > 0 &&
+        typeof rawFile.slice === 'function');
+
+      if (hasRawFile) {
+        try {
+          objUrl = URL.createObjectURL(rawFile as Blob);
+        } catch(e) { console.warn('[Gallery] Failed to create objectURL from File:', e); }
+      } else if (p.url && !p.url.startsWith('blob:')) {
         objUrl = p.url;
-      } else if (p.base64) {
+      } else if (p.base64 && typeof p.base64 === 'string' && p.base64.startsWith('data:')) {
         objUrl = p.base64;
       } else if (p.fileData) {
         try {
           const data = p.fileData.buffer || p.fileData;
-          // v373: Skip blob URL for large files (>5MB) to prevent OOM
           const dataSize = data?.byteLength || data?.length || 0;
           if (dataSize > 5 * 1024 * 1024) {
             objUrl = '';
@@ -624,19 +634,27 @@ export default function ProjectExecutionClient({
     }).map((item: any) => {
       const p = item.payload || {};
       let objUrl = '';
-      if (p.url && !p.url.startsWith('blob:')) {
+      
+      // v441: Priority 1 — Raw File object (from structured clone in IndexedDB)
+      const rawFile = p.file;
+      const hasRawFile = !!(rawFile && typeof rawFile === 'object' && 
+        typeof rawFile.size === 'number' && rawFile.size > 0 &&
+        typeof rawFile.slice === 'function');
+
+      if (hasRawFile) {
+        try {
+          objUrl = URL.createObjectURL(rawFile as Blob);
+        } catch(e) { console.warn('[Gallery] Failed to create objectURL from File:', e); }
+      } else if (p.url && !p.url.startsWith('blob:')) {
         objUrl = p.url;
-      } else if (p.base64) {
+      } else if (p.base64 && typeof p.base64 === 'string' && p.base64.startsWith('data:')) {
         objUrl = p.base64;
       } else if (p.fileData) {
         try {
-          // v321: Robust binary handling
           const rawData = p.fileData.buffer || p.fileData;
-          // v373: Skip blob URL creation for large files (>5MB) to prevent OOM crashes.
-          // Large videos/photos pending sync don't need full previews — use placeholder.
           const dataSize = rawData?.byteLength || rawData?.length || 0;
           if (dataSize > 5 * 1024 * 1024) {
-            objUrl = ''; // Will fall through to placeholder below
+            objUrl = '';
           } else {
             const blob = new Blob([rawData], { type: p.mimeType || 'image/jpeg' });
             objUrl = URL.createObjectURL(blob);
@@ -1195,22 +1213,32 @@ export default function ProjectExecutionClient({
 
       if (isOffline) {
         try {
-          // v354: Large file support — prevent browser crashes with 500MB+ files
-          const OFFLINE_MAX_SIZE = 300 * 1024 * 1024; // 300MB
+          // v441: CRITICAL FIX — increased limit + duck-typing for File detection
+          const OFFLINE_MAX_SIZE = 600 * 1024 * 1024; // 600MB (v441)
           const fileSize = (file as any).size || (file as any).file?.size || 0;
           
           if (fileSize > OFFLINE_MAX_SIZE) {
-            alert(`El archivo "${file.filename}" (${(fileSize / (1024*1024)).toFixed(0)} MB) es demasiado grande para guardar offline. \n\nLímite Offline: 300MB (Aprox. 5 min de video). \n\nPor favor conéctate a internet para subir archivos más pesados.`);
+            alert(`El archivo "${file.filename}" (${(fileSize / (1024*1024)).toFixed(0)} MB) es demasiado grande para guardar offline. \n\nLímite Offline: 600MB. \n\nPor favor conéctate a internet para subir archivos más pesados.`);
             setLoading(false);
             return;
           }
 
-          // v301/v321: Use consistent preparation helper for Gallery, preferring the raw File object.
+          // v441: CRITICAL FIX — Use duck-typing instead of instanceof File.
+          // In some mobile WebViews, instanceof File fails for File objects
+          // passed between components. Duck-typing (.size + .slice + .name) is reliable.
           let fileToPrepare: File;
           const anyFile = file as any;
-          if (anyFile.file && anyFile.file instanceof File) {
-            fileToPrepare = anyFile.file;
+          const rawFile = anyFile.file;
+          const hasRawFile = !!(rawFile && typeof rawFile === 'object' && 
+            typeof rawFile.size === 'number' && rawFile.size > 0 &&
+            typeof rawFile.slice === 'function');
+
+          if (hasRawFile) {
+            // v441: Use the raw File object DIRECTLY — no fetch, no arrayBuffer, no RAM spike!
+            fileToPrepare = rawFile;
+            console.log(`[Gallery] Using raw File object: ${rawFile.name || file.filename} (${(rawFile.size/1024/1024).toFixed(1)}MB)`);
           } else if (file.url && file.url.startsWith('blob:')) {
+            // Fallback: fetch blob URL (only for small files or when raw File is unavailable)
             try {
               const res = await fetch(file.url);
               const blob = await res.blob();
