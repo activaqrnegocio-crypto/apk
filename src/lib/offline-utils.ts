@@ -50,13 +50,15 @@ export async function prepareFileForOutbox(file: File): Promise<{
       size: file.size 
     };
   } else {
-    // v353: Large files → Store the raw File object via structured clone.
-    // IndexedDB uses the Structured Clone Algorithm which can clone File objects directly.
-    // This avoids the 33% overhead of base64 AND the memory spike of reading the whole file.
-    // The GlobalSyncWorker will read the File when it's time to upload.
+    // v443: Large files → Store as ArrayBuffer.
+    // CRITICAL FIX: Raw File objects lose their data after IndexedDB structured clone
+    // on many Android browsers (Chrome 90-120+). The metadata (.size, .name) survives
+    // but reading the file with .arrayBuffer() or .slice() returns empty/corrupt data.
+    // ArrayBuffer is universally reliable in IndexedDB on ALL browsers.
+    const buffer = await file.arrayBuffer();
     return { 
-      data: file, 
-      storageType: 'file', 
+      data: buffer, 
+      storageType: 'arraybuffer', 
       filename: file.name, 
       mimeType: file.type, 
       size: file.size 

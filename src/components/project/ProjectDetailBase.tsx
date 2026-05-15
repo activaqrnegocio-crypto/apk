@@ -1109,6 +1109,19 @@ export default function ProjectDetailBase({
           }
 
           await db.transaction('rw', db.outbox, async () => {
+            // v443: Convert raw File/Blob to ArrayBuffer for reliable IndexedDB storage.
+            // File objects lose their data on many Android browsers after structured clone.
+            let fileDataForStorage: any = null;
+            const fileObj = rawFileObject;
+            if (fileObj && fileObj.size > 0) {
+              const buffer = await (fileObj as Blob).arrayBuffer();
+              fileDataForStorage = {
+                buffer: buffer,
+                type: file.mimeType || fileObj.type || 'application/octet-stream',
+                name: file.filename || (fileObj as File).name || `file_${Date.now()}`
+              };
+            }
+            
             await db.outbox.add({
                type: 'GALLERY_UPLOAD',
                projectId: project.id,
@@ -1116,10 +1129,8 @@ export default function ProjectDetailBase({
                  ...file, 
                  url: processedUrl, 
                  base64: processedUrl || null, 
-                 // v441: Store raw File object — NOT arrayBuffer!
-                 // IndexedDB structured clone handles File/Blob natively.
-                 file: rawFileObject,
-                 fileData: null, // Legacy — no longer used
+                 file: null,
+                 fileData: fileDataForStorage,
                  category 
                },
                timestamp: Date.now(),

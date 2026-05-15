@@ -1264,17 +1264,21 @@ export default function ProjectExecutionClient({
           galleryPayload.mimeType = prep.mimeType;
           galleryPayload.storageType = prep.storageType;
           
-          // v430: Handle each storage type correctly
-          if (prep.storageType === 'file') {
-            // v430: Store the raw File object directly via IndexedDB structured clone.
-            // CRITICAL FIX: Previously used arrayBuffer() which loaded the ENTIRE file into RAM,
-            // causing crashes on mobile with large videos. File objects are cloned by reference.
+          // v443: Handle each storage type correctly
+          if (prep.storageType === 'arraybuffer') {
+            // v443: Store ArrayBuffer — universally reliable in IndexedDB.
+            // File objects lose their data on many Android browsers after structured clone.
             galleryPayload.url = ''; // Will be replaced by Bunny URL during sync
-            galleryPayload.file = fileToPrepare; // Stored via structured clone — zero RAM overhead
-            galleryPayload.fileData = null; // Legacy field, not used anymore
+            galleryPayload.file = null;
+            galleryPayload.fileData = { 
+              buffer: prep.data, 
+              type: prep.mimeType, 
+              name: prep.filename 
+            };
           } else {
             // Small files (< 10MB): base64 is fine
             galleryPayload.url = prep.data;
+            galleryPayload.file = null;
             galleryPayload.fileData = null;
           }
         } catch (e: any) {

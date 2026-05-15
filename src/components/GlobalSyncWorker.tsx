@@ -610,24 +610,27 @@ export default function GlobalSyncWorker() {
         const currentItem = await db.outbox.get(item.id!)
         if (!currentItem || currentItem.status === 'syncing') continue
 
-        // v280: Prevent infinite retries, but don't block forever. Cool down for 5 mins after 5 attempts.
-        if ((currentItem.attempts || 0) >= 5) {
+        // v443: Cooldown logic - prevent infinite retries without blocking too long.
+        // Attempts 1-7: retry every 10s (normal cooldown via lastAttemptAt check below)
+        // Attempts 8-9: 2 min cooldown (conservative, something is clearly wrong)
+        // Attempt 10+: permanently failed (handled in catch block)
+        const attempts = currentItem.attempts || 0;
+        if (attempts >= 8) {
           const minsSinceLastAttempt = (Date.now() - (currentItem.lastAttemptAt || currentItem.timestamp || 0)) / 60000;
-          if (minsSinceLastAttempt < 5) {
+          if (minsSinceLastAttempt < 2) {
             continue;
           }
-          // v373: After 5+ attempts for media uploads, validate that file data still exists.
-          // If the binary payload is gone (corrupted/GC'd), mark as permanently failed.
+          // v373: After 8+ attempts for media uploads, validate that file data still exists.
           const isMediaType = currentItem.type === 'GALLERY_UPLOAD' || currentItem.type === 'MEDIA_UPLOAD';
-          if (isMediaType && (currentItem.attempts || 0) >= 8) {
+          if (isMediaType) {
             const p = currentItem.payload || {};
             const hasValidData = !!(p.fileData || p.file || p.media?.fileData || p.media?.base64 || 
               (p.url && !p.url.startsWith('blob:') && !p.url.startsWith('data:') && p.url.startsWith('http')) ||
               (p.media?.url && !p.media.url.startsWith('blob:') && p.media.url.startsWith('http')));
             if (!hasValidData) {
-              console.warn(`[Sync] ⛔ Permanently failing media item ${item.id} — file data lost after ${currentItem.attempts} attempts`);
+              console.warn(`[Sync] Permanently failing media item ${item.id} - file data lost after ${attempts} attempts`);
               await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
-              await logSync('error', `⛔ Descartado: ${item.type} #${item.id} — datos del archivo perdidos`, item.type);
+              await logSync('error', `Descartado: ${item.type} #${item.id} - datos del archivo perdidos`, item.type);
               continue;
             }
           }
@@ -689,9 +692,18 @@ export default function GlobalSyncWorker() {
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
           
           // 1. Handle single media (MESSAGE, MEDIA_UPLOAD, EXPENSE, GALLERY_UPLOAD)
-          // v441: CRITICAL FIX — Detect raw File/Blob FIRST (before base64/blob URL checks)
-          // IndexedDB structured clone preserves File content but may lose the File prototype,
-          // so we use duck-typing (.size + .slice) instead of instanceof.
+          // v443: Detection priority:
+          //   1. fileData.buffer (ArrayBuffer) — new reliable format for large files
+          //   2. Raw File/Blob — legacy or direct input
+          //   3. base64 data URLs — small files
+          //   4. blob: URLs — session-only, unreliable after reload
+          
+          const hasBinaryData = !!(
+            (finalPayload.fileData && finalPayload.fileData.buffer) ||
+            (finalPayload.media?.fileData && finalPayload.media.fileData.buffer) ||
+            finalPayload.receiptFileData
+          );
+          
           const rawFileObj = finalPayload.file;
           const hasRawFile = !!(rawFileObj && typeof rawFileObj === 'object' && 
             typeof rawFileObj.size === 'number' && rawFileObj.size > 0 &&
@@ -701,75 +713,66 @@ export default function GlobalSyncWorker() {
                             (item.type === 'GALLERY_UPLOAD' && finalPayload.url?.startsWith('data:')) ||
                             finalPayload.receiptPhoto?.startsWith('data:'));
           
-          // v441: blob: URLs are session-only — they DIE after page reload.
-          // If we have a raw file object, IGNORE the blob URL and use the file directly.
-          const hasBlobUrl = !hasRawFile && !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
+          const hasBlobUrl = !hasRawFile && !hasBinaryData && !!((typeof finalPayload.media?.url === 'string' && finalPayload.media.url.startsWith('blob:')) ||
                              (typeof finalPayload.url === 'string' && finalPayload.url.startsWith('blob:')) ||
                              (typeof finalPayload.receiptPhoto === 'string' && finalPayload.receiptPhoto.startsWith('blob:')));
 
-          const hasBinaryData = !!(finalPayload.media?.fileData || 
-                                 finalPayload.fileData || 
-                                 finalPayload.receiptFileData);
-
-          if (hasRawFile || hasBase64 || hasBlobUrl || hasBinaryData) {
+          if (hasBinaryData || hasRawFile || hasBase64 || hasBlobUrl) {
             try {
               let uploadFile: File | Blob;
               let finalFilename: string = '';
 
-              // v441: Prioritize raw File object — it's the most reliable source
-              if (hasRawFile) {
+              // v443: PRIORITY 1 — ArrayBuffer in fileData (most reliable for offline)
+              if (hasBinaryData) {
+                const source = finalPayload.fileData || finalPayload.media?.fileData || finalPayload.receiptFileData;
+                if (source && source.buffer) {
+                  uploadFile = new Blob([source.buffer], { type: source.type || 'application/octet-stream' });
+                  finalFilename = source.name || finalPayload.filename || `sync_${Date.now()}`;
+                  console.log(`[Sync] Using ArrayBuffer: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)`);
+                } else if (source instanceof ArrayBuffer || source instanceof Uint8Array) {
+                  const mime = finalPayload.media?.mimeType || finalPayload.mimeType || 'application/octet-stream';
+                  uploadFile = new Blob([source as any], { type: mime });
+                  finalFilename = finalPayload.filename || `sync_${Date.now()}`;
+                  console.log(`[Sync] Using raw ArrayBuffer: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)`);
+                } else {
+                  throw new Error('fileData exists but has no valid buffer');
+                }
+              }
+              // PRIORITY 2 — Raw File/Blob (legacy items or direct input)
+              else if (hasRawFile) {
                 uploadFile = rawFileObj as Blob;
                 finalFilename = rawFileObj.name || finalPayload.filename || `sync_${Date.now()}`;
-                console.log(`[Sync] Using raw File object for ${finalFilename} (${(rawFileObj.size/1024/1024).toFixed(1)}MB)`);
-              } else if (hasBase64 || hasBlobUrl || hasBinaryData) {
-                const source = finalPayload.media?.fileData || 
-                               finalPayload.fileData || 
-                               finalPayload.receiptFileData ||
-                               finalPayload.media?.base64 || 
+                console.log(`[Sync] Using raw File: ${finalFilename} (${(rawFileObj.size/1024/1024).toFixed(1)}MB)`);
+              }
+              // PRIORITY 3 — base64 or blob URL
+              else {
+                const source = finalPayload.media?.base64 || 
                                finalPayload.media?.url || 
                                finalPayload.url || 
                                finalPayload.receiptPhoto;
                 
-                if (source && (source instanceof ArrayBuffer || source instanceof Uint8Array)) {
-                  const mime = finalPayload.media?.mimeType || 
-                               finalPayload.fileData?.type || 
-                               finalPayload.receiptFileData?.type || 
-                               'application/octet-stream';
-                  uploadFile = new Blob([source as any], { type: mime });
-                } else if (source && typeof source === 'object' && (source as any).buffer) {
-                  // Caso: Estructura { buffer, type, name }
-                  const s = source as any;
-                  uploadFile = new Blob([s.buffer], { type: s.type || 'application/octet-stream' });
-                  if (s.name) finalFilename = s.name;
-                } else {
-                  // v441: If source is a blob: URL, it may have expired. Try fetching it,
-                  // but if it fails, mark as FILE_DATA_LOST immediately.
-                  try {
-                    const resB64 = await fetch(source as string);
-                    uploadFile = await resB64.blob();
-                  } catch (fetchErr) {
-                    const sourceStr = String(source || '').slice(0, 50);
-                    console.error(`[Sync] Cannot fetch media source: ${sourceStr}`, fetchErr);
-                    // If blob: URL expired, the file is unrecoverable
-                    if (typeof source === 'string' && source.startsWith('blob:')) {
-                      await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
-                      await logSync('error', `⛔ Blob URL expirado para ${item.type} #${item.id} — datos perdidos`, item.type);
-                      continue;
-                    }
-                    throw fetchErr;
+                try {
+                  const resB64 = await fetch(source as string);
+                  uploadFile = await resB64.blob();
+                  console.log(`[Sync] Using fetched source: ${(uploadFile.size/1024/1024).toFixed(1)}MB`);
+                } catch (fetchErr) {
+                  const sourceStr = String(source || '').slice(0, 50);
+                  console.error(`[Sync] Cannot fetch media source: ${sourceStr}`, fetchErr);
+                  if (typeof source === 'string' && source.startsWith('blob:')) {
+                    await db.outbox.update(item.id!, { status: 'failed', failReason: 'FILE_DATA_LOST' });
+                    await logSync('error', `Blob URL expirado para ${item.type} #${item.id}`, item.type);
+                    continue;
                   }
+                  throw fetchErr;
                 }
-                
-                if (!finalFilename) {
-                  finalFilename = finalPayload.media?.filename || 
-                                  finalPayload.media?.fileName || 
-                                  finalPayload.fileData?.name ||
-                                  finalPayload.filename || 
-                                  `sync_${Date.now()}.jpg`;
-                }
-              } else {
-                // Should never reach here, but just in case
-                throw new Error('No valid file source found');
+              }
+              
+              if (!finalFilename) {
+                finalFilename = finalPayload.media?.filename || 
+                                finalPayload.media?.fileName || 
+                                finalPayload.fileData?.name ||
+                                finalPayload.filename || 
+                                `sync_${Date.now()}.jpg`;
               }
 
               const folder = item.projectId ? `projects/${item.projectId}` : 'general';
@@ -1356,9 +1359,9 @@ export default function GlobalSyncWorker() {
         .filter(item => {
            // Only count items that are NOT in a cooldown
            const attempts = item.attempts || 0;
-           if (attempts >= 5) {
+           if (attempts >= 8) {
              const minsSinceLastAttempt = (Date.now() - (item.lastAttemptAt || item.timestamp || 0)) / 60000;
-             if (minsSinceLastAttempt < 5) return false;
+             if (minsSinceLastAttempt < 2) return false;
            }
            // Only count items that we haven't already tried in this exact run and failed
            return item.lastAttemptAt ? (Date.now() - item.lastAttemptAt > 10000) : true;
