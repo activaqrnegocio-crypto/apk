@@ -748,7 +748,30 @@ export default function GlobalSyncWorker() {
               }
 
               const folder = item.projectId ? `projects/${item.projectId}` : 'general';
-              const uploadResult = await uploadToBunnyClientSide(uploadFile, finalFilename, folder);
+
+              // v440: Resumable upload — read persisted state from outbox item
+              // On first attempt: no resumeState, uploadInChunks generates a fresh uploadId
+              // On retry: reuse the same uploadId + skip already-uploaded chunks
+              const resumeState = (finalPayload.resumeUpload?.uploadId)
+                ? {
+                    uploadId: finalPayload.resumeUpload.uploadId as string,
+                    completedChunks: (finalPayload.resumeUpload.completedChunks as number[]) || []
+                  }
+                : undefined;
+
+              // Callback: save chunk progress back into the outbox item after each chunk
+              const onChunkSuccess = async (chunkIndex: number, uploadId: string, completedChunks: number[]) => {
+                try {
+                  await db.outbox.update(item.id!, {
+                    payload: {
+                      ...finalPayload,
+                      resumeUpload: { uploadId, completedChunks }
+                    }
+                  });
+                } catch { /* non-critical — worst case next retry starts slightly earlier */ }
+              };
+
+              const uploadResult = await uploadToBunnyClientSide(uploadFile, finalFilename, folder, resumeState, onChunkSuccess);
               
               if (item.type === 'EXPENSE') {
                 finalPayload.receiptPhoto = uploadResult.url;

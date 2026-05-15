@@ -74,7 +74,10 @@ async function maybeCompressImage(file: File | Blob, originalName: string): Prom
 export async function uploadToBunnyClientSide(
   file: File | Blob, 
   originalName: string,
-  folder: string = 'aquatech-crm'
+  folder: string = 'aquatech-crm',
+  // v440: Resumable upload state — only used for chunked uploads (>50MB videos)
+  resumeState?: { uploadId: string; completedChunks: number[] },
+  onChunkSuccess?: (chunkIndex: number, uploadId: string, completedChunks: number[]) => Promise<void>
 ): Promise<UploadResult> {
   // v430: Compress images before upload
   const { file: processedFile, name: processedName, mimeType: processedMime } = await maybeCompressImage(file, originalName);
@@ -88,10 +91,12 @@ export async function uploadToBunnyClientSide(
   const path = `/${storageZone}/${folder}/${timestamp}-${randomSuffix}-${safeName}`;
   const uploadUrl = `https://${storageHost}${path}`;
 
-  // 3. Direct PUT to Bunny.net (or Chunked if > 50MB)
-  if (processedFile.size > 50 * 1024 * 1024) {
-     console.log('[Storage] File > 50MB, using chunked upload...');
-     const chunkedResult = await uploadInChunks(processedFile, processedName, processedMime);
+  // 3. Direct PUT to Bunny.net (or Chunked if resumeState is provided)
+  // v440: Resumable chunked upload is ONLY used for synchronization (offline -> online)
+  // to ensure reliability. Normal online uploads use direct PUT for maximum speed.
+  if (resumeState) {
+     console.log(`[Storage] Resumable sync detected for ${processedName} (${(processedFile.size/1024/1024).toFixed(1)}MB), using chunked upload...`);
+     const chunkedResult = await uploadInChunks(processedFile, processedName, processedMime, resumeState, onChunkSuccess);
      return {
        url: chunkedResult.url,
        filename: processedName,
@@ -99,6 +104,7 @@ export async function uploadToBunnyClientSide(
        type: getMediaType(processedName, processedMime)
      };
   }
+
 
   // v353fix: Send the REAL Content-Type to Bunny.net so the CDN serves files
   // with correct headers. Without this, videos were served as application/octet-stream
@@ -154,30 +160,64 @@ function getMediaType(name: string, mimeType: string): 'IMAGE' | 'VIDEO' | 'AUDI
 
 /**
  * v272: Chunked upload helper for large files (videos, audios)
+ * v440: Resumable — accepts a persistent uploadId and onChunkSuccess callback.
+ *       Queries the server for already-uploaded chunks and skips them.
  */
 export async function uploadInChunks(
   file: File | Blob,
   filename: string,
-  mimeType?: string
-): Promise<{ url: string }> {
-  // v355: Increased chunk size to 10MB for significantly faster uploads on 4G/5G
-  const CHUNK_SIZE = 10 * 1024 * 1024; 
+  mimeType?: string,
+  // v440: Resumable upload state
+  resumeState?: {
+    uploadId: string;          // Persistent across retries
+    completedChunks: number[]; // Chunks already on server
+  },
+  // v440: Called after each chunk succeeds — lets the Worker persist progress to Dexie
+  onChunkSuccess?: (chunkIndex: number, uploadId: string, completedChunks: number[]) => Promise<void>
+): Promise<{ url: string; uploadId: string; completedChunks: number[] }> {
+  // v440: Reduced from 10MB to 5MB — smaller chunks fail faster and resume faster on mobile
+  const CHUNK_SIZE = 5 * 1024 * 1024;
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-  const uploadId = crypto.randomUUID();
 
-  console.log(`[Storage] Starting chunked upload for ${filename} (${(file.size/1024/1024).toFixed(1)}MB). Total chunks: ${totalChunks}`);
+  // v440: Reuse uploadId across retries — do NOT generate a new one each time
+  const uploadId = resumeState?.uploadId || crypto.randomUUID();
+
+  console.log(`[Storage] Chunked upload for ${filename} (${(file.size/1024/1024).toFixed(1)}MB). ${totalChunks} chunks of 5MB. uploadId=${uploadId.slice(0,8)}`);
+
+  // v440: Build the set of already-completed chunks
+  // First check what the caller passed (from Dexie), then verify with the server
+  let completedSet = new Set<number>(resumeState?.completedChunks || []);
+
+  if (resumeState?.uploadId && completedSet.size === 0) {
+    // Maybe previous run completed some chunks but caller didn't have the state
+    try {
+      const checkRes = await fetch(`/api/upload/chunk?uploadId=${uploadId}`);
+      if (checkRes.ok) {
+        const { completedChunks: serverChunks } = await checkRes.json();
+        if (Array.isArray(serverChunks) && serverChunks.length > 0) {
+          serverChunks.forEach((c: number) => completedSet.add(c));
+          console.log(`[Storage] Resume: server already has chunks [${serverChunks.join(',')}], skipping them`);
+        }
+      }
+    } catch { /* non-critical */ }
+  }
 
   for (let i = 0; i < totalChunks; i++) {
+    // v440: Skip chunks already on the server from a previous attempt
+    if (completedSet.has(i)) {
+      console.log(`[Storage] Chunk ${i + 1}/${totalChunks} already on server, skipping ✓`);
+      continue;
+    }
+
     const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-    
-    // v355: Retry logic for each chunk (up to 3 times)
-    let success = false;
-    let attempts = 0;
 
     // v440: Per-chunk timeout — max(60s, 2s per MB of chunk size).
-    // A 10MB chunk on a slow 100KB/s connection takes ~100s, but we give margin.
+    // 5MB chunk at 100KB/s = 50s. Give 60s minimum as safety margin.
     const chunkSizeMB = Math.ceil(chunk.size / (1024 * 1024));
     const chunkTimeoutMs = Math.max(60000, chunkSizeMB * 2000);
+
+    let success = false;
+    let attempts = 0;
 
     while (!success && attempts < 3) {
       attempts++;
@@ -204,19 +244,26 @@ export async function uploadInChunks(
 
         const data = await res.json();
         success = true;
-        
-        console.log(`[Storage] Chunk ${i + 1}/${totalChunks} uploaded successfully.`);
-        
+        completedSet.add(i);
+
+        console.log(`[Storage] Chunk ${i + 1}/${totalChunks} uploaded. (${completedSet.size}/${totalChunks} done)`);
+
+        // v440: Notify caller so they can persist progress to Dexie (resumable state)
+        if (onChunkSuccess) {
+          await onChunkSuccess(i, uploadId, Array.from(completedSet)).catch(() => {});
+        }
+
+        // Last chunk returns the final URL
         if (data.url) {
-          console.log(`[Storage] Upload complete! URL: ${data.url}`);
-          return { url: data.url };
+          console.log(`[Storage] Chunked upload complete! URL: ${data.url}`);
+          return { url: data.url, uploadId, completedChunks: Array.from(completedSet) };
         }
       } catch (err) {
         clearTimeout(chunkTimeoutId);
         const isAbort = err instanceof Error && err.name === 'AbortError';
         console.warn(`[Storage] Chunk ${i} attempt ${attempts} failed${isAbort ? ' (timeout)' : ''}:`, err);
         if (attempts >= 3) throw new Error(`Chunk ${i} failed after 3 attempts`);
-        // Wait 2s before retry (increased from 1s for network recovery)
+        // Wait 2s before retry for network recovery
         await new Promise(r => setTimeout(r, 2000));
       }
     }

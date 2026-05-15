@@ -501,7 +501,14 @@ export default function ResourceGrid({ initialResources, isSuperAdmin }: Resourc
                   style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                 >
                   {isVideo(selectedGallery.images[selectedGallery.index]) ? (
-                    <video src={selectedGallery.images[selectedGallery.index]} controls autoPlay playsInline style={{ maxHeight: '90vh', maxWidth: '90vw' }} />
+                    <video 
+                      src={selectedGallery.images[selectedGallery.index]} 
+                      controls 
+                      autoPlay 
+                      playsInline 
+                      controlsList="nodownload"
+                      style={{ maxHeight: '90vh', maxWidth: '90vw', display: 'block' }} 
+                    />
                   ) : isAudio(selectedGallery.images[selectedGallery.index]) ? (
                     <div style={{ backgroundColor: 'var(--bg-card)', padding: '50px', borderRadius: '30px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', width: '100%', maxWidth: '450px', boxShadow: '0 25px 60px rgba(0,0,0,0.6)' }}>
                        <div style={{ width: '100px', height: '100px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '10px' }}>

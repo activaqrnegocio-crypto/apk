@@ -3,8 +3,8 @@
  */
 
 // v354: Maximum file size for offline storage (IndexedDB)
-// Increased to 300MB per user request. 
-const MAX_OFFLINE_FILE_SIZE = 300 * 1024 * 1024; // 300MB
+// Increased to 600MB per user request to support 500MB videos.
+const MAX_OFFLINE_FILE_SIZE = 600 * 1024 * 1024; // 600MB
 
 // v353: Threshold for base64 vs binary storage
 // Files under this size use base64 (simple, preview-friendly).
@@ -14,10 +14,10 @@ const BASE64_THRESHOLD = 10 * 1024 * 1024; // 10MB
 /**
  * Prepara un archivo para guardarse en IndexedDB de la forma más eficiente.
  * 
- * v353: Rewritten for 500MB+ file support.
+ * v353: Rewritten for 600MB+ file support.
  * - Files < 10MB → base64 (simple, works everywhere)
- * - Files 10MB-200MB → Raw File object via structured clone (zero overhead)
- * - Files > 200MB → REJECTED (too large for IndexedDB on mobile)
+ * - Files 10MB-600MB → Raw File object via structured clone (zero overhead)
+ * - Files > 600MB → REJECTED (too large for IndexedDB on mobile)
  */
 export async function prepareFileForOutbox(file: File): Promise<{
   data: string | ArrayBuffer | File;

@@ -1,6 +1,7 @@
 'use client'
 
 // v373: Modal Lightbox — compartido Admin y Operador
+// v440: Fixed video controls being covered by info card on mobile
 interface LightboxPreviewProps {
   item: any
   isSmallScreen: boolean
@@ -17,7 +18,7 @@ function getCleanType(item: any) {
     const urlPath = item.url ? item.url.split('?')[0] : ''
     const ext = urlPath.split('.').pop()?.toLowerCase()
     if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext || '')) return 'image/jpeg'
-    if (['mp4', 'mov', 'webm'].includes(ext || '')) return 'video/mp4'
+    if (['mp4', 'mov', 'webm', '3gp', 'm4v'].includes(ext || '')) return 'video/mp4'
     if (['mp3', 'wav', 'ogg', 'm4a'].includes(ext || '')) return 'audio/mpeg'
   }
   return mime.toLowerCase()
@@ -34,6 +35,10 @@ export default function LightboxPreview({ item, isSmallScreen, onClose }: Lightb
   const isImage = previewMime.startsWith('image/')
   const isVideo = previewMime.startsWith('video/')
   const isAudio = previewMime.startsWith('audio/')
+
+  // v440: On mobile + video, the info card goes at the TOP so it never covers the
+  // native video seek bar and controls that appear at the BOTTOM of the video element.
+  const infoCardAtTop = isSmallScreen && isVideo
 
   return (
     <div 
@@ -56,20 +61,22 @@ export default function LightboxPreview({ item, isSmallScreen, onClose }: Lightb
         @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
       `}</style>
 
-      {/* Close Button - Premium Glassmorphism */}
+      {/* Close Button */}
       <button 
         onClick={onClose}
         style={{ 
           position: 'absolute', 
-          top: '20px', 
-          right: '20px', 
-          background: 'rgba(255,255,255,0.1)', 
+          top: '16px', 
+          right: '16px', 
+          background: 'rgba(255,255,255,0.12)', 
           backdropFilter: 'blur(10px)',
           border: '1px solid rgba(255,255,255,0.2)', 
           color: 'white', 
           fontSize: '1.2rem', 
           cursor: 'pointer', 
-          zIndex: 11002,
+          // v440: z-index LOWER than info card so info card can still be read,
+          // but higher than the video element (which has no z-index by default)
+          zIndex: 11010,
           width: '44px', 
           height: '44px', 
           borderRadius: '50%', 
@@ -80,7 +87,7 @@ export default function LightboxPreview({ item, isSmallScreen, onClose }: Lightb
           transition: 'all 0.2s'
         }}
         onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.1)'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'; }}
-        onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.12)'; }}
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
@@ -96,6 +103,11 @@ export default function LightboxPreview({ item, isSmallScreen, onClose }: Lightb
           flexDirection: 'column', 
           justifyContent: 'center',
           alignItems: 'center',
+          // v440: On mobile+video: top gap for info card (70px) + close btn area
+          // On mobile+other: bottom gap for info card (120px)
+          // On desktop: uniform gap
+          paddingTop: infoCardAtTop ? '80px' : (isSmallScreen ? '60px' : '0'),
+          paddingBottom: infoCardAtTop ? '16px' : (isSmallScreen ? '130px' : '0'),
           gap: isSmallScreen ? '0' : '24px',
           animation: 'slideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)'
         }}
@@ -108,8 +120,9 @@ export default function LightboxPreview({ item, isSmallScreen, onClose }: Lightb
           display: 'flex', 
           alignItems: 'center', 
           justifyContent: 'center', 
-          overflow: 'hidden',
-          paddingBottom: isVideo ? '80px' : '0' // Extra space for video controls on mobile
+          // v440: REMOVED overflow:hidden — it was clipping video controls on some browsers
+          // v440: REMOVED paddingBottom for video — info card is now at top on mobile
+          minHeight: 0
         }}>
           {isImage ? (
             <img 
@@ -125,16 +138,25 @@ export default function LightboxPreview({ item, isSmallScreen, onClose }: Lightb
             />
           ) : isVideo ? (
             <video 
-              src={item.url} 
+              src={item.url}
               controls 
               autoPlay 
               playsInline
+              controlsList="nodownload"
               style={{ 
-                maxWidth: '100%', 
-                maxHeight: '100%', 
+                // v440: On mobile, use full width and auto height so native controls
+                // are never outside the visible area or covered by other elements
+                width: isSmallScreen ? '100vw' : '100%',
+                height: isSmallScreen ? 'auto' : '100%',
+                maxHeight: isSmallScreen ? 'calc(100vh - 120px)' : '100%',
+                // v440: object-fit: contain ensures video never crops, so controls
+                // are always at the real bottom of the video (not cropped outside frame)
+                objectFit: 'contain',
                 borderRadius: isSmallScreen ? '0' : '16px',
                 boxShadow: '0 10px 40px rgba(0,0,0,0.5)',
-                backgroundColor: '#000'
+                backgroundColor: '#000',
+                // v440: display: block removes the gap below <video> in flex containers
+                display: 'block'
               }} 
             />
           ) : isAudio ? (
@@ -166,58 +188,65 @@ export default function LightboxPreview({ item, isSmallScreen, onClose }: Lightb
           )}
         </div>
 
-        {/* Info Card - Bottom Floating / Glass */}
+        {/* Info Card — TOP on mobile+video, BOTTOM otherwise */}
         <div style={{ 
           position: isSmallScreen ? 'absolute' : 'relative',
-          bottom: isSmallScreen ? '20px' : '0',
-          left: isSmallScreen ? '20px' : '0',
-          right: isSmallScreen ? '20px' : '0',
-          background: 'rgba(20, 20, 20, 0.7)', 
+          // v440: Video on mobile → top of screen (below close button). No more covering controls.
+          // Non-video on mobile → bottom of screen (original behavior).
+          top: infoCardAtTop ? '16px' : undefined,
+          bottom: isSmallScreen && !infoCardAtTop ? '16px' : undefined,
+          left: isSmallScreen ? '16px' : '0',
+          right: isSmallScreen ? '16px' : '0',
+          background: 'rgba(10, 10, 10, 0.85)', 
           backdropFilter: 'blur(20px)',
           border: '1px solid rgba(255,255,255,0.1)',
-          padding: '16px 24px', 
-          borderRadius: '20px',
+          padding: '14px 20px', 
+          borderRadius: '18px',
           display: 'flex', 
-          flexDirection: isSmallScreen ? 'column' : 'row', 
+          flexDirection: isSmallScreen ? 'row' : 'row', 
           justifyContent: 'space-between', 
-          alignItems: isSmallScreen ? 'stretch' : 'center', 
-          gap: '16px',
+          alignItems: 'center', 
+          gap: '12px',
+          // v440: Info card z-index is LOWER than close button (11010) but above video (default)
+          // This means the close btn is always accessible and info card doesn't block controls
           zIndex: 11005,
-          boxShadow: '0 15px 35px rgba(0,0,0,0.4)'
+          boxShadow: '0 8px 25px rgba(0,0,0,0.5)'
         }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 'bold', color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fileName}</h3>
-            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem', margin: '4px 0 0 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ backgroundColor: 'var(--primary)', width: '6px', height: '6px', borderRadius: '50%' }}></span>
-              {previewMime.split('/')[1]?.toUpperCase() || 'FILE'} • {item.isExpense ? 'Registro de Gasto' : 'Archivo de Obra'}
+            <h3 style={{ margin: 0, fontSize: isSmallScreen ? '0.85rem' : '1rem', fontWeight: 'bold', color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{fileName}</h3>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.7rem', margin: '2px 0 0 0', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ backgroundColor: 'var(--primary)', width: '6px', height: '6px', borderRadius: '50%', flexShrink: 0 }}></span>
+              {previewMime.split('/')[1]?.toUpperCase() || 'FILE'} • {item.isExpense ? 'Gasto' : 'Archivo de Obra'}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
             <button 
               onClick={() => window.open(item.url, '_blank')} 
               className="btn btn-ghost" 
               style={{ 
-                flex: 1, 
-                fontSize: '0.8rem', 
-                backgroundColor: 'rgba(255,255,255,0.05)',
+                fontSize: '0.75rem', 
+                backgroundColor: 'rgba(255,255,255,0.07)',
                 color: 'white',
-                border: '1px solid rgba(255,255,255,0.1)',
-                padding: '10px 20px',
-                borderRadius: '12px'
+                border: '1px solid rgba(255,255,255,0.15)',
+                padding: '8px 16px',
+                borderRadius: '10px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
               }}
-            >Original</button>
+            >Abrir</button>
             <a 
               href={item.url} 
               download={fileName} 
               className="btn btn-primary" 
               style={{ 
-                flex: 1, 
-                fontSize: '0.8rem', 
+                fontSize: '0.75rem', 
                 textAlign: 'center',
-                padding: '10px 20px',
-                borderRadius: '12px',
+                padding: '8px 16px',
+                borderRadius: '10px',
                 fontWeight: 'bold',
-                boxShadow: '0 4px 15px rgba(56, 189, 248, 0.3)'
+                boxShadow: '0 4px 15px rgba(56, 189, 248, 0.3)',
+                whiteSpace: 'nowrap',
+                textDecoration: 'none'
               }}
             >Descargar</a>
           </div>
