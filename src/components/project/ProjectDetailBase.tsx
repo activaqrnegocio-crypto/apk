@@ -1157,75 +1157,58 @@ export default function ProjectDetailBase({
       }
     }
 
-    // 4. Offline/Fallback Logic — v453 FINAL FIX
-    // ROOT CAUSE: File objects die in IndexedDB on mobile (structured clone fails for >50MB).
-    // FIX: NEVER store raw File in IndexedDB. Use ONLY:
-    //   - ArrayBuffer (≤50MB): binary data that ALWAYS survives IndexedDB
-    //   - Cache API (>50MB): disk-backed, zero RAM, survives app suspension
-    //   - Cache API backup for ALL files (double safety)
+    // 4. Offline/Fallback Logic — v454: CARBON COPY of ProjectCreationWizard (line 360-444)
+    // Projects use raw File objects via structured clone → it WORKS on this device.
+    // So Gallery must do the EXACT same thing. No Cache API dependency.
+    // Pattern:
+    //   - Small files (≤20MB): fileData.buffer = arrayBuffer() (pure binary backup)
+    //   - ALL files: file = raw File/Blob (structured clone — proven by Projects)
     try {
-      const ARRAYBUFFER_LIMIT = 50 * 1024 * 1024; // 50MB — max safe ArrayBuffer on mobile
-      let storedFileData: { buffer: ArrayBuffer; type: string; name: string; size: number } | null = null;
-      let cacheKey: string | null = null;
+      const SMALL_FILE_LIMIT = 20 * 1024 * 1024; // 20MB — SAME as ProjectCreationWizard line 342
       const fileType = rawFileObject instanceof File ? rawFileObject.type : (file.mimeType || 'application/octet-stream');
       const fileName = rawFileObject instanceof File ? rawFileObject.name : (file.filename || `media_${Date.now()}`);
       const fileSize = rawFileObject?.size || 0;
 
-      if (rawFileObject && fileSize > 0) {
-        // A) ArrayBuffer for files ≤50MB (MOST RELIABLE — pure binary, always survives IndexedDB)
-        if (fileSize <= ARRAYBUFFER_LIMIT) {
-          try {
-            // Timeout protection: 30s max to read file into RAM
-            const buffer = await Promise.race([
-              rawFileObject.arrayBuffer(),
-              new Promise<ArrayBuffer>((_, reject) => setTimeout(() => reject(new Error('arrayBuffer timeout')), 30000))
-            ]);
-            storedFileData = { buffer, type: fileType, name: fileName, size: fileSize };
-            console.log(`[Gallery] ✅ ArrayBuffer stored: ${fileName} (${(fileSize/1024/1024).toFixed(1)}MB)`);
-          } catch (e) {
-            console.warn(`[Gallery] ⚠️ ArrayBuffer failed for ${(fileSize/1024/1024).toFixed(1)}MB file:`, e);
-            // Will fall through to Cache API only
-          }
-        } else {
-          console.log(`[Gallery] File too large for ArrayBuffer (${(fileSize/1024/1024).toFixed(0)}MB > 50MB), using Cache API only`);
-        }
+      // Exactly like ProjectCreationWizard line 374-379:
+      let storedFileData: { buffer: ArrayBuffer | null; type: string; name: string; size: number } | null = null;
+      if (rawFileObject instanceof File && fileSize > 0 && fileSize <= SMALL_FILE_LIMIT) {
+        storedFileData = { buffer: null, type: fileType, name: fileName, size: fileSize };
+      }
 
-        // B) Cache API for ALL files (primary storage for >50MB, backup for ≤50MB)
+      // Exactly like ProjectCreationWizard line 411-418: read arrayBuffer for small files
+      if (storedFileData && rawFileObject && fileSize <= SMALL_FILE_LIMIT) {
         try {
-          const { saveFileToCache } = await import('@/lib/offline-utils');
-          cacheKey = `gallery-${project.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          await saveFileToCache(cacheKey, rawFileObject);
-          console.log(`[Gallery] ✅ Cache API saved: ${cacheKey} (${(fileSize/1024/1024).toFixed(1)}MB)`);
+          storedFileData.buffer = await rawFileObject.arrayBuffer();
+          console.log(`[Gallery] ✅ Small file ArrayBuffer: ${fileName} (${(fileSize/1024/1024).toFixed(1)}MB)`);
         } catch (e) {
-          console.warn('[Gallery] ⚠️ Cache API save failed:', e);
-          cacheKey = null;
-        }
-
-        // VERIFY: At least ONE storage mechanism worked
-        if (!storedFileData && !cacheKey) {
-          throw new Error(`No se pudo guardar el archivo offline (${(fileSize/1024/1024).toFixed(0)}MB). Intente con internet.`);
+          console.warn(`[Gallery] arrayBuffer() failed, keeping raw File:`, e);
+          // Fallback: raw File object will be used by sync worker (same as ProjectCreationWizard line 434)
         }
       }
 
-      // v453: NO raw File object in payload — it dies in IndexedDB on mobile!
-      // Only store: fileData (ArrayBuffer) + cacheKey (Cache API) + metadata
+      if (fileSize > SMALL_FILE_LIMIT) {
+        console.log(`[Gallery] ✅ Large file (${(fileSize/1024/1024).toFixed(0)}MB): using raw File via structured clone (same as Projects)`);
+      }
+
+      // Exactly like ProjectCreationWizard line 438-444:
       await db.outbox.add({
         type: 'GALLERY_UPLOAD',
         projectId: project.id,
-        payload: { 
-          url: processedUrl || '', 
+        payload: {
+          url: processedUrl || '',
           filename: file.filename || fileName,
           mimeType: file.mimeType || fileType,
-          sizeBytes: file.size || fileSize,
-          fileData: storedFileData, // v453: ArrayBuffer for ≤50MB files
-          cacheKey: cacheKey,       // v453: Cache API key for ALL files (primary for >50MB)
-          category 
+          sizeBytes: fileSize,
+          // v454: SAME as ProjectCreationWizard: raw File + fileData for small files
+          file: rawFileObject instanceof File ? rawFileObject : (rawFileObject instanceof Blob ? rawFileObject : null),
+          fileData: storedFileData,
+          category
         },
         timestamp: Date.now(),
         status: 'pending',
         syncId
       });
-      console.log(`[Gallery] ✅ Outbox saved: ${fileName} | fileData=${!!storedFileData} | cacheKey=${!!cacheKey}`);
+      console.log(`[Gallery] ✅ Outbox saved: ${fileName} | file=${!!(rawFileObject)} | fileData=${!!(storedFileData?.buffer)} | size=${(fileSize/1024/1024).toFixed(1)}MB`);
       triggerBackgroundSync();
     } catch (e: any) {
       console.error('[Gallery] ❌ Outbox save failed:', e);
