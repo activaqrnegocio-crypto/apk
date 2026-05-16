@@ -1097,53 +1097,55 @@ export default function ProjectDetailBase({
     };
     setGallery((prev: any) => [optimisticItem, ...prev]);
 
-    // 3. Offline Logic
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    // 3. Online Logic (Direct Upload to Bunny)
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
       try {
-        await db.outbox.add({
-          type: 'GALLERY_UPLOAD',
-          projectId: project.id,
-          payload: { 
-            ...file, 
-            url: processedUrl, 
-            base64: processedUrl || null, 
-            file: rawFileObject, // v445: Native IDB storage
-            fileData: null,
-            cacheKey: null,
+        let finalUrl = '';
+        let finalMime = file.mimeType;
+
+        // v446: Upload to Bunny first if we have a raw file
+        if (rawFileObject) {
+          const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
+          const folder = `projects/${project.id}`;
+          const uploadResult = await uploadToBunnyClientSide(rawFileObject, file.filename || 'media', folder);
+          finalUrl = uploadResult.url;
+          finalMime = uploadResult.mimeType || finalMime;
+        } else if (tempMediaUrl && !tempMediaUrl.startsWith('blob:')) {
+          // It's already a URL or base64
+          finalUrl = tempMediaUrl;
+        } else {
+          throw new Error("No hay datos válidos para subir");
+        }
+
+        const resp = await fetch(`/api/projects/${project.id}/gallery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-sync-id': syncId },
+          body: JSON.stringify({ 
+            url: finalUrl, 
+            filename: file.filename || 'Archivo Multimedia',
+            mimeType: finalMime,
+            sizeBytes: file.size,
             category 
-          },
-          timestamp: Date.now(),
-          status: 'pending',
-          syncId
+          })
         });
-        triggerBackgroundSync();
+
+        if (resp.ok) {
+          const newItem = await resp.json();
+          setGallery((prev: any) => [newItem, ...prev.filter((i: any) => i.id !== optimisticId)]);
+          setIsUploading(false);
+          saveLockRef.current = false;
+          return;
+        } else {
+          throw new Error(`Error del servidor: ${resp.status}`);
+        }
       } catch (e) {
-        console.error('Offline save failed:', e);
-        setGallery((prev: any) => prev.filter((i: any) => i.id !== optimisticId));
-      } finally {
-        setIsUploading(false);
-        saveLockRef.current = false;
-        return;
+        console.warn('Online upload failed, falling back to outbox:', e);
+        // Fall through to offline logic
       }
     }
 
-    // 4. Online Logic
+    // 4. Offline/Fallback Logic (IndexedDB Storage)
     try {
-      const resp = await fetch(`/api/projects/${project.id}/gallery`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-sync-id': syncId },
-        body: JSON.stringify({ ...file, category })
-      });
-
-      if (resp.ok) {
-        const newItem = await resp.json();
-        setGallery((prev: any) => [newItem, ...prev.filter((i: any) => i.id !== optimisticId)]);
-      } else {
-        throw new Error("Server response not OK");
-      }
-    } catch (e) {
-      console.error('Online upload failed, falling back to outbox:', e);
-      // Fallback to outbox (using the same native storage logic)
       await db.outbox.add({
         type: 'GALLERY_UPLOAD',
         projectId: project.id,
@@ -1151,7 +1153,7 @@ export default function ProjectDetailBase({
           ...file, 
           url: processedUrl, 
           base64: processedUrl || null, 
-          file: rawFileObject,
+          file: rawFileObject, // v445: Native IDB storage
           fileData: null,
           cacheKey: null,
           category 
@@ -1161,6 +1163,9 @@ export default function ProjectDetailBase({
         syncId
       });
       triggerBackgroundSync();
+    } catch (e) {
+      console.error('Outbox save failed:', e);
+      setGallery((prev: any) => prev.filter((i: any) => i.id !== optimisticId));
     } finally {
       setIsUploading(false);
       saveLockRef.current = false;

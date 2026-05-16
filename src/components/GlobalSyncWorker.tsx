@@ -526,25 +526,28 @@ export default function GlobalSyncWorker() {
   const syncOutbox = async () => {
     if (typeof window === 'undefined' || !navigator.onLine || outboxLock.current) return
     
-    // v365: Reset stuck 'syncing' items — only if they have lastAttemptAt (were actually claimed)
-    // Increased to 120s to allow large media uploads to complete
+    // v446: Reset stuck 'syncing' items — use primaryKeys to avoid OOM
     try {
-      const stuckItems = await db.outbox.where('status').equals('syncing').toArray();
+      const stuckIds = await db.outbox.where('status').equals('syncing').primaryKeys();
       const now = Date.now();
-      for (const item of stuckItems) {
+      for (const id of stuckIds) {
+        const item = await db.outbox.get(id);
+        if (!item) continue;
+
         // Only reset if lastAttemptAt is set (item was actually claimed for processing)
         if (!item.lastAttemptAt) {
-          // Item was marked 'syncing' without lastAttemptAt — legacy; reset it
           await db.outbox.update(item.id!, { status: 'pending' });
           continue;
         }
+        
         const stuckTime = now - item.lastAttemptAt;
-        // v440: Dynamic stuck threshold — scale with file size so large videos
-        // are not retried too early (which would cause duplicate uploads).
-        // Formula: max(120s, 3s per MB). A 200MB video: max(120, 600) = 10 min.
         const stuckPayloadSize = item.payload?.sizeBytes || item.payload?.file?.size || 0;
-        const stuckThresholdMs = Math.max(120000, Math.ceil(stuckPayloadSize / (1024 * 1024)) * 3000);
+        // v440: Dynamic stuck threshold — scale with file size
+        // Formula: max(120s, 5s per MB). A 300MB video: max(120, 1500) = 25 min.
+        const stuckThresholdMs = Math.max(120000, Math.ceil(stuckPayloadSize / (1024 * 1024)) * 5000);
+        
         if (stuckTime > stuckThresholdMs) {
+          console.warn(`[Sync] Resetting stuck item ${item.id} (${item.type}) after ${(stuckTime/1000).toFixed(0)}s`);
           await db.outbox.update(item.id!, { status: 'pending' });
         }
       }
@@ -804,21 +807,19 @@ export default function GlobalSyncWorker() {
 
               const folder = item.projectId ? `projects/${item.projectId}` : 'general';
 
-              // v442: DIRECT PUT — same method that works perfectly online.
-              // NO chunks, NO server intermediary, NO re-streaming.
-              // The browser sends the File directly to BunnyCDN in 1 request.
-              // Timeout scales with file size: max(120s, 4s per MB).
-              // Each file uploads one-by-one (sync loop is sequential).
-              console.log(`[Sync] Direct PUT upload: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB) → ${folder}`);
-              
+              // v449: Revert to direct PUT upload matching PROJECT creation logic
+              console.log(`[Sync] Direct PUT upload: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)`);
+              setUploadProgress({ filename: finalFilename, percent: 50, chunk: 1, totalChunks: 1 });
               const uploadResult = await uploadToBunnyClientSide(uploadFile, finalFilename, folder);
+              setUploadProgress({ filename: finalFilename, percent: 100, chunk: 1, totalChunks: 1 });
+              setTimeout(() => setUploadProgress(null), 2000);
               
               if (item.type === 'EXPENSE') {
                 finalPayload.receiptPhoto = uploadResult.url;
                 if (finalPayload.receiptFileData) finalPayload.receiptFileData = null; 
               } else if (item.type === 'GALLERY_UPLOAD') {
                 finalPayload.url = uploadResult.url;
-                finalPayload.mimeType = uploadResult.mimeType;
+                finalPayload.mimeType = uploadResult.mimeType || uploadFile.type;
                 if (finalPayload.fileData) finalPayload.fileData = null;
                 if (finalPayload.file) finalPayload.file = null;
                 // v444: Clean Cache API after successful upload
@@ -826,7 +827,6 @@ export default function GlobalSyncWorker() {
                   try {
                     const { deleteFileFromCache } = await import('@/lib/offline-utils');
                     await deleteFileFromCache(finalPayload.cacheKey);
-                    console.log(`[Sync] Cache cleaned: ${finalPayload.cacheKey}`);
                   } catch {}
                   delete finalPayload.cacheKey;
                 }
@@ -835,32 +835,34 @@ export default function GlobalSyncWorker() {
                   ...finalPayload.media,
                   url: uploadResult.url, 
                   filename: finalFilename, 
-                  mimeType: uploadResult.mimeType,
+                  mimeType: uploadResult.mimeType || uploadFile.type,
                   type: uploadResult.type,
                   base64: undefined,
                   fileData: null
                 };
               }
               
-              // v442: 500ms pause between uploads to let the network breathe
-              await new Promise(resolve => setTimeout(resolve, 500));
-
+              // v442: pause between uploads
+              await new Promise(resolve => setTimeout(resolve, 300));
               delete finalPayload.file;
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
               console.error(`[Sync] UPLOAD ERROR ${item.type} #${item.id}:`, errMsg);
               const currentAttempts = (item.attempts || 0) + 1;
+              
+              // v446: More conservative failure for media (up to 15 attempts if using chunks)
+              const maxAttempts = (item.type === 'GALLERY_UPLOAD' || item.type === 'MEDIA_UPLOAD') ? 15 : 10;
+              
               await db.outbox.update(item.id!, { 
-                status: currentAttempts >= 10 ? 'failed' : 'pending',
+                status: currentAttempts >= maxAttempts ? 'failed' : 'pending',
                 attempts: currentAttempts,
                 lastAttemptAt: Date.now(),
-                // v444: Store the ACTUAL error message so we can debug
-                failReason: `attempt_${currentAttempts}: ${errMsg.substring(0, 200)}`
+                failReason: `upload_err_${currentAttempts}: ${errMsg.substring(0, 150)}`
               });
               if (ctx && item.type !== 'GALLERY_UPLOAD' && item.type !== 'MEDIA_UPLOAD') {
                 failedContexts.add(ctx);
               }
-              await logSync('warn', `UPLOAD ERROR: ${errMsg.substring(0, 100)} (${currentAttempts}/10)`, item.type);
+              await logSync('warn', `UPLOAD ERROR: ${errMsg.substring(0, 80)}`, item.type);
               continue;
             }
           }
@@ -1113,7 +1115,8 @@ export default function GlobalSyncWorker() {
              }
 
              const controller = new AbortController();
-             const timeoutMs = isMediaItem ? 60000 : 30000;
+             // v446: Increased timeout for API POST to 5 minutes for media items
+             const timeoutMs = isMediaItem ? 300000 : 30000;
              const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
              const res = await fetch(endpoint, {
                  method,
@@ -1146,12 +1149,20 @@ export default function GlobalSyncWorker() {
 
                 // v400: If this was a new PROJECT creation, update all other pending items 
                 // in outbox that reference the temporary ID (e.g. "pending-123")
+                // v447: ID MAPPING FIX — Map both "pending-ID" and just "ID" (timestamp)
                 if (item.type === 'PROJECT' && resData.id) {
                   try {
-                    const tempId = `pending-${item.id}`;
-                    const relatedItems = await db.outbox.filter(oi => String(oi.projectId) === tempId).toArray();
+                    const timestampId = item.id;
+                    const tempIdStr = `pending-${item.id}`;
+                    
+                    // Update ALL items that reference this temporary project
+                    const relatedItems = await db.outbox.filter(oi => 
+                      String(oi.projectId) === String(timestampId) || 
+                      String(oi.projectId) === tempIdStr
+                    ).toArray();
+
                     if (relatedItems.length > 0) {
-                      console.log(`[Sync] Mapping ${relatedItems.length} items from ${tempId} to real ID ${resData.id}`);
+                      console.log(`[Sync] Mapping ${relatedItems.length} items from ${timestampId}/${tempIdStr} to real ID ${resData.id}`);
                       for (const ri of relatedItems) {
                         await db.outbox.update(ri.id!, { projectId: resData.id });
                       }
