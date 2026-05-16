@@ -1152,11 +1152,25 @@ export default function ProjectDetailBase({
       let storedUrl = processedUrl; // base64 for small files, '' for large ones
 
       if (rawFileObject && rawFileObject.size > 0) {
-        // ALWAYS save to Cache API — it's the ONLY reliable method for mobile
-        const { saveFileToCache } = await import('@/lib/offline-utils');
+        // ALWAYS try Cache API first — it's the ONLY reliable method for mobile
+        const { saveFileToCache, getFileFromCache } = await import('@/lib/offline-utils');
         cacheKey = `gallery-${project.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await saveFileToCache(cacheKey, rawFileObject);
-        console.log(`[Gallery] Saved ${(rawFileObject.size/1024/1024).toFixed(1)}MB to Cache API: ${cacheKey}`);
+        
+        try {
+          await saveFileToCache(cacheKey, rawFileObject);
+          
+          // v451: VERIFY it actually saved — read it back immediately
+          const verification = await getFileFromCache(cacheKey);
+          if (!verification || verification.size === 0) {
+            console.warn('[Gallery] Cache API verification FAILED — file not readable after save');
+            cacheKey = null; // Don't trust this key
+          } else {
+            console.log(`[Gallery] ✓ Verified ${(rawFileObject.size/1024/1024).toFixed(1)}MB in Cache API: ${cacheKey}`);
+          }
+        } catch (cacheErr) {
+          console.warn('[Gallery] Cache API save failed:', cacheErr);
+          cacheKey = null;
+        }
       }
 
       await db.outbox.add({
@@ -1166,9 +1180,9 @@ export default function ProjectDetailBase({
           ...file, 
           url: storedUrl, 
           base64: storedUrl || null, 
-          file: null, // v451: DO NOT store File objects — they die on mobile
-          fileData: null, // v451: DO NOT use arrayBuffer — crashes on large files
-          cacheKey: cacheKey, // v451: THIS is the reliable reference
+          file: cacheKey ? null : rawFileObject, // v451: Fallback to File if Cache API failed
+          fileData: null,
+          cacheKey: cacheKey, // v451: Primary reliable reference (disk-backed)
           category 
         },
         timestamp: Date.now(),

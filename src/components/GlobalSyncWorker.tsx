@@ -624,7 +624,7 @@ export default function GlobalSyncWorker() {
           const isMediaType = currentItem.type === 'GALLERY_UPLOAD' || currentItem.type === 'MEDIA_UPLOAD';
           if (isMediaType) {
             const p = currentItem.payload || {};
-            const hasValidData = !!(p.fileData || p.file || p.media?.fileData || p.media?.base64 || 
+            const hasValidData = !!(p.fileData || p.file || p.cacheKey || p.media?.fileData || p.media?.base64 || 
               (p.url && !p.url.startsWith('blob:') && !p.url.startsWith('data:') && p.url.startsWith('http')) ||
               (p.media?.url && !p.media.url.startsWith('blob:') && p.media.url.startsWith('http')));
             if (!hasValidData) {
