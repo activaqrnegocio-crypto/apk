@@ -42,7 +42,7 @@ interface ProjectChatUnifiedProps {
   project: any
   messages: any[]
   userId: number
-  onSendMessage: (content: string, type: 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE' | 'EXPENSE_LOG' | 'NOTE' | 'LOCATION', extraData?: any) => void
+  onSendMessage: (content: string, type: 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE' | 'DOCUMENT' | 'EXPENSE_LOG' | 'NOTE' | 'LOCATION', extraData?: any) => void
   onDayAction?: () => void
   activeRecord?: any
   isOperatorView?: boolean
@@ -723,12 +723,12 @@ export default function ProjectChatUnified({
               onClick={() => {
                 const input = document.createElement('input');
                 input.type = 'file';
-                input.accept = '.pdf,.doc,.docx,.xls,.xlsx';
+                input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt,.csv';
                 input.style.display = 'none';
                 document.body.appendChild(input);
                 input.onchange = (e: any) => {
                   const file = e.target.files?.[0];
-                  if (file) onSendMessage('', 'FILE', { file });
+                  if (file) onSendMessage('', 'DOCUMENT', { file });
                   document.body.removeChild(input);
                 };
                 input.click();

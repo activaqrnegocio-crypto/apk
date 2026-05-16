@@ -146,8 +146,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       const mime = media?.mimeType || ''
       if (mime.startsWith('image/')) finalType = 'IMAGE'
       else if (mime.startsWith('video/')) finalType = 'VIDEO'
-      else if (mime.includes('pdf')) finalType = 'DOCUMENT'
-      else finalType = 'IMAGE' // Default fallback
+      else if (
+        mime.includes('pdf') || 
+        mime.includes('document') || 
+        mime.includes('sheet') || 
+        mime.includes('presentation') || 
+        mime.includes('text/') || 
+        mime.includes('zip') ||
+        mime.includes('csv')
+      ) {
+        finalType = 'DOCUMENT'
+      }
+      else finalType = 'DOCUMENT' // Fallback to DOCUMENT instead of IMAGE for non-media files
     } else if (!finalType) {
       finalType = 'TEXT'
     }

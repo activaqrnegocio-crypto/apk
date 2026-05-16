@@ -560,15 +560,17 @@ export default function GlobalSyncWorker() {
       return
     }
 
+    const isGreedy = (window as any)._syncGreedy === true;
     const lastSyncStart = localStorage.getItem('global_sync_lock')
-    if (lastSyncStart && (now - Number(lastSyncStart)) < 8000) {
+    if (!isGreedy && lastSyncStart && (now - Number(lastSyncStart)) < 8000) {
       // v282: Reduced cross-tab lock from 30s to 8s so items flow continuously
       return
     }
     localStorage.setItem('global_sync_lock', String(now))
     lastSyncExecution = now;
 
-    outboxLock.current = true
+    outboxLock.current = true;
+    let hasSyncedAnything = false;
     try {
       // v445: CRITICAL MEMORY OPTIMIZATION — Avoid .toArray() (OOM RISK).
       // Large video files in the outbox can crash the browser if loaded all at once.
@@ -580,7 +582,7 @@ export default function GlobalSyncWorker() {
         return
       }
 
-      let hasSyncedAnything = false;
+      hasSyncedAnything = false;
       const failedContexts = new Set<string>();
       const syncingContexts = new Set<string>();
 
@@ -594,156 +596,109 @@ export default function GlobalSyncWorker() {
         }
       }
 
-      // Pass 1.5: BATCH GALLERY UPLOADS — upload files to Bunny in parallel batches of 3,
-      // then POST to API sequentially. Each batch completes before the next starts,
-      // so small files don't wait for large ones.
-      const galleryIds: number[] = [];
+      // Pass 1.5: CONTINUOUS CONCURRENT GALLERY SYNC — v450 Optimized
+      // Instead of rigid batches of 3 where everyone waits for the slowest file,
+      // we use a sliding window. As soon as one upload finishes, the next one starts.
+      const pendingGalleryIds: number[] = [];
       for (const id of allIds) {
         const item = await db.outbox.get(id);
         if (item && item.type === 'GALLERY_UPLOAD' && item.status === 'pending') {
-          galleryIds.push(id);
+          pendingGalleryIds.push(id);
         }
       }
       
-      if (galleryIds.length > 0) {
-        console.log(`[Sync] 🚀 Batch uploading ${galleryIds.length} gallery items (batches of 3)...`);
-        const BATCH_SIZE = 3;
+      if (pendingGalleryIds.length > 0) {
+        console.log(`[Sync] 🚀 Continuous sync for ${pendingGalleryIds.length} gallery items...`);
         const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
+        const MAX_CONCURRENCY = 3;
+        const activeUploads = new Set();
         
-        for (let bi = 0; bi < galleryIds.length; bi += BATCH_SIZE) {
-          const batchIds = galleryIds.slice(bi, bi + BATCH_SIZE);
+        // Internal worker to process a single item end-to-end
+        const processItem = async (id: number) => {
+          const gItem = await db.outbox.get(id);
+          if (!gItem || gItem.status !== 'pending') return;
           
-          // Step A: Upload this batch to Bunny in parallel
-          const uploadPromises: Promise<{ id: number; url: string; mimeType: string; ok: boolean; err?: string }>[] = [];
-          const batchItems: Map<number, any> = new Map();
+          await db.outbox.update(id, { status: 'syncing', lastAttemptAt: Date.now() });
+          const p = gItem.payload || {};
           
-          for (const id of batchIds) {
-            const gItem = await db.outbox.get(id);
-            if (!gItem || gItem.status !== 'pending') continue;
+          try {
+            // Step 1: Upload to Bunny
+            let uploadFile: File | Blob | null = null;
+            let uploadFilename = p.filename || `gallery_${Date.now()}`;
             
-            await db.outbox.update(id, { status: 'syncing', lastAttemptAt: Date.now() });
-            batchItems.set(id, gItem);
-            
-            const p = gItem.payload || {};
-            const promise = (async () => {
-              try {
-                let uploadFile: File | Blob | null = null;
-                let uploadFilename = p.filename || `gallery_${Date.now()}`;
-                
-                if (p.fileData?.buffer) {
-                  uploadFile = new Blob([p.fileData.buffer], { type: p.fileData.type || p.mimeType || 'application/octet-stream' });
-                  uploadFilename = p.fileData.name || uploadFilename;
-                } else if (p.file instanceof File || p.file instanceof Blob) {
-                  uploadFile = p.file as File | Blob;
-                  uploadFilename = (p.file as File).name || uploadFilename;
-                } else if (p.file && typeof p.file === 'object' && typeof p.file.size === 'number' && p.file.size > 0) {
-                  uploadFile = p.file as Blob;
-                  uploadFilename = (p.file as any).name || uploadFilename;
-                } else if (p.cacheKey) {
-                  const { getFileFromCache } = await import('@/lib/offline-utils');
-                  const cached = await getFileFromCache(p.cacheKey);
-                  if (cached && cached.size > 0) uploadFile = cached;
-                } else if (p.url?.startsWith('data:')) {
-                  const res = await fetch(p.url);
-                  uploadFile = await res.blob();
-                }
-                
-                if (!uploadFile || uploadFile.size === 0) {
-                  return { id, url: '', mimeType: '', ok: false, err: 'No file data' };
-                }
-                
-                const folder = `projects/${gItem.projectId}`;
-                console.log(`[Sync] 📤 Uploading: ${uploadFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)...`);
-                const result = await uploadToBunnyClientSide(uploadFile, uploadFilename, folder);
-                console.log(`[Sync] 📤 Batch upload OK: ${uploadFilename} → ${result.url}`);
-                return { id, url: result.url, mimeType: result.mimeType || (uploadFile as any).type, ok: true };
-              } catch (err) {
-                const errMsg = err instanceof Error ? err.message : String(err);
-                console.error(`[Sync] ❌ Batch upload FAIL #${id}:`, errMsg);
-                return { id, url: '', mimeType: '', ok: false, err: errMsg };
-              }
-            })();
-            uploadPromises.push(promise);
-          }
-          
-          if (uploadPromises.length === 0) continue;
-          
-          const uploadResults = await Promise.all(uploadPromises);
-          
-          // Step B: POST to API sequentially (fast, just URLs)
-          for (const { id, url, mimeType, ok, err } of uploadResults) {
-            const gItem = batchItems.get(id);
-            if (!ok) {
-              const currentAttempts = (gItem?.attempts || 0) + 1;
-              await db.outbox.update(id, {
-                status: currentAttempts >= 15 ? 'failed' : 'pending',
-                attempts: currentAttempts,
-                lastAttemptAt: Date.now(),
-                failReason: `batch_upload_err: ${err?.substring(0, 150) || 'unknown'}`
-              });
-              continue;
+            if (p.fileData?.buffer) {
+              uploadFile = new Blob([p.fileData.buffer], { type: p.fileData.type || p.mimeType || 'application/octet-stream' });
+              uploadFilename = p.fileData.name || uploadFilename;
+            } else if (p.file instanceof File || p.file instanceof Blob) {
+              uploadFile = p.file as File | Blob;
+              uploadFilename = (p.file as File).name || uploadFilename;
+            } else if (p.cacheKey) {
+              const { getFileFromCache } = await import('@/lib/offline-utils');
+              const cached = await getFileFromCache(p.cacheKey);
+              if (cached && cached.size > 0) uploadFile = cached;
+            } else if (p.url?.startsWith('data:')) {
+              const res = await fetch(p.url);
+              uploadFile = await res.blob();
             }
             
-            if (!gItem || gItem.status !== 'syncing') continue;
+            if (!uploadFile || uploadFile.size === 0) throw new Error('No file data');
             
-            try {
-              const finalPayload = { ...gItem.payload };
-              finalPayload.url = url;
-              finalPayload.mimeType = mimeType || finalPayload.mimeType;
-              delete finalPayload.file;
-              delete finalPayload.fileData;
-              delete finalPayload.cacheKey;
-              delete finalPayload.base64;
-              
-              const endpoint = `/api/projects/${gItem.projectId}/gallery`;
-              const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 300000);
-              const res = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-sync-id': gItem.syncId || `batch-${id}-${gItem.timestamp}` },
-                body: JSON.stringify({ ...finalPayload, isOfflineSync: true }),
-                signal: controller.signal
-              });
-              clearTimeout(timeoutId);
-              
-              if (res.ok) {
-                const resData = await res.json().catch(() => ({}));
-                await db.outbox.update(id, { status: 'synced' });
-                console.log(`[Sync] ✅ Gallery synced #${id}: ${finalPayload.filename || 'file'}`);
-                await logSync('success', `Galería: ${finalPayload.filename || 'archivo'}`, 'GALLERY_UPLOAD');
-                // vXXX: Dispatch sync-success so UI refreshes gallery
-                window.dispatchEvent(new CustomEvent('sync-success', { detail: {
-                  type: 'GALLERY_UPLOAD',
-                  projectId: gItem.projectId,
-                  label: 'Archivo subido a galería',
-                  payload: finalPayload,
-                  result: resData
-                }}));
-                hasSyncedAnything = true;
-              } else {
-                const errText = await res.text().catch(() => '');
-                console.error(`[Sync] ❌ Gallery API FAIL #${id}: ${res.status} ${errText}`);
-                const currentAttempts = (gItem.attempts || 0) + 1;
-                await db.outbox.update(id, {
-                  status: currentAttempts >= 15 ? 'failed' : 'pending',
-                  attempts: currentAttempts,
-                  lastAttemptAt: Date.now(),
-                  failReason: `api_err_${res.status}: ${errText.substring(0, 150)}`
-                });
-              }
-            } catch (apiErr) {
-              const errMsg = apiErr instanceof Error ? apiErr.message : String(apiErr);
-              console.error(`[Sync] ❌ Gallery API ERROR #${id}:`, errMsg);
-              const currentAttempts = (gItem.attempts || 0) + 1;
-              await db.outbox.update(id, {
-                status: currentAttempts >= 15 ? 'failed' : 'pending',
-                attempts: currentAttempts,
-                lastAttemptAt: Date.now(),
-                failReason: `api_err: ${errMsg.substring(0, 150)}`
-              });
+            console.log(`[Sync] 📤 Uploading: ${uploadFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)...`);
+            const uploadResult = await uploadToBunnyClientSide(uploadFile, uploadFilename, `projects/${gItem.projectId}/gallery`);
+            
+            // Step 2: Immediate API POST
+            const finalPayload = { ...p, url: uploadResult.url, mimeType: uploadResult.mimeType || (uploadFile as any).type };
+            delete finalPayload.file; delete finalPayload.fileData; delete finalPayload.cacheKey; delete finalPayload.base64;
+            
+            const res = await fetch(`/api/projects/${gItem.projectId}/gallery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-sync-id': gItem.syncId || `sync-${id}-${gItem.timestamp}` },
+              body: JSON.stringify({ ...finalPayload, isOfflineSync: true }),
+            });
+            
+            if (res.ok) {
+              const resData = await res.json().catch(() => ({}));
+              await db.outbox.update(id, { status: 'synced' });
+              console.log(`[Sync] ✅ Gallery OK: ${uploadFilename}`);
+              await logSync('success', `Galería: ${uploadFilename}`, 'GALLERY_UPLOAD');
+              window.dispatchEvent(new CustomEvent('sync-success', { detail: {
+                type: 'GALLERY_UPLOAD', projectId: gItem.projectId, label: 'Archivo subido', payload: finalPayload, result: resData
+              }}));
+              hasSyncedAnything = true;
+            } else {
+              throw new Error(`API Error ${res.status}`);
             }
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error(`[Sync] ❌ Gallery FAIL #${id}:`, errMsg);
+            const currentAttempts = (gItem.attempts || 0) + 1;
+            await db.outbox.update(id, {
+              status: currentAttempts >= 15 ? 'failed' : 'pending',
+              attempts: currentAttempts,
+              lastAttemptAt: Date.now(),
+              failReason: errMsg.substring(0, 150)
+            });
           }
+        };
+
+        // Pipelined loop
+        for (const id of pendingGalleryIds) {
+          if (activeUploads.size >= MAX_CONCURRENCY) {
+            await Promise.race(activeUploads);
+          }
+          const task = (async () => {
+            const item = await db.outbox.get(id);
+            const filename = item?.payload?.filename || 'archivo';
+            setUploadProgress({ filename, percent: 10, chunk: 1, totalChunks: 1 });
+            await processItem(id);
+            setUploadProgress({ filename, percent: 100, chunk: 1, totalChunks: 1 });
+          })().then(() => {
+            activeUploads.delete(task);
+            if (activeUploads.size === 0) setTimeout(() => setUploadProgress(null), 2000);
+          });
+          activeUploads.add(task);
         }
+        await Promise.all(activeUploads);
       }
 
       // Pass 2: Main processing loop (non-GALLERY items only)
@@ -1669,7 +1624,19 @@ export default function GlobalSyncWorker() {
     } catch (e) { /* ignore */ }
 
     } finally {
-      outboxLock.current = false
+      outboxLock.current = false;
+      lastSyncExecution = Date.now();
+      
+      // v450: GREEDY RE-TRIGGER
+      // If we made progress, don't wait for the 15s interval. Start again in 500ms.
+      // This ensures the "robot" never stops as long as there is work to do.
+      if (hasSyncedAnything && navigator.onLine) {
+        console.log('[Sync] 🤖 Robot codicioso: progreso detectado, reiniciando ciclo inmediato...');
+        (window as any)._syncGreedy = true;
+        setTimeout(() => syncOutbox(), 500);
+      } else {
+        (window as any)._syncGreedy = false;
+      }
       localStorage.removeItem('global_sync_lock')
     }
   }

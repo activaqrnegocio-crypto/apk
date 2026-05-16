@@ -406,7 +406,7 @@ export default function ProjectUploader({
           hidden 
           ref={fileInputRef}
           onChange={handleFileChange}
-          accept="image/*,.heic,.heif,video/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx"
+          accept="image/*,.heic,.heif,video/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt,.csv"
         />
       </div>
 
