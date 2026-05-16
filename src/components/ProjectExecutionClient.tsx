@@ -183,26 +183,41 @@ export default function ProjectExecutionClient({
     const handleSyncSuccess = (e: any) => {
       const { type, projectId: syncProjectId, payload, result } = e.detail;
       if (syncProjectId === idFromUrl) {
-        // v400: Add to recently synced to prevent "disappearing" gap
-        if (type === 'MEDIA_UPLOAD' || type === 'GALLERY_UPLOAD' || type === 'MESSAGE') {
+        // vXXX: Optimistic UI — immediately add synced item to localProject.gallery
+        // so it appears instantly without waiting for refreshGallery() API response.
+        if (type === 'MEDIA_UPLOAD' || type === 'GALLERY_UPLOAD') {
           const syncedItem = {
-            id: `synced-${Date.now()}-${Math.random()}`,
-            url: result?.url || payload?.url || payload?.previewBase64,
-            filename: result?.filename || payload?.filename,
-            mimeType: result?.mimeType || payload?.mimeType,
-            category: result?.category || payload?.category,
-            isSynced: true,
-            timestamp: Date.now()
+            id: result?.id || `synced-${Date.now()}-${Math.random()}`,
+            url: result?.url || payload?.url || payload?.previewBase64 || '',
+            filename: result?.filename || payload?.filename || 'Archivo',
+            mimeType: result?.mimeType || payload?.mimeType || 'image/jpeg',
+            category: result?.category || payload?.category || 'MASTER',
+            createdAt: new Date().toISOString()
           };
-          setRecentlySyncedItems(prev => [...prev, syncedItem]);
           
-          // Auto-remove after 30s (should be indexed by then)
+          // Step 1: Optimistic add to localProject — appears instantly
+          setLocalProject((prev: any) => {
+            if (!prev) return prev;
+            const existingGallery = prev.gallery || [];
+            // Avoid duplicates
+            const alreadyThere = existingGallery.some((g: any) => 
+              g.url === syncedItem.url || g.filename === syncedItem.filename
+            );
+            if (alreadyThere) return prev;
+            return { ...prev, gallery: [syncedItem, ...existingGallery] };
+          });
+          
+          // Step 2: Also add to recentlySyncedItems bridge (fallback)
+          setRecentlySyncedItems(prev => [...prev, { ...syncedItem, isSynced: true, timestamp: Date.now() }]);
           setTimeout(() => {
              setRecentlySyncedItems(prev => prev.filter(i => i.id !== syncedItem.id));
           }, 30000);
-
-          if (type === 'MEDIA_UPLOAD' || type === 'GALLERY_UPLOAD') refreshGallery()
-          if (type === 'MESSAGE') fetchMessages()
+          
+          // Step 3: Background refresh to get canonical data from server
+          refreshGallery();
+        }
+        if (type === 'MESSAGE') {
+          fetchMessages();
         }
       }
     }
