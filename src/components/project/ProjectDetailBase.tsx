@@ -1157,61 +1157,70 @@ export default function ProjectDetailBase({
       }
     }
 
-    // 4. Offline/Fallback Logic — IDENTICAL to ProjectCreationWizard
-    // v452: Copy the EXACT storage pattern from ProjectCreationWizard (which WORKS)
-    //   - Small files (<20MB): fileData.buffer (ArrayBuffer copy — survives everything)
-    //   - Large files (>20MB): file = raw File object (structured clone, same as projects)
-    //   - ALL files: Cache API backup (disk-backed, zero RAM)
+    // 4. Offline/Fallback Logic — v453: ARRAYBUFER ONLY (the ONLY thing IndexedDB preserves reliably)
+    // File objects get garbage-collected by mobile browsers after IndexedDB structured clone.
+    // Cache API is unreliable across app suspensions on iOS/Android.
+    // ArrayBuffer is PURE BINARY DATA — IndexedDB stores it perfectly, always.
     try {
-      const SMALL_FILE_LIMIT = 20 * 1024 * 1024; // 20MB — same as ProjectCreationWizard
-      let storedFile: File | Blob | null = rawFileObject; // ALWAYS keep raw File (same as projects)
+      const OFFLINE_MAX = 200 * 1024 * 1024; // 200MB max for offline
       let storedFileData: { buffer: ArrayBuffer; type: string; name: string; size: number } | null = null;
-      let cacheKey: string | null = null;
 
       if (rawFileObject && rawFileObject.size > 0) {
-        // A) For small files: read ArrayBuffer (same as ProjectCreationWizard line 413-418)
-        if (rawFileObject.size <= SMALL_FILE_LIMIT) {
-          try {
-            storedFileData = {
-              buffer: await rawFileObject.arrayBuffer(),
-              type: rawFileObject instanceof File ? rawFileObject.type : (file.mimeType || 'application/octet-stream'),
-              name: rawFileObject instanceof File ? rawFileObject.name : (file.filename || `media_${Date.now()}`),
-              size: rawFileObject.size
-            };
-            console.log(`[Gallery] Small file: stored ${(rawFileObject.size/1024/1024).toFixed(1)}MB as ArrayBuffer`);
-          } catch (e) {
-            console.warn('[Gallery] arrayBuffer() failed for small file:', e);
-          }
+        if (rawFileObject.size > OFFLINE_MAX) {
+          alert(`Este archivo (${(rawFileObject.size/1024/1024).toFixed(0)}MB) es demasiado grande para guardar offline. Máximo: 200MB. Conéctese a internet para subirlo.`);
+          setIsUploading(false);
+          saveLockRef.current = false;
+          return;
         }
 
-        // B) Cache API backup for ALL files (extra safety net)
-        try {
-          const { saveFileToCache } = await import('@/lib/offline-utils');
-          cacheKey = `gallery-${project.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-          await saveFileToCache(cacheKey, rawFileObject);
-          console.log(`[Gallery] Cache API backup saved: ${cacheKey}`);
-        } catch (e) {
-          console.warn('[Gallery] Cache API backup failed (non-critical):', e);
-          cacheKey = null;
-        }
+        // Read the ENTIRE file into ArrayBuffer — this is the ONLY reliable storage
+        console.log(`[Gallery] Reading ${(rawFileObject.size/1024/1024).toFixed(1)}MB into ArrayBuffer...`);
+        const buffer = await rawFileObject.arrayBuffer();
+        storedFileData = {
+          buffer,
+          type: rawFileObject instanceof File ? rawFileObject.type : (file.mimeType || 'application/octet-stream'),
+          name: rawFileObject instanceof File ? rawFileObject.name : (file.filename || `media_${Date.now()}`),
+          size: rawFileObject.size
+        };
+        console.log(`[Gallery] ArrayBuffer stored: ${storedFileData.name} (${(storedFileData.size/1024/1024).toFixed(1)}MB)`);
+      } else if (processedUrl && processedUrl.startsWith('data:')) {
+        // base64 data URL — convert to ArrayBuffer
+        const res = await fetch(processedUrl);
+        const blob = await res.blob();
+        const buffer = await blob.arrayBuffer();
+        storedFileData = {
+          buffer,
+          type: file.mimeType || 'application/octet-stream',
+          name: file.filename || `media_${Date.now()}`,
+          size: blob.size
+        };
+        console.log(`[Gallery] base64→ArrayBuffer: ${storedFileData.name} (${(storedFileData.size/1024/1024).toFixed(1)}MB)`);
+      }
+
+      if (!storedFileData || !storedFileData.buffer) {
+        alert('No se pudo guardar el archivo para sincronización offline.');
+        setGallery((prev: any) => prev.filter((i: any) => i.id !== optimisticId));
+        setIsUploading(false);
+        saveLockRef.current = false;
+        return;
       }
 
       await db.outbox.add({
         type: 'GALLERY_UPLOAD',
         projectId: project.id,
         payload: { 
-          ...file, 
-          url: processedUrl || '', 
-          base64: processedUrl || null, 
-          file: storedFile,       // v452: RAW FILE — same as ProjectCreationWizard
-          fileData: storedFileData, // v452: ArrayBuffer for small files — same as ProjectCreationWizard
-          cacheKey: cacheKey,      // v452: Cache API backup — extra safety
+          url: '',  // Will be set after CDN upload
+          filename: storedFileData.name,
+          mimeType: storedFileData.type,
+          size: storedFileData.size,
+          fileData: storedFileData,  // v453: ONLY ArrayBuffer — NO File objects, NO Cache API
           category 
         },
         timestamp: Date.now(),
         status: 'pending',
         syncId
       });
+      console.log(`[Gallery] Outbox item saved. ArrayBuffer ${(storedFileData.size/1024/1024).toFixed(1)}MB ready for sync.`);
       triggerBackgroundSync();
     } catch (e) {
       console.error('Outbox save failed:', e);
