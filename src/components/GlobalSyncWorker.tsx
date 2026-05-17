@@ -128,8 +128,8 @@ export default function GlobalSyncWorker() {
     
     if (!force) {
       const meta = await db.cacheMetadata.get(cacheKey);
-      // v279: Restored a reasonable 15-minute window for everyone, tied to the USER, not global.
-      const FRESHNESS_WINDOW = 15 * 60 * 1000;
+      // v415: Reduced from 15 to 5 minutes for better reactivity in deleting projects/tasks
+      const FRESHNESS_WINDOW = 5 * 60 * 1000;
       
       if (meta && (now_ts - meta.lastSync) < FRESHNESS_WINDOW) {
         // const minsLeft = Math.round((FRESHNESS_WINDOW - (now_ts - meta.lastSync)) / 60000);
