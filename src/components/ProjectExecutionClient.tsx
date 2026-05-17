@@ -341,6 +341,31 @@ export default function ProjectExecutionClient({
     }
   }, [idFromUrl, fetchMessages, deduplicateMessages])
 
+  // v412: Escuchar evento de sincronización exitosa para limpiar el estado de "Sincronizando..."
+  useEffect(() => {
+    const handleSyncSuccess = (event: any) => {
+      const { type, projectId } = event.detail || {};
+      if (type === 'TEAM_UPDATE' && Number(projectId) === Number(idFromUrl)) {
+        console.log('[ProjectExecutionClient] Team sync success detected, clearing badge...');
+        // Limpiar el flag en el estado local inmediatamente
+        if (setLocalProject) {
+          setLocalProject((prev: any) => prev ? { ...prev, _pendingTeamSync: false } : prev);
+        }
+        // Opcional: refrescar datos completos del proyecto
+        if (refreshProject) refreshProject();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('sync-success', handleSyncSuccess);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('sync-success', handleSyncSuccess);
+      }
+    };
+  }, [idFromUrl, refreshProject, setLocalProject])
+
   useEffect(() => {
     if (localChat && localChat.length > 0) {
       setLocalChat(prev => deduplicateMessages([...localChat, ...prev]))

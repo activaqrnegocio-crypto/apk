@@ -135,26 +135,27 @@ export default function DashboardClient({
     }
   }, [activeProjects, activeTab])
 
-  // 2. Load/Save Offline Cache
+  // 2. Load/Save Offline Cache (Stale-While-Revalidate pattern)
   useEffect(() => {
     async function handleCache() {
-      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine
-      
-      // 1. Aggressive Cache Hydration (Instant UI Paint)
-      // Load from cache if we have an empty shell (offline) OR if the server failed
-      if (initialProjects.length === 0) {
-        const cached = await db.dashboardCache.get('main')
-        if (cached) {
-          setStats(cached.stats)
-          setRecentExpenses(cached.recentExpenses)
-          setRecentMessages(cached.recentMessages)
-          setActiveProjects(cached.activeProjects)
-          setTeamList(cached.teamList)
-        }
+      // ALWAYS try to load from cache first for instant UI paint
+      const cached = await db.dashboardCache.get('main')
+      if (cached) {
+        setStats(cached.stats)
+        setRecentExpenses(cached.recentExpenses)
+        setRecentMessages(cached.recentMessages)
+        setActiveProjects(cached.activeProjects)
+        setTeamList(cached.teamList)
       }
 
-      // 2. If we have fresh data from props, SAVE it to cache
-      if (initialProjects.length > 0) {
+      // If we have fresh data from props (server fetch succeeded), overwrite state and update cache
+      if (initialProjects && initialProjects.length > 0) {
+        setStats(initialStats)
+        setRecentExpenses(initialExpenses)
+        setRecentMessages(initialMessages)
+        setActiveProjects(initialProjects)
+        setTeamList(initialTeam)
+
         const dashboardData = {
           id: 'main',
           stats: initialStats,
