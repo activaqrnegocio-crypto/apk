@@ -166,9 +166,9 @@ export default function GlobalSyncWorker() {
         detail: { message: `Iniciando sincronización optimizada (${userRole})...` }
       }))
 
-      // 1. SYNC PROJECTS & CHATS (v288: Increased to 500 for ALL to ensure full offline parity)
+      // 1. SYNC PROJECTS & CHATS (v416: Added timestamp to bypass CDN/Browser cache after deletion)
       const limit = 2000;
-      const res = await fetch(`/api/projects/bulk-cache?limit=${limit}`, { priority: 'low' })
+      const res = await fetch(`/api/projects/bulk-cache?limit=${limit}&_t=${Date.now()}`, { priority: 'low' })
       if (res.ok) {
         const fetchedProjects = await res.json()
         
@@ -192,7 +192,13 @@ export default function GlobalSyncWorker() {
           
           for (const cached of cachedProjects) {
             const isPending = typeof cached.id === 'string' && cached.id.startsWith('pending-');
-            if (!fetchedIds.includes(cached.id) && !isPending) {
+            
+            // v416: Comparación robusta para evitar fallos por tipo (string vs number)
+            const existsOnServer = fetchedIds.some((fid: any) => 
+              String(fid) === String(cached.id) || Number(fid) === Number(cached.id)
+            );
+
+            if (!existsOnServer && !isPending) {
               console.log(`[Sync] Borrando proyecto huérfano de la caché: ${cached.id}`);
               await db.projectsCache.delete(cached.id);
               // También borrar el chat asociado
