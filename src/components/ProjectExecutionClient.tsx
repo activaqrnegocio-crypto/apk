@@ -126,16 +126,30 @@ export default function ProjectExecutionClient({
     return []
   }, [idFromUrl])
 
-  const refreshGallery = useCallback(async () => {
+  // v480: Refresh entire project data from API and update localState + Dexie Cache (syncs team, phases, budget, gallery)
+  const refreshProject = useCallback(async () => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) return
     try {
-      const res = await fetch(`/api/projects/${idFromUrl}/gallery?_t=${Date.now()}`)
+      const res = await fetch(`/api/projects/${idFromUrl}?_t=${Date.now()}`)
       if (res.ok) {
         const fresh = await res.json()
-        setLocalProject((prev: any) => prev ? { ...prev, gallery: fresh } : prev)
+        if (fresh && !fresh.error) {
+          setLocalProject((prev: any) => {
+            if (!prev) return fresh
+            const updated = { ...prev, ...fresh }
+            db.projectsCache.put({ ...updated, lastAccessedAt: Date.now() }).catch(() => {})
+            return updated
+          })
+        }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[Operator Project Sync] Failed to refresh project:', e)
+    }
   }, [idFromUrl, setLocalProject])
+
+  const refreshGallery = useCallback(async () => {
+    await refreshProject()
+  }, [refreshProject])
 
   const handleDownload = async (url: string, filename: string) => {
     setHandleDownloadLoading(filename)
@@ -215,6 +229,8 @@ export default function ProjectExecutionClient({
           
           // Step 3: Background refresh to get canonical data from server
           refreshGallery();
+        } else if (['TEAM_UPDATE', 'PROJECT_UPDATE', 'PHASE_UPDATE', 'EXPENSE', 'EXPENSE_LOG', 'GALLERY_DELETE'].includes(type)) {
+          refreshGallery();
         }
         if (type === 'MESSAGE') {
           fetchMessages();
@@ -224,6 +240,14 @@ export default function ProjectExecutionClient({
 
     window.addEventListener('sync-success', handleSyncSuccess)
     
+    // v480: Focus listener to pull latest database changes automatically
+    const handleWindowFocus = () => {
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        refreshGallery();
+      }
+    };
+    window.addEventListener('focus', handleWindowFocus);
+    
     // Deep Link
     const view = searchParams?.get('view')
     if (view === 'chat') setActiveTab('chat')
@@ -232,17 +256,18 @@ export default function ProjectExecutionClient({
     return () => {
       window.removeEventListener('resize', checkSize)
       window.removeEventListener('sync-success', handleSyncSuccess)
+      window.removeEventListener('focus', handleWindowFocus)
     }
   }, [idFromUrl])
 
-  // v400: Periodic gallery refresh to catch background syncs while on the page
+  // v480: Periodic background refresh to sync complete project details every 30s
   useEffect(() => {
-    if (activeTab !== 'records' || !isOnline) return
+    if (!isOnline) return
     const interval = setInterval(() => {
       refreshGallery()
-    }, 20000) // Every 20s catch-all refresh
+    }, 30000) // Every 30s catch-all project refresh
     return () => clearInterval(interval)
-  }, [activeTab, isOnline, refreshGallery])
+  }, [isOnline, refreshGallery])
 
   const userRole = session?.user?.role
 
