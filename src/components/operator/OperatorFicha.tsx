@@ -85,6 +85,28 @@ export default function OperatorFicha({ project, localClientName, localProjectAd
       doc.setFontSize(10)
       doc.setFont('helvetica', 'normal')
 
+      const findGpsLink = (text: any) => {
+        if (!text) return null
+        const str = typeof text !== 'string' ? JSON.stringify(text) : text
+        const match = str.match(/https?:\/\/(?:www\.)?(?:google\.com\/maps|maps\.app\.goo\.gl)\/[^\s"']+/i)
+        return match ? match[0] : null
+      }
+
+      let clientLink = fullProject.locationLink && fullProject.locationLink !== 'N/A' ? fullProject.locationLink : null;
+      if (!clientLink) {
+        const techSpecs = fullProject.technicalSpecs;
+        if (typeof techSpecs === 'object' && techSpecs !== null) {
+          clientLink = techSpecs.locationLink;
+        } else if (typeof techSpecs === 'string') {
+          try {
+            const parsed = JSON.parse(techSpecs);
+            clientLink = parsed.locationLink;
+          } catch {
+            clientLink = findGpsLink(techSpecs);
+          }
+        }
+      }
+
       const infoRows = [
         ['Título', fullProject.title],
         ['Tipo de Proyecto', translateType(fullProject.type)],
@@ -94,18 +116,23 @@ export default function OperatorFicha({ project, localClientName, localProjectAd
         ['Fecha Fin (Est.)', formatDate(fullProject.endDate)],
         ['Estado Actual', fullProject.status === 'ACTIVO' ? 'En Ejecución' : fullProject.status],
         ['Dirección Texto', `${fullProject.city || ''} ${fullProject.address || ''}`.trim() || 'N/A'],
-        ['Ubicación Cliente', (() => {
-          const link = fullProject.locationLink;
-          return (link && link !== 'N/A' && link.startsWith('http')) ? link : 'No proporcionada';
-        })()],
+        ['Ubicación Cliente', clientLink || 'No proporcionada'],
         ['Ubicación Obra (Operador)', (() => {
-          const findGpsLink = (text: string) => {
-            if (!text) return null
-            const match = text.match(/https?:\/\/(?:www\.)?(?:google\.com\/maps|maps\.app\.goo\.gl)\/[^\s"']+/i)
-            return match ? match[0] : null
+          let link = null;
+          const techSpecs = fullProject.technicalSpecs;
+          if (typeof techSpecs === 'object' && techSpecs !== null) {
+            link = techSpecs.locationLink;
+          } else if (typeof techSpecs === 'string') {
+            try {
+              const parsed = JSON.parse(techSpecs);
+              link = parsed.locationLink;
+            } catch {
+              link = findGpsLink(techSpecs);
+            }
           }
-          const link = findGpsLink(fullProject.technicalSpecs) || findGpsLink(fullProject.specsTranscription) || findGpsLink(fullProject.address);
-          return (link && link !== fullProject.locationLink) ? link : 'Ver ubicación principal';
+          
+          link = link || findGpsLink(fullProject.specsTranscription) || findGpsLink(fullProject.address);
+          return (link && link !== clientLink) ? link : 'Ver ubicación principal';
         })()],
       ]
 
@@ -308,8 +335,26 @@ export default function OperatorFicha({ project, localClientName, localProjectAd
                         return match ? match[0] : null
                       }
 
-                      const clientLoc = project.locationLink && project.locationLink !== 'N/A' ? project.locationLink : null;
-                      const operatorLoc = findGpsLink(project.technicalSpecs) || findGpsLink(project.specsTranscription) || findGpsLink(localProjectAddress);
+                      let clientLoc = project.locationLink && project.locationLink !== 'N/A' ? project.locationLink : null;
+                      
+                      let techSpecs = project.technicalSpecs;
+                      let locFromSpecs = null;
+                      if (typeof techSpecs === 'string') {
+                        try {
+                          const parsed = JSON.parse(techSpecs);
+                          locFromSpecs = parsed.locationLink;
+                        } catch {
+                          locFromSpecs = findGpsLink(techSpecs);
+                        }
+                      } else if (typeof techSpecs === 'object' && techSpecs !== null) {
+                        locFromSpecs = techSpecs.locationLink;
+                      }
+                      
+                      if (!clientLoc && locFromSpecs) {
+                        clientLoc = locFromSpecs;
+                      }
+
+                      const operatorLoc = findGpsLink(project.specsTranscription) || findGpsLink(localProjectAddress);
                       
                       const hasClient = !!clientLoc;
                       const hasOperator = !!operatorLoc && operatorLoc !== clientLoc;

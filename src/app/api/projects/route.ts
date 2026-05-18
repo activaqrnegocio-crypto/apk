@@ -377,14 +377,14 @@ export async function POST(request: Request) {
           notifyUser(
             user.id,
             '📊 Nuevo Proyecto Asignado',
-            `Te asignaron al proyecto: ${title}`,
+            `${session.user.name} te asignó al proyecto: ${title}`,
             `/admin/operador`,
             `project-new-${project.id}`
           ).catch(e => console.error('Push error:', e));
 
           // WhatsApp
           if (user.phone) {
-            const message = `🚀 *Aquatech CRM*\nHola ${user.name},\nhas sido asignado al proyecto: *${title}*.\nPor favor, revisa la plataforma para más detalles.`;
+            const message = `🚀 *Aquatech CRM*\nHola ${user.name},\n*${session.user.name}* te ha asignado al proyecto: *${title}*.\nPor favor, revisa la plataforma para más detalles.`;
             sendWhatsAppMessage(user.phone, message).catch((e) => console.error('WA error:', e));
           }
 
