@@ -2145,7 +2145,7 @@ export default function ProjectExecutionClient({
               }}>
                 <ProjectChatUnified
                   project={project}
-                  messages={localChat} 
+                  messages={combinedChat} 
                   userId={Number(session?.user?.id) || 0}
                   isSending={isSendingMessage}
                   isOperatorView={true}
