@@ -87,7 +87,7 @@ export async function PUT(
         const user = usersToNotify[i];
         
         // Web Push
-        await notifyUser(user.id, `🚀 Has sido asignado a un proyecto`, `Proyecto: ${title}`, `/admin/operador/proyecto/${projectId}`, `project-${projectId}`).catch((e) => console.error('Push error', e));
+        await notifyUser(user.id, `🚀 Has sido asignado a un proyecto`, `Proyecto: ${title}`, `URL_PROJECT_CHAT:${projectId}`, `project-${projectId}`).catch((e) => console.error('Push error', e));
         
         // WhatsApp
         if (user.phone) {

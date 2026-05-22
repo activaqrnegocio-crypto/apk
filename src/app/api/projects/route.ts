@@ -378,7 +378,7 @@ export async function POST(request: Request) {
             user.id,
             '📊 Nuevo Proyecto Asignado',
             `${session.user.name} te asignó al proyecto: ${title}`,
-            `/admin/operador`,
+            `URL_PROJECT_CHAT:${project.id}`,
             `project-new-${project.id}`
           ).catch(e => console.error('Push error:', e));
 
