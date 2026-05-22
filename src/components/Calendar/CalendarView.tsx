@@ -222,12 +222,12 @@ export default function CalendarView({
                       }}
                     >
                       <div className="event-title" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        {event.title}
-                        {opCount > 1 && (
-                          <span style={{ fontSize: '0.6rem', background: 'rgba(255,255,255,0.15)', borderRadius: '10px', padding: '1px 6px', fontWeight: 600 }}>
-                            +{opCount}
-                          </span>
-                        )}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                          {event.title}
+                        </span>
+                        <span style={{ fontSize: '0.6rem', background: 'rgba(255,255,255,0.15)', borderRadius: '10px', padding: '1px 6px', fontWeight: 600, flexShrink: 0 }}>
+                          {opCount}
+                        </span>
                         {event.isPending && (
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8, flexShrink: 0 }}>
                             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
@@ -236,9 +236,6 @@ export default function CalendarView({
                       </div>
                       <div className="event-time" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                           {formatTimeEcuador(event.startTime)}
-                          {opCount <= 1 && opNames[0] && (
-                            <span style={{ fontSize: '0.6rem', opacity: 0.7, marginLeft: '2px' }}>{opNames[0]}</span>
-                          )}
                       </div>
                     </button>
                     )
