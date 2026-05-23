@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useEffect, useRef } from 'react'
-import { getLocalNow, formatToEcuador } from '@/lib/date-utils'
+import { getLocalNow, formatToEcuador, toEcuadorISODate } from '@/lib/date-utils'
 import { db } from '@/lib/db'
 import { useLiveQuery } from 'dexie-react-hooks'
 import Link from 'next/link'
@@ -159,12 +159,21 @@ export default function OperatorDashboardClient({
       const uId = user?.id || localUser?.id
       if (!uId) return undefined
       
-      const appts = await db.appointmentsCache
-        .where('userId')
-        .equals(Number(uId))
-        .toArray()
+      const userIdNum = Number(uId)
+      const allAppts = await db.appointmentsCache.toArray()
       
-      return appts
+      return allAppts.filter(a => {
+        if (Number(a.userId) === userIdNum) return true
+        if (a.assignedUsers) {
+          try {
+            const parsed = typeof a.assignedUsers === 'string' ? JSON.parse(a.assignedUsers) : a.assignedUsers
+            return Array.isArray(parsed) && parsed.some((u: any) => Number(u.id) === userIdNum)
+          } catch (e) {
+            return false
+          }
+        }
+        return false
+      })
     },
     [localUser?.id, user?.id] // Removed isHydratingAuth
   )
@@ -867,15 +876,17 @@ export default function OperatorDashboardClient({
   }, [projects])
 
   const todayTasks = useMemo(() => {
-    const today = getLocalNow()
+    const todayStr = toEcuadorISODate(getLocalNow())
     return allAppointments
-      .filter(a => {
-        const d = new Date(a.startTime)
-        return d.getDate() === today.getDate() && 
-               d.getMonth() === today.getMonth() && 
-               d.getFullYear() === today.getFullYear()
+      .filter(a => toEcuadorISODate(new Date(a.startTime)) === todayStr)
+      .sort((a, b) => {
+        const pA = parseInt(a.title || '999', 10)
+        const pB = parseInt(b.title || '999', 10)
+        if (isNaN(pA) && isNaN(pB)) return 0
+        if (isNaN(pA)) return 1
+        if (isNaN(pB)) return -1
+        return pA - pB
       })
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
   }, [allAppointments])
 
   const toggleStatus = async (task: any) => {
@@ -1126,6 +1137,27 @@ export default function OperatorDashboardClient({
              </span>
            )}
         </button>
+
+        <button 
+          className={`tab ${activeTab === 'CALENDARIO' ? 'active' : ''}`}
+          onClick={() => setActiveTab('CALENDARIO')}
+          style={{ 
+            flex: 1, 
+            padding: '16px 10px', 
+            fontSize: '0.9rem', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            gap: '10px',
+            borderRadius: '0',
+            borderBottom: activeTab === 'CALENDARIO' ? '3px solid var(--primary)' : '3px solid transparent'
+          }}
+        >
+           <CalendarIcon size={18} /> 
+           <span style={{ whiteSpace: 'nowrap', fontWeight: activeTab === 'CALENDARIO' ? '700' : '500' }}>
+             Agenda Semanal
+           </span>
+        </button>
       </div>
 
       {activeTab === 'PROYECTOS' && (
@@ -1153,36 +1185,66 @@ export default function OperatorDashboardClient({
 
       <div className="tab-content" style={{ marginTop: 'var(--space-sm)' }}>
         {activeTab === 'TAREAS' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
-            {todayTasks.length > 0 ? todayTasks.map(task => (
-              <div key={task.id} className="card" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)', padding: 'var(--space-md)' }}>
-                <button 
-                  onClick={() => toggleStatus(task)}
-                  style={{ background: 'none', border: 'none', color: task.status === 'COMPLETADA' ? 'var(--success)' : 'var(--text-muted)', cursor: 'pointer' }}
-                >
-                  <CheckCircle2 size={24} fill={task.status === 'COMPLETADA' ? 'var(--success-bg)' : 'none'}/>
-                </button>
-                <div 
-                  style={{ flex: 1, cursor: 'pointer' }}
-                  onClick={() => setSelectedTask(task)}
-                >
-                   <h3 style={{ margin: 0, fontSize: '1.1rem', textDecoration: task.status === 'COMPLETADA' ? 'line-through' : 'none', opacity: task.status === 'COMPLETADA' ? 0.6 : 1 }}>
-                     {task.title}
-                   </h3>
-                   <div style={{ display: 'flex', gap: '1rem', fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Clock size={12}/> {formatToEcuador(task.startTime, { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                      {task.project && (
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Briefcase size={12}/> {task.project.title}
-                        </span>
-                      )}
-                   </div>
-                </div>
-                <span className={`badge ${task.status === 'COMPLETADA' ? 'badge-success' : 'badge-warning'}`}>
-                   {task.status}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {todayTasks.length > 0 ? todayTasks
+              .sort((a, b) => {
+                const pA = parseInt(a.title || '999', 10)
+                const pB = parseInt(b.title || '999', 10)
+                if (isNaN(pA) && isNaN(pB)) return 0
+                if (isNaN(pA)) return 1
+                if (isNaN(pB)) return -1
+                return pA - pB
+              })
+              .map(task => (
+              <div 
+                key={task.id} 
+                className="card interactive" 
+                onClick={() => setSelectedTask(task)}
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '10px', 
+                  padding: '10px 14px',
+                  borderLeft: `3px solid ${task.status === 'COMPLETADA' ? 'var(--success)' : task.status === 'ATRASADA' ? 'var(--danger)' : 'var(--primary)'}`,
+                  opacity: task.status === 'COMPLETADA' ? 0.55 : 1,
+                  transition: 'opacity 0.2s ease',
+                  cursor: 'pointer'
+                }}
+              >
+                {/* Priority Badge */}
+                <span style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  color: 'var(--primary)',
+                  background: 'rgba(88, 199, 255, 0.08)',
+                  border: '1px solid rgba(88, 199, 255, 0.2)',
+                  borderRadius: '4px',
+                  padding: '2px 7px',
+                  flexShrink: 0,
+                  minWidth: '24px',
+                  textAlign: 'center'
+                }}>
+                  #{task.title || '?'}
                 </span>
+
+                {/* Note Description — truncated */}
+                <p style={{ 
+                  margin: 0, 
+                  flex: 1, 
+                  fontSize: '0.85rem', 
+                  fontWeight: 500, 
+                  color: 'var(--text)', 
+                  lineHeight: 1.4,
+                  textDecoration: task.status === 'COMPLETADA' ? 'line-through' : 'none',
+                  wordBreak: 'break-word',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical' as any,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}>
+                  {task.description || '(Sin nota)'}
+                </p>
               </div>
             )) : (
               <div className="card" style={{ textAlign: 'center', padding: '40px' }}>
@@ -1378,26 +1440,60 @@ export default function OperatorDashboardClient({
                   <h4 style={{ fontSize: '0.85rem', color: 'var(--primary)', textTransform: 'capitalize', marginBottom: '8px', paddingLeft: '10px', borderLeft: '3px solid var(--primary)' }}>
                     {date}
                   </h4>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     {tasks.sort((a: any, b: any) => {
-                      const tA = new Date(a.startTime).getTime();
-                      const tB = new Date(b.startTime).getTime();
-                      if (isNaN(tA) && isNaN(tB)) return 0;
-                      if (isNaN(tA)) return 1;
-                      if (isNaN(tB)) return -1;
-                      return tA - tB;
+                      const pA = parseInt(a.title || '999', 10)
+                      const pB = parseInt(b.title || '999', 10)
+                      if (isNaN(pA) && isNaN(pB)) return 0
+                      if (isNaN(pA)) return 1
+                      if (isNaN(pB)) return -1
+                      return pA - pB
                     }).map((task: any) => (
-                      <div key={task.id} className="card interactive" style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }} onClick={() => setSelectedTask(task)}>
-                        <div style={{ textAlign: 'center', minWidth: '50px' }}>
-                          <div style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>{formatToEcuador(task.startTime, { hour: '2-digit', minute: '2-digit' })}</div>
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: '600', fontSize: '0.95rem' }}>{task.title}</div>
-                          {task.project && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>📂 {task.project.title}</div>}
-                        </div>
-                        <span className={`badge ${task.status === 'COMPLETADA' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.65rem' }}>
-                          {task.status}
+                      <div 
+                        key={task.id} 
+                        className="card interactive" 
+                        onClick={() => setSelectedTask(task)}
+                        style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '10px', 
+                          padding: '10px 14px',
+                          borderLeft: `3px solid ${task.status === 'COMPLETADA' ? 'var(--success)' : task.status === 'ATRASADA' ? 'var(--danger)' : 'var(--primary)'}`,
+                          opacity: task.status === 'COMPLETADA' ? 0.55 : 1,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <span style={{
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          color: 'var(--primary)',
+                          background: 'rgba(88, 199, 255, 0.08)',
+                          border: '1px solid rgba(88, 199, 255, 0.2)',
+                          borderRadius: '4px',
+                          padding: '2px 7px',
+                          flexShrink: 0,
+                          minWidth: '24px',
+                          textAlign: 'center'
+                        }}>
+                          #{task.title || '?'}
                         </span>
+                        <p style={{ 
+                          margin: 0, 
+                          flex: 1, 
+                          fontSize: '0.85rem', 
+                          fontWeight: 500, 
+                          color: 'var(--text)', 
+                          lineHeight: 1.4,
+                          textDecoration: task.status === 'COMPLETADA' ? 'line-through' : 'none',
+                          wordBreak: 'break-word',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical' as any,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {task.description || '(Sin nota)'}
+                        </p>
                       </div>
                     ))}
                   </div>
@@ -1420,36 +1516,127 @@ export default function OperatorDashboardClient({
 
       </div>
 
-      {/* MODAL DETALLES DE TAREA (Multimedia support) */}
+      {/* MODAL DETALLES DE TAREA — Solo lectura, simple y ligero */}
       {selectedTask && (
-        <AppointmentModal
-          isOpen={!!selectedTask}
-          onClose={() => setSelectedTask(null)}
-          onSave={async (data) => {
-            try {
-              const res = await fetch(`/api/appointments/${data.id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-              })
-              if (res.ok) {
-                // Update local cache
-                await db.appointmentsCache.put(data)
-                setSelectedTask(null)
-              } else {
-                alert('Error al actualizar tarea')
-              }
-            } catch (e) {
-              alert('Error de conexión. Las ediciones detalladas requieren internet.')
-            }
+        <div 
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(4, 8, 19, 0.85)',
+            backdropFilter: 'blur(10px)',
+            WebkitBackdropFilter: 'blur(10px)',
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            boxSizing: 'border-box'
           }}
-          initialData={selectedTask}
-          userId={Number(user.id)}
-          projects={projects || []}
-          operators={[user]} // El operador solo se ve a sí mismo generalmente
-          isAdminView={false}
-        />
+          onClick={() => setSelectedTask(null)}
+        >
+          <div 
+            className="card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '520px',
+              background: 'linear-gradient(135deg, rgba(13, 19, 33, 0.98), rgba(8, 12, 21, 0.99))',
+              border: '1px solid rgba(88, 199, 255, 0.2)',
+              borderRadius: '16px',
+              padding: '24px',
+              boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.9), 0 0 30px rgba(88, 199, 255, 0.1)',
+              animation: 'taskDetailSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+              maxHeight: '80vh',
+              overflowY: 'auto'
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{
+                  fontSize: '0.8rem',
+                  fontWeight: 800,
+                  color: '#58c7ff',
+                  background: 'rgba(88, 199, 255, 0.1)',
+                  border: '1px solid rgba(88, 199, 255, 0.3)',
+                  borderRadius: '6px',
+                  padding: '4px 10px'
+                }}>
+                  Prioridad #{selectedTask.title || '?'}
+                </span>
+                <span className={`badge ${selectedTask.status === 'COMPLETADA' ? 'badge-success' : selectedTask.status === 'ATRASADA' ? 'badge-danger' : 'badge-warning'}`} style={{ fontSize: '0.65rem' }}>
+                  {selectedTask.status}
+                </span>
+              </div>
+              <button 
+                onClick={() => setSelectedTask(null)}
+                style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: '1.2rem', cursor: 'pointer', padding: '4px 8px' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Nota completa */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ fontSize: '0.68rem', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px', display: 'block' }}>Nota / Descripción</label>
+              <p style={{ 
+                margin: 0, 
+                fontSize: '0.92rem', 
+                color: '#ffffff', 
+                lineHeight: 1.6, 
+                wordBreak: 'break-word',
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid rgba(255,255,255,0.06)',
+                borderRadius: '8px',
+                padding: '12px'
+              }}>
+                {selectedTask.description || '(Sin nota)'}
+              </p>
+            </div>
+
+            {/* Operadores asignados */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '0.68rem', fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px', display: 'block' }}>Asignados</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {(() => {
+                  let names: string[] = []
+                  if (selectedTask.assignedUsers) {
+                    const parsed = typeof selectedTask.assignedUsers === 'string' ? JSON.parse(selectedTask.assignedUsers) : selectedTask.assignedUsers
+                    names = parsed.map((u: any) => u.name)
+                  } else {
+                    names = [selectedTask.user?.name || 'Operador']
+                  }
+                  return names.map((name, i) => (
+                    <span key={i} style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      color: 'rgba(255,255,255,0.8)',
+                      background: 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: '6px',
+                      padding: '3px 10px'
+                    }}>
+                      👤 {name}
+                    </span>
+                  ))
+                })()}
+              </div>
+            </div>
+
+            {/* Fecha */}
+            <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)', marginTop: '8px' }}>
+              📅 {new Date(selectedTask.startTime).toLocaleDateString('es-EC', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </div>
+          </div>
+        </div>
       )}
+
+      <style jsx>{`
+        @keyframes taskDetailSlideUp {
+          from { transform: translateY(20px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
       
 
 

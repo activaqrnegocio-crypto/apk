@@ -159,9 +159,11 @@ export default function CalendarView({
               Semana
             </button>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => onAddEvent(currentDate)}>
-              <Plus size={16}/> Agendar
-          </button>
+          {isAdmin && (
+            <button className="btn btn-primary btn-sm" onClick={() => onAddEvent(currentDate)}>
+                <Plus size={16}/> Agendar
+            </button>
+          )}
         </div>
       </div>
 
@@ -183,7 +185,7 @@ export default function CalendarView({
               <div 
                 key={idx} 
                 className={`calendar-day-cell ${day ? 'calendar-cell' : 'calendar-empty'} ${isToday ? 'is-today' : ''} ${isDifferentMonth ? 'is-diff-month' : ''} ${viewMode === 'WEEK' ? 'week-cell' : 'month-cell'}`}
-                onClick={() => day && onAddEvent(day)}
+                onClick={() => day && isAdmin && onAddEvent(day)}
               >
                 {day && (
                   <div className="day-header">
@@ -219,13 +221,21 @@ export default function CalendarView({
                         backgroundColor: getEventBgColor(event)
                       }}
                     >
-                      <div className="event-title">
-                        <span className="event-title-text">
-                          {event.description || event.title}
+                      <div className="event-title" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                          {event.title}
                         </span>
-                        <span className="event-op-badge">
+                        <span style={{ fontSize: '0.6rem', background: 'rgba(255,255,255,0.15)', borderRadius: '10px', padding: '1px 6px', fontWeight: 600, flexShrink: 0 }}>
                           {opCount}
                         </span>
+                        {event.isPending && (
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8, flexShrink: 0 }}>
+                            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                          </svg>
+                        )}
+                      </div>
+                      <div className="event-time" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          {formatTimeEcuador(event.startTime)}
                       </div>
                     </button>
                     )
@@ -303,10 +313,10 @@ export default function CalendarView({
         /* ========== DAY CELLS ========== */
         .calendar-day-cell {
           background: var(--bg-card);
-          padding: 4px 6px;
+          padding: 8px;
           display: flex;
           flex-direction: column;
-          gap: 2px;
+          gap: 4px;
           cursor: default;
           transition: background var(--transition-fast);
         }
@@ -334,7 +344,7 @@ export default function CalendarView({
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 2px;
+          margin-bottom: 4px;
         }
         .mobile-week-day-name {
           display: none;
@@ -343,11 +353,11 @@ export default function CalendarView({
           color: var(--text-muted);
         }
         .day-number {
-          font-size: 0.75rem;
+          font-size: 0.85rem;
           font-weight: 500;
           color: var(--text);
-          width: 20px;
-          height: 20px;
+          width: 24px;
+          height: 24px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -363,58 +373,33 @@ export default function CalendarView({
         .day-events-container {
           display: flex;
           flex-direction: column;
-          gap: 2px;
+          gap: 4px;
           overflow-y: auto;
           flex: 1;
         }
         .event-pill {
           display: flex;
-          align-items: center;
+          flex-direction: column;
           text-align: left;
-          padding: 2px 4px;
+          padding: 6px 8px;
           border-radius: var(--radius-sm);
-          font-size: 0.58rem;
+          font-size: 0.75rem;
           background: var(--bg-surface);
           color: var(--text);
           border: none;
           cursor: pointer;
-          transition: transform 0.15s ease, filter 0.15s ease;
+          transition: transform 0.2s ease;
           box-shadow: var(--shadow-sm);
-          width: 100%;
-          box-sizing: border-box;
-        }
-        .event-pill:hover {
-          transform: translateY(-1px);
-          filter: brightness(1.1);
         }
         .event-title {
-          font-weight: 500;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 2px;
-          width: 100%;
-        }
-        .event-title-text {
+          font-weight: 700;
+          white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          white-space: nowrap;
-          min-width: 0;
-          font-size: 0.58rem;
-          font-weight: 500;
         }
-        .event-op-badge {
-          font-size: 0.5rem;
-          background: rgba(255, 255, 255, 0.2);
-          color: #ffffff;
-          border-radius: 50%;
-          width: 11px;
-          height: 11px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: 700;
-          flex-shrink: 0;
+        .event-time {
+          font-size: 0.65rem;
+          color: var(--text-muted);
         }
 
         /* ========== MOBILE ========== */
@@ -459,7 +444,7 @@ export default function CalendarView({
             font-size: 0.6rem;
           }
           .calendar-day-cell {
-            padding: 2px;
+            padding: 3px;
             box-sizing: border-box;
             min-width: 0;
           }
@@ -470,15 +455,16 @@ export default function CalendarView({
             min-height: 130px;
           }
           .day-header {
-            margin-bottom: 2px;
+            margin-bottom: 4px;
           }
           .day-number {
-            width: 16px;
-            height: 16px;
-            font-size: 0.62rem;
+            width: 20px;
+            height: 20px;
+            font-size: 0.7rem;
           }
           .event-pill {
-            padding: 1.5px 3px;
+            padding: 3px 4px;
+            font-size: 0.6rem;
             width: 100%;
             box-sizing: border-box;
           }
@@ -488,18 +474,10 @@ export default function CalendarView({
             margin-top: 1px;
           }
           .event-title {
-            gap: 1px;
-          }
-          .event-title-text {
-            font-size: 0.52rem;
-          }
-          .event-op-badge {
-            font-size: 0.45rem;
-            width: 9px;
-            height: 9px;
+            font-size: 0.6rem;
           }
           .day-events-container {
-            gap: 1.5px;
+            gap: 3px;
             width: 100%;
           }
           

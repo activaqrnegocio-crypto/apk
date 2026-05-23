@@ -19,7 +19,7 @@ export async function PATCH(
     }
 
     const body = await request.json()
-    const { title, description, startTime, endTime, status, projectId, clientName, clientPhone, clientLocation, operatorLocation, userIds, silent } = body
+    const { title, description, startTime, endTime, status, projectId, clientName, clientPhone, clientLocation, operatorLocation, userIds } = body
 
     const existing = await prisma.appointment.findUnique({
       where: { id: Number(id) }
@@ -89,7 +89,7 @@ export async function PATCH(
         notifyUser(
           op.id,
           '✏️ Tarea Actualizada',
-          `${updated.description ? (updated.description.substring(0, 30) + '...') : 'Tarea'} — ${startLocale}`,
+          `${updated.title} — ${startLocale}`,
           `URL_TASK:${updated.projectId || 0}:${updated.id}`,
           `task-${updated.id}`
         )
@@ -98,10 +98,11 @@ export async function PATCH(
           try {
             const startTimeLocale = formatTimeEcuador(updated.startTime);
             const startDateLocale = formatDateEcuador(updated.startTime);
-            const nameClientText = updated.clientName ? `\n👤 *Cliente:* ${updated.clientName}` : '';
-            const phoneClientText = updated.clientPhone ? `\n📞 *Teléfono:* ${updated.clientPhone}` : '';
+            const descrText = updated.description ? `\n📝 *Notas:*\n${updated.description}` : '';
+            const nameClientText = updated.clientName ? `\n👤 *Cliente:*\n${updated.clientName}` : '';
+            const phoneClientText = updated.clientPhone ? `\n📞 *Teléfono Cliente:*\n${updated.clientPhone}` : '';
             
-            const message = `*Notificación Aquatech*\n\nHola ${op.name}, se ha *actualizado* una tarea que tienes asignada:\n📌 *Prioridad ${updated.title || 'Sin prioridad'}*\n📅 Nueva fecha: ${startDateLocale}\n⏰ Nueva hora: ${startTimeLocale}\n📝 *Nota:* ${updated.description || '(Sin nota)'}${nameClientText}${phoneClientText}\n\nRevisa tu perfil para ver los cambios.`;
+            const message = `*Notificación Aquatech*\n\nHola ${op.name}, se ha *actualizado* una tarea que tienes asignada:\n📌 *${updated.title}*\n📅 Nueva fecha: ${startDateLocale}\n⏰ Nueva hora: ${startTimeLocale}${descrText}${nameClientText}${phoneClientText}\n\nRevisa tu perfil para ver los cambios.`;
 
             await sendWhatsAppMessage(op.phone, message);
             console.log(`✅ WA actualización enviado a ${op.name} (${op.phone})`);
@@ -112,12 +113,10 @@ export async function PATCH(
       }
     }
 
-    if (!silent) {
-      try {
-        await sendUpdateNotifications()
-      } catch (err) {
-        console.error('Error global en notificaciones de actualización:', err)
-      }
+    try {
+      await sendUpdateNotifications()
+    } catch (err) {
+      console.error('Error global en notificaciones de actualización:', err)
     }
 
     return NextResponse.json(updated)

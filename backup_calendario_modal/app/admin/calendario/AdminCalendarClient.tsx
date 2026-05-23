@@ -4,9 +4,8 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/lib/db'
 import CalendarView from '@/components/Calendar/CalendarView'
-import DayOverviewModal from '@/components/Calendar/DayOverviewModal'
+import AppointmentModal from '@/components/Calendar/AppointmentModal'
 import CalendarAssistant from '@/components/Calendar/CalendarAssistant'
-import { getLocalNow } from '@/lib/date-utils'
 
 interface AdminCalendarClientProps {
   operators: any[]
@@ -25,10 +24,8 @@ export default function AdminCalendarClient({
   const [cachedProjects, setCachedProjects] = useState<any[]>(projects)
   const [appointments, setAppointments] = useState<any[]>([])
   const [selectedOperatorId, setSelectedOperatorId] = useState<string>(isAdmin ? 'all' : userId.toString())
-  const [isOverviewOpen, setIsOverviewOpen] = useState(false)
-  const [selectedDate, setSelectedDate] = useState<Date>(getLocalNow())
-  const [editingEvent, setEditingEvent] = useState<any>(null)
-  const [initialEditEventId, setInitialEditEventId] = useState<number | string | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
+   const [editingEvent, setEditingEvent] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [initialDataLoaded, setInitialDataLoaded] = useState(false) // v267: avoid empty screen on slow network
@@ -68,18 +65,7 @@ export default function AdminCalendarClient({
       if (isMounted && cached.length > 0) {
         const filtered = selectedOperatorId === 'all' 
           ? cached 
-          : cached.filter((a: any) => {
-              if (Number(a.userId) === Number(selectedOperatorId)) return true
-              if (a.assignedUsers) {
-                try {
-                  const parsed = typeof a.assignedUsers === 'string' ? JSON.parse(a.assignedUsers) : a.assignedUsers
-                  return Array.isArray(parsed) && parsed.some((u: any) => Number(u.id) === Number(selectedOperatorId))
-                } catch (e) {
-                  return false
-                }
-              }
-              return false
-            })
+          : cached.filter((a: any) => a.userId === Number(selectedOperatorId))
         setAppointments(filtered)
         setInitialDataLoaded(true)
         // If we have cache, we can hide the big spinner early, but we'll still fetch fresh data
@@ -292,6 +278,7 @@ export default function AdminCalendarClient({
           timestamp: Date.now(),
           status: 'pending'
         })
+        setIsModalOpen(false)
         
         // v268: Aggressive Background Sync Trigger
         if ('serviceWorker' in navigator) {
@@ -334,6 +321,7 @@ export default function AdminCalendarClient({
           timestamp: Date.now(),
           status: 'pending'
         });
+        setIsModalOpen(false);
         if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
           navigator.serviceWorker.controller.postMessage({ type: 'FORCE_SYNC_OUTBOX' });
         }
@@ -342,6 +330,7 @@ export default function AdminCalendarClient({
       }
       
       if (res && res.ok) {
+        setIsModalOpen(false)
         fetchAppointments()
       } else {
         alert('Error al guardar en el servidor')
@@ -359,6 +348,7 @@ export default function AdminCalendarClient({
     // Optimistic UI update
     const previousAppointments = [...appointments]
     setAppointments(prev => prev.filter(a => a.id !== id))
+    setIsModalOpen(false)
 
     try {
       const res = await fetch(`/api/appointments/${id}`, { method: 'DELETE' })
@@ -381,7 +371,7 @@ export default function AdminCalendarClient({
           <h1 className="page-title">Calendario Maestro</h1>
           <p className="page-subtitle">Gestión centralizada de tareas y agenda del equipo</p>
         </div>
-        <button className="btn btn-primary add-task-btn" onClick={() => { setSelectedDate(getLocalNow()); setIsOverviewOpen(true); }}>
+        <button className="btn btn-primary add-task-btn" onClick={() => { setEditingEvent(null); setIsModalOpen(true); }}>
           + Agendar
         </button>
       </div>
@@ -427,31 +417,29 @@ export default function AdminCalendarClient({
               isAdmin={isAdmin}
               viewMode="WEEK"
               onAddEvent={(date) => { 
-                  setSelectedDate(date); 
-                  setInitialEditEventId(null);
-                  setIsOverviewOpen(true); 
+                  setEditingEvent({ startTime: date }); 
+                  setIsModalOpen(true); 
               }}
               onEditEvent={(event) => { 
-                  setSelectedDate(new Date(event.startTime)); 
-                  setInitialEditEventId(event.id);
-                  setIsOverviewOpen(true); 
+                  setEditingEvent(event); 
+                  setIsModalOpen(true); 
               }}
             />
           )}
         </div>
       </div>
 
-      {isOverviewOpen && (
-        <DayOverviewModal 
-          isOpen={isOverviewOpen}
-          onClose={() => setIsOverviewOpen(false)}
-          date={selectedDate}
-          appointments={allAppointments}
-          operators={cachedOperators}
-          initialEditEventId={initialEditEventId}
+      {isModalOpen && (
+        <AppointmentModal 
+          isOpen={isModalOpen}
+          onClose={() => { setIsModalOpen(false); setEditingEvent(null); }}
           onSave={handleSaveAppointment}
           onDelete={handleDeleteAppointment}
-          refreshAppointments={() => fetchAppointments(true)}
+          initialData={editingEvent}
+          userId={selectedOperatorId === 'all' ? 0 : Number(selectedOperatorId)} 
+          projects={cachedProjects}
+          operators={cachedOperators}
+          isAdminView={true}
         />
       )}
 

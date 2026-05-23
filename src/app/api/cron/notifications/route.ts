@@ -71,11 +71,18 @@ export async function GET(request: Request) {
         if (op.phone && op.appointments.length > 0) {
           let summary = `📋 *Resumen del Día - Aquatech*\n\nHola *${op.name}*, hoy tienes *${op.appointments.length}* tareas asignadas:\n\n`;
           
-          op.appointments.forEach((apt, idx) => {
+          // Ordenar las citas por prioridad (title) numéricamente
+          const sortedApts = [...op.appointments].sort((a, b) => {
+            const prioA = parseInt(a.title || '999999', 10);
+            const prioB = parseInt(b.title || '999999', 10);
+            return prioA - prioB;
+          });
+
+          sortedApts.forEach((apt, idx) => {
             const time = formatTimeEcuador(apt.startTime);
             const date = formatDateEcuador(apt.startTime);
             const descrText = apt.description ? `\n   📝 *Nota:* ${apt.description}` : '';
-            summary += `${idx + 1}. 🕙 *${apt.title}* a las ${time} (${date})${descrText}\n\n`;
+            summary += `${idx + 1}. 🕙 *Prioridad ${apt.title}* a las ${time} (${date})${descrText}\n\n`;
           });
 
           summary += `\n¡Que tengas un excelente día de trabajo! 👷💦`;
@@ -129,13 +136,13 @@ export async function GET(request: Request) {
       const descrText = apt.description ? `\n📝 *Nota:* ${apt.description}` : '';
       
       if (diffMins >= 55 && diffMins <= 65 && !apt.reminded60) {
-        reminderMessage = `⏰ *Recordatorio (1 hora):*\nHola ${apt.user.name}, tu tarea *"${apt.title}"* comienza en 60 minutos.\n📅 ${dateLocal} a las ${timeLocal}${descrText}`;
+        reminderMessage = `⏰ *Recordatorio (1 hora):*\nHola ${apt.user.name}, tu tarea *Prioridad ${apt.title}* comienza en 60 minutos.\n📅 ${dateLocal} a las ${timeLocal}${descrText}`;
         flagToUpdate = 'reminded60';
       } else if (diffMins >= 25 && diffMins <= 35 && !apt.reminded30) {
-        reminderMessage = `⏰ *Recordatorio (30 min):*\nHola ${apt.user.name}, tu tarea *"${apt.title}"* comienza en 30 minutos.\n📅 ${dateLocal} a las ${timeLocal}${descrText}`;
+        reminderMessage = `⏰ *Recordatorio (30 min):*\nHola ${apt.user.name}, tu tarea *Prioridad ${apt.title}* comienza en 30 minutos.\n📅 ${dateLocal} a las ${timeLocal}${descrText}`;
         flagToUpdate = 'reminded30';
       } else if (diffMins >= 5 && diffMins <= 15 && !apt.reminded10) {
-        reminderMessage = `⚠️ *Aviso (10 min):*\nHola ${apt.user.name}, tu tarea *"${apt.title}"* está por comenzar en 10 minutos.\n📅 ${dateLocal} a las ${timeLocal}${descrText}`;
+        reminderMessage = `⚠️ *Aviso (10 min):*\nHola ${apt.user.name}, tu tarea *Prioridad ${apt.title}* está por comenzar en 10 minutos.\n📅 ${dateLocal} a las ${timeLocal}${descrText}`;
         flagToUpdate = 'reminded10';
       }
 

@@ -196,7 +196,7 @@ export async function POST(request: Request) {
             await notifyUser(
               op.id,
               '📌 Nueva Tarea Asignada',
-              `${description ? (description.substring(0, 30) + '...') : 'Tarea'} — ${startLocale}`,
+              `${title} — ${startLocale}`,
               `URL_TASK:${projectId || 0}:${appointment.id}`,
               `task-${appointment.id}`
             )
@@ -206,9 +206,10 @@ export async function POST(request: Request) {
             try {
               const startTimeLocale = formatTimeEcuador(startTime);
               const startDateLocale = formatDateEcuador(startTime);
-              const nameClientText = clientName ? `\n👤 *Cliente:* ${clientName}` : '';
-              const phoneClientText = clientPhone ? `\n📞 *Teléfono:* ${clientPhone}` : '';
+              const descrText = description ? `\n📝 *Notas:*\n${description}` : '';
               const locClientText = clientLocation ? `\n📍 *Ubicación Cliente:*\n${clientLocation}` : '';
+              const nameClientText = clientName ? `\n👤 *Cliente:*\n${clientName}` : '';
+              const phoneClientText = clientPhone ? `\n📞 *Teléfono Cliente:*\n${clientPhone}` : '';
               const locOpText = operatorLocation ? `\n📡 *Ubicación Operario (GPS):*\n${operatorLocation}` : '';
               
               // v358: Aggressive deduplication for the WA manifest
@@ -241,7 +242,7 @@ export async function POST(request: Request) {
                 linksText += `\n\n🔊 *Audios (Respaldo):*\n${audioLinks.map((a: any) => `• [Escuchar Audio](${a.url})`).join('\n')}`;
               }
 
-              const message = `*Notificación Aquatech*\n\nHola ${op.name}, tienes una *nueva tarea* asignada:\n📌 *Prioridad ${title || 'Sin prioridad'}*\n📅 Fecha: ${startDateLocale}\n⏰ Hora: ${startTimeLocale}\n📝 *Nota:* ${description || '(Sin nota)'}${nameClientText}${phoneClientText}${locClientText}${locOpText}${fileManifest}${linksText}\n\nConsulta más detalles en tu perfil.`;
+              const message = `*Notificación Aquatech*\n\nHola ${op.name}, tienes una *nueva tarea* asignada:\n📌 *${title}*\n📅 Fecha: ${startDateLocale}\n⏰ Hora: ${startTimeLocale}${descrText}${nameClientText}${phoneClientText}${locClientText}${locOpText}${fileManifest}${linksText}\n\nConsulta más detalles en tu perfil.`;
 
               await sendWhatsAppMessage(op.phone, message, attachments);
             } catch (err) {
