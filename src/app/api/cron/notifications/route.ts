@@ -45,17 +45,7 @@ export async function GET(request: Request) {
           id: true,
           name: true,
           phone: true,
-          lastSummarySent: true,
-          appointments: {
-            where: {
-              startTime: { 
-                gte: new Date(new Date(localTime).setHours(0,0,0,0)), 
-                lte: new Date(new Date(localTime).setHours(23,59,59,999)) 
-              },
-              status: { not: 'CANCELADO' }
-            },
-            orderBy: { startTime: 'asc' }
-          }
+          lastSummarySent: true
         }
       });
 
@@ -68,11 +58,27 @@ export async function GET(request: Request) {
            if (lastSentStr === todayStr) continue;
         }
 
-        if (op.phone && op.appointments.length > 0) {
-          let summary = `📋 *Resumen del Día - Aquatech*\n\nHola *${op.name}*, hoy tienes *${op.appointments.length}* tareas asignadas:\n\n`;
+        // Traer tareas donde sea userId principal O esté en assignedUsers
+        const opAppointments = await prisma.appointment.findMany({
+          where: {
+            startTime: { 
+              gte: new Date(new Date(localTime).setHours(0,0,0,0)), 
+              lte: new Date(new Date(localTime).setHours(23,59,59,999)) 
+            },
+            status: { not: 'CANCELADO' },
+            OR: [
+              { userId: op.id },
+              { assignedUsers: { contains: `"id":${op.id}` } }
+            ]
+          },
+          orderBy: { startTime: 'asc' }
+        });
+
+        if (op.phone && opAppointments.length > 0) {
+          let summary = `📋 *Resumen del Día - Aquatech*\n\nHola *${op.name}*, hoy tienes *${opAppointments.length}* tareas asignadas:\n\n`;
           
           // Ordenar las citas por prioridad (title) numéricamente
-          const sortedApts = [...op.appointments].sort((a, b) => {
+          const sortedApts = [...opAppointments].sort((a, b) => {
             const prioA = parseInt(a.title || '999999', 10);
             const prioB = parseInt(b.title || '999999', 10);
             return prioA - prioB;
@@ -160,8 +166,35 @@ export async function GET(request: Request) {
         });
 
         if (alreadySent.count > 0) {
+          // Notificar al userId principal
           await sendWhatsAppMessage(apt.user.phone, reminderMessage);
           results.push(`Reminder (${diffMins}m) sent to ${apt.user.name} for ${apt.title}`);
+
+          // También notificar a todos los operadores en assignedUsers
+          if (apt.assignedUsers) {
+            try {
+              const assigned = typeof apt.assignedUsers === 'string' ? JSON.parse(apt.assignedUsers) : apt.assignedUsers;
+              if (Array.isArray(assigned)) {
+                const assignedIds = assigned.map((u: any) => u.id).filter((id: number) => id !== apt.userId);
+                if (assignedIds.length > 0) {
+                  const assignedUsers = await prisma.user.findMany({
+                    where: { id: { in: assignedIds } },
+                    select: { id: true, name: true, phone: true }
+                  });
+                  for (const assignedOp of assignedUsers) {
+                    if (assignedOp.phone) {
+                      const msg = reminderMessage.replace(`Hola ${apt.user.name}`, `Hola ${assignedOp.name}`);
+                      await sendWhatsAppMessage(assignedOp.phone, msg);
+                      results.push(`Reminder (${diffMins}m) sent to ${assignedOp.name} for ${apt.title}`);
+                      await new Promise(resolve => setTimeout(resolve, 1500));
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('Error sending reminder to assigned users:', e);
+            }
+          }
           
           if (i < upcomingApts.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 1500));

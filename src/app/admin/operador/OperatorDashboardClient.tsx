@@ -1195,7 +1195,7 @@ export default function OperatorDashboardClient({
                 if (isNaN(pB)) return -1
                 return pA - pB
               })
-              .map(task => (
+              .map((task, idx) => (
               <div 
                 key={task.id} 
                 className="card interactive" 
@@ -1224,7 +1224,7 @@ export default function OperatorDashboardClient({
                   minWidth: '24px',
                   textAlign: 'center'
                 }}>
-                  #{task.title || '?'}
+                  #{idx + 1}
                 </span>
 
                 {/* Note Description — truncated */}
@@ -1448,7 +1448,7 @@ export default function OperatorDashboardClient({
                       if (isNaN(pA)) return 1
                       if (isNaN(pB)) return -1
                       return pA - pB
-                    }).map((task: any) => (
+                    }).map((task: any, idx: number) => (
                       <div 
                         key={task.id} 
                         className="card interactive" 
@@ -1475,7 +1475,7 @@ export default function OperatorDashboardClient({
                           minWidth: '24px',
                           textAlign: 'center'
                         }}>
-                          #{task.title || '?'}
+                          #{idx + 1}
                         </span>
                         <p style={{ 
                           margin: 0, 
@@ -1562,7 +1562,7 @@ export default function OperatorDashboardClient({
                   borderRadius: '6px',
                   padding: '4px 10px'
                 }}>
-                  Prioridad #{selectedTask.title || '?'}
+                  Prioridad #{(todayTasks.findIndex(t => t.id === selectedTask.id) + 1) || '?'}
                 </span>
                 <span className={`badge ${selectedTask.status === 'COMPLETADA' ? 'badge-success' : selectedTask.status === 'ATRASADA' ? 'badge-danger' : 'badge-warning'}`} style={{ fontSize: '0.65rem' }}>
                   {selectedTask.status}

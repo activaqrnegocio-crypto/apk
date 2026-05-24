@@ -165,9 +165,31 @@ export default function DayOverviewModal({
   // Sync localEvents state whenever visibleEvents changes, but protect optimistic UI state during active autosave
   useEffect(() => {
     if (autosaveStatus === 'idle' && pendingChangesCount.current === 0) {
-      setLocalEvents(visibleEvents)
+      // En "Todos": ordenar por prioridad de operador (1,1,2,2,3,3...)
+      if (filterOperatorId === 'all') {
+        // Calcular rank por operador para ordenar
+        const withRank = visibleEvents.map(ev => {
+          const sameOpEvents = allSortedEvents.filter(e => {
+            if (ev.assignedUsers || e.assignedUsers) {
+              const eUsers = typeof e.assignedUsers === 'string' ? JSON.parse(e.assignedUsers) : (e.assignedUsers || [])
+              const evUsers = typeof ev.assignedUsers === 'string' ? JSON.parse(ev.assignedUsers) : (ev.assignedUsers || [])
+              const eIds = Array.isArray(eUsers) ? eUsers.map((u: any) => u.id) : [e.userId]
+              const evIds = Array.isArray(evUsers) ? evUsers.map((u: any) => u.id) : [ev.userId]
+              return eIds.some((id: number) => evIds.includes(id))
+            }
+            return e.userId === ev.userId
+          })
+            .sort((a, b) => (parseInt(a.title || '999999', 10) || 999999) - (parseInt(b.title || '999999', 10) || 999999))
+          const rank = sameOpEvents.findIndex(e => e.id === ev.id) + 1
+          return { ...ev, _displayPrio: rank }
+        })
+        withRank.sort((a, b) => a._displayPrio - b._displayPrio || (a.id as number) - (b.id as number))
+        setLocalEvents(withRank)
+      } else {
+        setLocalEvents(visibleEvents)
+      }
     }
-  }, [visibleEvents, autosaveStatus])
+  }, [visibleEvents, autosaveStatus, filterOperatorId])
 
   if (!isOpen || !mounted) return null
 
@@ -496,7 +518,20 @@ export default function DayOverviewModal({
         payload.title = currentEvent.title // Keep original priority title ("1", "2", "3")
       }
     } else {
-      payload.title = (allSortedEvents.length + 1).toString() // Next sequential priority preference number
+      // Prioridad automática por operador (no global)
+      const opIds = selectedOperatorIds
+      const prioritiesOfSelectedOps = allSortedEvents
+        .filter(e => {
+          if (e.assignedUsers) {
+            const parsed = typeof e.assignedUsers === 'string' ? JSON.parse(e.assignedUsers) : e.assignedUsers
+            return parsed.some((u: any) => opIds.includes(u.id))
+          }
+          return opIds.includes(e.userId)
+        })
+        .map(e => parseInt(e.title || '0', 10))
+        .filter(n => !isNaN(n))
+      const maxPrio = prioritiesOfSelectedOps.length > 0 ? Math.max(...prioritiesOfSelectedOps) : 0
+      payload.title = (maxPrio + 1).toString()
       payload.status = 'PENDIENTE'
     }
 
@@ -668,6 +703,10 @@ export default function DayOverviewModal({
               ) : (
                 <div className={`notes-vertical-list ${isDraggingActive ? 'is-dragging-active' : ''} ${!isEditMode ? 'edit-locked' : ''}`}>
                   {localEvents.map((event, idx) => {
+                    // Calcular prioridad específica del operador (sin saltos)
+                    // Usar prioridad precalculada (Todos) o secuencial (operador específico)
+                    const displayPrio = event._displayPrio || (idx + 1)
+
                     // Get assigned operator names
                     let opNames: string[] = []
                     if (event.assignedUsers) {
@@ -721,7 +760,7 @@ export default function DayOverviewModal({
                                 type="number"
                                 min={1}
                                 max={allSortedEvents.length}
-                                value={priorityInputs[event.id] ?? event.title ?? ''}
+                                value={priorityInputs[event.id] ?? displayPrio.toString()}
                                 onChange={e => handlePriorityInputChange(event.id, e.target.value)}
                                 onPointerDown={e => e.stopPropagation()}
                                 onClick={e => e.stopPropagation()}
@@ -748,7 +787,7 @@ export default function DayOverviewModal({
                               />
                             ) : (
                               <span className="priority-badge-readonly">
-                                #{event.title || '?'}
+                                #{displayPrio}
                               </span>
                             )}
                             <p className="note-text">{event.description || '(Sin nota)'}</p>
