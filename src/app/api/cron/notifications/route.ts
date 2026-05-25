@@ -73,6 +73,17 @@ export async function GET(request: Request) {
           orderBy: { startTime: 'asc' }
         });
 
+        if (op.phone && opAppointments.length === 0 && testPhone) {
+          // MODO DEMO: crear tareas ficticias para probar el mensaje
+          const demoAppointments: any[] = [
+            { id: -1, title: '1', description: 'Instalación de hidromasaje en Hostería las Brisas', startTime: new Date(new Date().setHours(13,0,0,0)), endTime: new Date(new Date().setHours(14,0,0,0)), userId: op.id, status: 'PENDIENTE', reminded60: false, reminded30: false, reminded10: false },
+            { id: -2, title: '2', description: 'Revisión de sistema de riego - Pablo', startTime: new Date(new Date().setHours(13,0,0,0)), endTime: new Date(new Date().setHours(14,0,0,0)), userId: op.id, status: 'PENDIENTE', reminded60: false, reminded30: false, reminded10: false },
+            { id: -3, title: '3', description: 'Mantenimiento piscina San Pedro', startTime: new Date(new Date().setHours(13,0,0,0)), endTime: new Date(new Date().setHours(14,0,0,0)), userId: op.id, status: 'PENDIENTE', reminded60: false, reminded30: false, reminded10: false },
+            { id: -4, title: '4', description: 'Cambio de calefón para casa Miguel', startTime: new Date(new Date().setHours(13,0,0,0)), endTime: new Date(new Date().setHours(14,0,0,0)), userId: op.id, status: 'PENDIENTE', reminded60: false, reminded30: false, reminded10: false }
+          ];
+          opAppointments.push(...demoAppointments);
+        }
+
         if (op.phone && opAppointments.length > 0) {
           // LOCK ATÓMICO: marcar como enviado SOLO si sigue sin enviar hoy
           const updated = await prisma.user.updateMany({
@@ -157,6 +168,25 @@ export async function GET(request: Request) {
     if (missingPhones.length > 0) {
       const phones = await prisma.user.findMany({ where: { id: { in: missingPhones } }, select: { id: true, phone: true } });
       for (const u of phones) if (userMap.has(u.id) && u.phone) userMap.get(u.id)!.phone = u.phone;
+    }
+
+    // MODO DEMO: si no hay tareas y es test, crear datos ficticios para el recordatorio
+    if (testPhone && userMap.size === 0) {
+      const demoNow = new Date(new Date().setHours(12, 0, 0, 0));
+      const demoPhone = testPhone;
+      const demoUser = await prisma.user.findFirst({
+        where: { role: 'OPERATOR', isActive: true },
+        select: { id: true, name: true }
+      });
+      if (demoUser) {
+        const demoUserEntry = { name: demoUser.name, phone: demoPhone, tasks: [
+          { id: -1, title: '1', description: 'Instalación de hidromasaje en Hostería las Brisas', startTime: new Date(demoNow.getTime() + 60*60000) },
+          { id: -2, title: '2', description: 'Revisión de sistema de riego - Pablo', startTime: new Date(demoNow.getTime() + 60*60000) },
+          { id: -3, title: '3', description: 'Mantenimiento piscina San Pedro', startTime: new Date(demoNow.getTime() + 60*60000) },
+          { id: -4, title: '4', description: 'Cambio de calefón para casa Miguel', startTime: new Date(demoNow.getTime() + 60*60000) }
+        ]};
+        userMap.set(demoUser.id, demoUserEntry);
+      }
     }
 
     const windows = [
