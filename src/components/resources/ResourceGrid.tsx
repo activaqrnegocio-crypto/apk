@@ -111,14 +111,14 @@ export default function ResourceGrid({ initialResources, isSuperAdmin }: Resourc
     try {
       const uploadedUrls: string[] = []
       for (const file of files) {
-        let finalFile: Blob | File = file;
+        let uploadFile: Blob | File = file;
         let finalName = file.name;
         
         const isImg = file.type.startsWith('image/') && !file.type.includes('gif') && !file.type.includes('svg');
         const isVid = file.type.startsWith('video/') || /\.(mp4|webm|ogg|mov|m4v|avi|mkv|3gp)$/i.test(finalName);
 
         if (isImg) {
-          finalFile = await compressImage(file);
+          uploadFile = await compressImage(file);
           finalName = finalName.replace(/\.[^/.]+$/, "") + ".webp";
         }
 
@@ -129,14 +129,13 @@ export default function ResourceGrid({ initialResources, isSuperAdmin }: Resourc
           finalName += '.webp';
         }
 
-        const res = await fetch(`/api/upload?filename=${encodeURIComponent(finalName)}`, { 
-          method: 'POST', 
-          body: finalFile,
-          headers: { 'Content-Type': isImg ? 'image/webp' : (file.type || 'application/octet-stream') }
-        })
-        const data = await res.json()
-        if (data.url) {
-          uploadedUrls.push(isVid ? data.url + (data.url.includes('?') ? '&type=video' : '?type=video') : data.url);
+        // Usar uploadToBunnyClientSide directamente (como en ProjectUploader)
+        // para evitar el proxy /api/upload y usar carpeta específica 'recursos'
+        const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
+        const result = await uploadToBunnyClientSide(uploadFile, finalName, 'recursos')
+        
+        if (result.url) {
+          uploadedUrls.push(isVid ? result.url + (result.url.includes('?') ? '&type=video' : '?type=video') : result.url);
         }
       }
       

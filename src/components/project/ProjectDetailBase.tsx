@@ -87,7 +87,7 @@ export default function ProjectDetailBase({
   }
 
   useEffect(() => {
-    const view = searchParams.get('view')
+    const view = searchParams.get('view')?.toUpperCase()
     if (view === 'CHAT' || view === 'GALLERY' || view === 'EVIDENCE' || view === 'EXPENSES') {
       setActiveTab(view === 'EXPENSES' ? 'EVIDENCE' : view as any)
     }
