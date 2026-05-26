@@ -1,5 +1,7 @@
 'use client'
 
+import './admin.css'
+
 import { usePathname } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import ServiceWorkerRegistration from '@/components/ServiceWorkerRegistration'

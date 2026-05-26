@@ -221,9 +221,9 @@ export default function DashboardClient({
   }
 
   return (
-    <div className="animate-fade-in">
+    <div className="animate-fade-in dashboard-container">
       {/* Page Header */}
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+      <div className="page-header">
         <div>
           <h1 className="page-title">Dashboard</h1>
           <p className="page-subtitle">Resumen general de Aquatech</p>
@@ -395,7 +395,7 @@ export default function DashboardClient({
         <h3 style={{ marginBottom: '15px', color: 'var(--text-muted)', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
           ⚡ Acciones Rápidas
         </h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '15px' }}>
+        <div className="quick-actions-grid">
           <Link href="/admin/cotizaciones/nuevo" className="card-sub interactive" style={{ padding: '15px', display: 'flex', alignItems: 'center', gap: '12px', textDecoration: 'none' }}>
             <div style={{ background: 'var(--primary-bg)', color: 'var(--primary)', padding: '10px', borderRadius: '10px' }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M12 18v-6M9 15h6"/></svg>
@@ -430,24 +430,24 @@ export default function DashboardClient({
       <h3 style={{ marginBottom: '15px', color: 'var(--text-muted)', fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
         📈 Desempeño Semanal (Últimos 7 días)
       </h3>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '15px', marginBottom: '30px' }}>
+      <div className="weekly-stats-grid">
         <div className="card-sub" style={{ padding: '15px', background: 'var(--bg-surface)', border: '1px solid var(--primary-light)', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '15px' }}>
            <div style={{ fontSize: '1.5rem' }}>⏱️</div>
-           <div>
+           <div style={{ minWidth: 0 }}>
              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Horas Totales del Equipo</div>
              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>{stats.totalHours7d} hrs</div>
            </div>
         </div>
         <div className="card-sub" style={{ padding: '15px', background: 'var(--bg-surface)', border: '1px solid var(--info)', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '15px' }}>
            <div style={{ fontSize: '1.5rem' }}>📸</div>
-           <div>
+           <div style={{ minWidth: 0 }}>
              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Reportes en Chat</div>
              <div style={{ fontSize: '1.25rem', fontWeight: 800 }}>{stats.totalMessages7d}</div>
            </div>
         </div>
         <div className="card-sub" style={{ padding: '15px', background: 'var(--bg-surface)', border: '1px solid var(--danger-light)', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '15px' }}>
            <div style={{ fontSize: '1.5rem' }}>💸</div>
-           <div>
+           <div style={{ minWidth: 0 }}>
              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Gasto Semanal (Viáticos)</div>
              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--danger)' }}>{formatCurrency(stats.totalExpenses7d)}</div>
            </div>
@@ -569,14 +569,14 @@ export default function DashboardClient({
               </div>
 
               {/* Warnings */}
-              <div style={{ marginTop: '20px', display: 'flex', gap: '15px' }}>
+              <div className="warnings-row">
                  {budgetProgress > 100 && (
-                   <div style={{ background: 'var(--danger-bg)', border: '1px solid var(--danger)', padding: '10px 15px', borderRadius: '8px', flex: 1, display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', color: 'var(--danger)' }}>
+                   <div style={{ background: 'var(--danger-bg)', border: '1px solid var(--danger)', padding: '10px 15px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', color: 'var(--danger)' }}>
                      <strong>⚠️ Alerta Presupuesto:</strong> El gasto real ha superado el presupuesto teórico por {formatCurrency(selectedProject.realCost - selectedProject.estimatedBudget)}.
                    </div>
                  )}
                  {daysProgress > 100 && (
-                   <div style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning)', padding: '10px 15px', borderRadius: '8px', flex: 1, display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', color: 'var(--warning)' }}>
+                   <div style={{ background: 'var(--warning-bg)', border: '1px solid var(--warning)', padding: '10px 15px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.85rem', color: 'var(--warning)' }}>
                      <strong>🕒 Alerta Cronograma:</strong> El proyecto ha superado el tiempo estimado inicial.
                    </div>
                  )}
@@ -643,7 +643,7 @@ export default function DashboardClient({
       </div>
 
       {/* Two columns: Projects + Activity */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }} className="dashboard-grid">
+      <div className="dashboard-two-col">
         {/* Active Projects */}
         <div className="card">
           <div className="card-header">
@@ -651,7 +651,7 @@ export default function DashboardClient({
             <Link href="/admin/proyectos" className="btn btn-ghost btn-sm">Ver todos →</Link>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
-            {activeProjects.map((p) => {
+            {activeProjects.slice(0, 10).map((p) => {
               const progress = p.phasesTotal > 0 ? (p.phasesCompleted / p.phasesTotal) * 100 : 0
               return (
                 <Link key={p.id} href={`/admin/proyectos/${p.id}`} style={{ textDecoration: 'none' }}>
@@ -750,13 +750,6 @@ export default function DashboardClient({
         </div>
       </div>
 
-      <style>{`
-        @media (max-width: 768px) {
-          .dashboard-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
     </div>
   )
 }

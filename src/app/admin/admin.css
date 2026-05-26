@@ -82,6 +82,12 @@
   --mobile-nav-height: 64px;
 }
 
+@media (max-width: 1200px) {
+  :root {
+    --sidebar-width: 220px;
+  }
+}
+
 /* Notification Badges */
 .notification-badge {
   display: inline-flex;
@@ -117,6 +123,8 @@
 .admin-layout {
   display: flex;
   min-height: 100vh;
+  overflow-x: hidden;
+  width: 100%;
 }
 
 .admin-content {
@@ -125,12 +133,23 @@
   padding: var(--space-lg);
   min-height: 100vh;
   transition: margin-left var(--transition-base);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  width: calc(100% - var(--sidebar-width));
+  max-width: 100%;
+}
+
+@media (max-width: 1200px) {
+  .admin-content {
+    padding: var(--space-md);
+  }
 }
 
 @media (max-width: 768px) {
   .admin-content {
     margin-left: 0;
-    padding-top: calc(var(--header-height) + 1rem);
+    width: 100%;
+    padding-top: calc(var(--header-height) + 0.75rem);
     padding-bottom: calc(var(--mobile-nav-height) + 2.5rem);
   }
 }
@@ -177,14 +196,38 @@
   transition: transform var(--transition-base);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1200px) {
   .sidebar {
-    z-index: 250;
+    width: 220px;
+  }
+  .sidebar-brand {
+    padding: var(--space-md);
+    gap: var(--space-sm);
+  }
+  .sidebar-brand-logo {
+    width: 34px;
+    height: 34px;
+  }
+  .sidebar-brand-text {
+    font-size: 0.95rem;
+  }
+  .sidebar-brand-sub {
+    display: none;
+  }
+  .sidebar-link {
+    padding: 8px var(--space-sm);
+    font-size: 0.8rem;
+    gap: var(--space-sm);
+  }
+  .sidebar-section-title {
+    font-size: 0.6rem;
+    padding: var(--space-xs) var(--space-sm);
   }
 }
 
 @media (max-width: 768px) {
   .sidebar {
+    z-index: 250;
     transform: translateX(-100%) !important;
   }
   .sidebar.open {
@@ -440,10 +483,6 @@
 /* ──────────────────────────────────────
    PAGE HEADER
    ────────────────────────────────────── */
-.page-header {
-  margin-bottom: var(--space-xl);
-}
-
 .page-title {
   font-family: var(--font-brand);
   font-weight: 700;
@@ -916,6 +955,103 @@
 
 @media (max-width: 768px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
+}
+
+/* ──────────────────────────────────────
+   RESPONSIVE — DASHBOARD SPECIFIC
+   ────────────────────────────────────── */
+
+/* Prevent dashboard from stretching too wide on large screens */
+.dashboard-container {
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* Weekly stats grid: 3 cols → 2 cols at 1024px → 1 col at 640px */
+.weekly-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 15px;
+  margin-bottom: 30px;
+}
+
+@media (max-width: 1100px) {
+  .weekly-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .weekly-stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Dashboard two-column grid: 1fr 1fr → stacks at 1024px */
+.dashboard-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+}
+
+@media (max-width: 1024px) {
+  .dashboard-two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Flex wrap utility for inline flex containers */
+.flex-wrap {
+  flex-wrap: wrap !important;
+}
+
+/* Warnings row: side by side on wide, stack on narrow */
+.warnings-row {
+  display: flex;
+  gap: 15px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.warnings-row > * {
+  flex: 1;
+  min-width: 280px;
+}
+
+@media (max-width: 640px) {
+  .warnings-row > * {
+    min-width: 100%;
+  }
+}
+
+/* Quick actions grid: responsive with auto-fit */
+.quick-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 15px;
+}
+
+@media (max-width: 480px) {
+  .quick-actions-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+}
+
+/* Page header responsive */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: var(--space-xl);
+}
+
+@media (max-width: 480px) {
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 /* ──────────────────────────────────────
