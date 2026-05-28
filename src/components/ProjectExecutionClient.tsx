@@ -1163,6 +1163,7 @@ export default function ProjectExecutionClient({
           setLocalChat(prev => prev.map(m => m.id === tempId ? {
             ...createdMsg,
             isMe: true,
+            status: 'sent',
             userName: session?.user?.name || 'Yo',
             userBranch: (session?.user as any)?.branch || null
           } : m))
@@ -1620,6 +1621,11 @@ export default function ProjectExecutionClient({
       return true;
     });
 
+    // Build a set of already-synced messages (from server, numeric IDs) to avoid
+    // showing pendingItems entries that were already synced but the outbox entry wasn't cleaned up.
+    // Match by content + type + close timestamp (same logic as deduplicateMessages).
+    const syncedMessages = cleanlocalChat.filter((m: any) => typeof m.id === 'number' && m.id > 0);
+
     const list = [
       ...cleanlocalChat.filter((m: any) => !pendingItems.some((p: any) => `temp-${p.syncId}` === m.id)),
       ...pendingItems
@@ -1627,7 +1633,15 @@ export default function ProjectExecutionClient({
           // Explicitly ONLY include chat-related types
           const isChatType = item.type === 'MESSAGE' || item.type === 'EXPENSE';
           const isNotGallery = item.type !== 'GALLERY_UPLOAD' && item.type !== 'MEDIA_UPLOAD';
-          return isChatType && isNotGallery;
+          if (!isChatType || !isNotGallery) return false;
+          // Skip if this pending item was already synced (already in localChat with numeric ID, same content+type+time)
+          const alreadySynced = syncedMessages.some((sm: any) =>
+            sm.content === (item.payload?.content || '') &&
+            sm.type === (item.payload?.type || '') &&
+            Math.abs(new Date(sm.createdAt).getTime() - (item.timestamp || 0)) < 45000
+          );
+          if (alreadySynced) return false;
+          return true;
         })
       .map((item: any) => {
         // Build media array from either existing media or stored file preview
