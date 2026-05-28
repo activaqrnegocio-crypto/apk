@@ -55,14 +55,7 @@ export default function OperatorDashboardClient({
   const searchParams = useSearchParams()
   const tabParam = searchParams?.get('tab')
 
-  const [activeTab, setActiveTab] = useState<'PROYECTOS' | 'TAREAS' | 'CALENDARIO'>(() => {
-    if (tabParam === 'calendario') return 'CALENDARIO'
-    if (typeof window !== 'undefined') {
-      const saved = sessionStorage.getItem('operator_active_tab')
-      if (saved && ['PROYECTOS', 'TAREAS', 'CALENDARIO'].includes(saved)) return saved as any
-    }
-    return 'PROYECTOS'
-  })
+  const [activeTab, setActiveTab] = useState<'PROYECTOS' | 'TAREAS' | 'CALENDARIO'>('PROYECTOS')
   const [syncNotification, setSyncNotification] = useState<{ id: string, title: string } | null>(null)
 
   useEffect(() => {
@@ -75,23 +68,38 @@ export default function OperatorDashboardClient({
     sessionStorage.setItem('operator_active_tab', activeTab)
   }, [activeTab])
 
+  // Hydration: Restore saved tab from sessionStorage after SSR
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('operator_active_tab')
+      if (saved && ['PROYECTOS', 'TAREAS', 'CALENDARIO'].includes(saved) && tabParam !== 'calendario') {
+        setActiveTab(saved as any)
+      }
+    } catch (e) {}
+  }, [])
+
+  // Hydration: Restore appointments from localStorage after SSR
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('last_op_tasks_snapshot')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAppointments(parsed)
+        }
+      }
+    } catch (e) {}
+  }, [])
+
+  // Hydration guard — only render browser-dependent content after mount
+  const [hydrated, setHydrated] = useState(false)
+  useEffect(() => { setHydrated(true) }, [])
+
   // v287: Robust User recovery for offline sessions
   const [localUser, setLocalUser] = useState(user)
   const [isHydratingAuth, setIsHydratingAuth] = useState(true)
 
-  const [appointments, setAppointments] = useState<any[]>(() => {
-    // v316: Recuperación síncrona de tareas con localStorage para sobrevivir al cierre de app
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('last_op_tasks_snapshot')
-        if (saved) {
-          const parsed = JSON.parse(saved)
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed
-        }
-      } catch (e) {}
-    }
-    return initialAppointments || []
-  })
+  const [appointments, setAppointments] = useState<any[]>(initialAppointments || [])
   const [activeDayRecord, setActiveDayRecord] = useState(initialActiveDayRecord)
   const [userViews, setUserViews] = useState(initialUserViews)
 
@@ -235,20 +243,20 @@ export default function OperatorDashboardClient({
   }, [user?.id, localUser?.id])
 
   // v292: Emergency Fallback for Offline "DEAD" state
-  const [emergencyProjects, setEmergencyProjects] = useState<any[] | undefined>(() => {
-    // v316: Usar localStorage en vez de sessionStorage para que el snapshot sobreviva
-    // al cierre y reapertura de la app (sessionStorage se borra al cerrar la pestaña)
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('last_op_projects_snapshot')
-        if (saved) {
-          const parsed = JSON.parse(saved)
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed
+  const [emergencyProjects, setEmergencyProjects] = useState<any[] | undefined>(undefined)
+
+  // Hydration: Restore emergency projects from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('last_op_projects_snapshot')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setEmergencyProjects(parsed)
         }
-      } catch (e) {}
-    }
-    return undefined
-  })
+      }
+    } catch (e) {}
+  }, [])
 
   // v480: Function to fetch fresh projects list from server and populate IndexedDB cache
   const refreshProjectsList = async () => {
@@ -934,7 +942,7 @@ export default function OperatorDashboardClient({
       <div className="operator-header">
         <div className="operator-welcome" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: '15px' }}>
           <div>
-            <h1 className="page-title">Hola, {(localUser?.name || user?.name || 'Operador').split(' ')[0]}</h1>
+            <h1 className="page-title">Hola, {(hydrated ? (localUser?.name || user?.name) : (user?.name || 'Operador')).split(' ')[0]}</h1>
             <p className="page-subtitle">Panel de Control de Operaciones</p>
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -959,7 +967,7 @@ export default function OperatorDashboardClient({
         <NotificationOnboarding onDone={() => setShowOnboarding(false)} />
       )}
 
-      {pushStatus !== 'subscribed' && pushStatus !== 'loading' && !pushDismissed && (
+      {hydrated && pushStatus !== 'subscribed' && pushStatus !== 'loading' && !pushDismissed && (
         <div style={{
           background: pushStatus === 'denied' || pushStatus === 'unsupported' 
             ? 'rgba(255,255,255,0.05)' 
@@ -998,7 +1006,7 @@ export default function OperatorDashboardClient({
             </div>
           </div>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', zIndex: 5 }}>
-            {(pushStatus === 'denied' || pushStatus === 'unsupported' || /android|iphone|ipad/i.test(navigator.userAgent)) && (
+            {(hydrated && (pushStatus === 'denied' || pushStatus === 'unsupported' || /android|iphone|ipad/i.test(navigator.userAgent))) && (
               <button
                 onClick={() => setShowOnboarding(true)}
                 style={{
@@ -1017,7 +1025,7 @@ export default function OperatorDashboardClient({
               </button>
             )}
 
-            {pushStatus === 'prompt' || pushStatus === 'unsubscribed' ? (
+            {hydrated && (pushStatus === 'prompt' || pushStatus === 'unsubscribed') ? (
               <button
                 onClick={async (e) => {
                   e.preventDefault();

@@ -209,6 +209,11 @@ export default function ProjectExecutionClient({
             createdAt: new Date().toISOString()
           };
           
+          // Limpiar optimistic items con el mismo filename (evita duplicado visual offline)
+          setOptimisticUploads(prev => prev.filter(i => 
+            i.filename !== syncedItem.filename && i.filename !== (payload?.filename || '')
+          ));
+          
           // Step 1: Optimistic add to localProject — appears instantly
           setLocalProject((prev: any) => {
             if (!prev) return prev;
@@ -551,7 +556,13 @@ export default function ProjectExecutionClient({
       const cat = (item.payload?.category || '').toUpperCase()
       // v329: Only show in Planos if it strictly belongs here. Don't steal from Finales.
       return cat === 'MASTER' || cat === 'PLANOS' || cat === 'LEVANTAMIENTO';
-    }).map((item: any) => {
+    })
+    // vXXX: Excluir items que ya están en optimisticUploads (evita duplicado visual)
+    .filter((item: any) => {
+      const filename = item.payload?.filename;
+      return !optimisticUploads.some((o: any) => o.isPending && o.filename === filename);
+    })
+    .map((item: any) => {
       // v441: CRITICAL FIX — Detect raw File object for preview
       let objUrl = '';
       const p = item.payload || {};
@@ -705,7 +716,13 @@ export default function ProjectExecutionClient({
       const cat = (item.payload?.category || '').toUpperCase()
       // v332: Better matching logic to ensure visibility
       return isGalleryType && (cat === 'EVIDENCE' || cat === 'FINALES' || cat === 'ENTREGA' || cat === 'ENTREGA_FINAL' || cat === 'ADJUNTO' || cat === 'MASTER_FINAL');
-    }).map((item: any) => {
+    })
+    // vXXX: Excluir items que ya están en optimisticUploads (evita duplicado visual)
+    .filter((item: any) => {
+      const filename = item.payload?.filename;
+      return !optimisticUploads.some((o: any) => o.isPending && o.filename === filename);
+    })
+    .map((item: any) => {
       const p = item.payload || {};
       let objUrl = '';
       
@@ -777,15 +794,8 @@ export default function ProjectExecutionClient({
 
     // v403: Optimistic uploads go FIRST to match server order (createdAt DESC = newest first)
     const combinedList = [...optimisticEvidence, ...syncedEvidence, ...pendingEvidence, ...list]
-    const seen = new Set()
-    const uniqueList = combinedList.filter(item => {
-      const uid = item.id
-      if (seen.has(uid)) return false
-      seen.add(uid)
-      return true
-    })
 
-    const sortedUniqueList = uniqueList.sort((a: any, b: any) => {
+    const sortedUniqueList = combinedList.sort((a: any, b: any) => {
       const dateA = new Date(a.createdAt || a.date || a.timestamp || 0).getTime()
       const dateB = new Date(b.createdAt || b.date || b.timestamp || 0).getTime()
       return dateB - dateA
@@ -987,7 +997,7 @@ export default function ProjectExecutionClient({
     }
   }
 
-  const handleSendMessage = async (e: React.FormEvent, customMsg?: string, customPhase?: number, mediaFile?: File, extraData?: any, forcedType?: string) => {
+  const handleSendMessage = (e: React.FormEvent, customMsg?: string, customPhase?: number, mediaFile?: File, extraData?: any, forcedType?: string) => {
     if (e) e.preventDefault()
 
     const msgToSend = customMsg || message
@@ -1037,8 +1047,9 @@ export default function ProjectExecutionClient({
 
     setLocalChat((prev: any[]) => [...prev, optimisticMessage]);
 
-    // --- ASYNC BACKGROUND PROCESSING ---
-    const processMessage = async () => {
+    // ESPERAR a que React renderice Y el browser pinte antes de procesar
+    requestAnimationFrame(() => {
+      requestAnimationFrame(async () => {
       try {
         // v408: Geolocation removed to avoid browser prompts on every message
         let location: any = null
@@ -1062,7 +1073,7 @@ export default function ProjectExecutionClient({
             finalFilename = finalFilename.replace(/\.[^/.]+$/, "") + ".webp"
           }
 
-          const uploadResult = await uploadToBunnyClientSide(processedMedia!, finalFilename, `projects/${project.id}/chat`)
+          const uploadResult = await uploadToBunnyClientSide(processedMedia!, finalFilename, `Proyectos/${project.id}/Chat`)
           mediaData = {
             url: uploadResult.url,
             filename: uploadResult.filename,
@@ -1201,9 +1212,8 @@ export default function ProjectExecutionClient({
         console.error("Critical chat error:", outerError);
         setLocalChat(prev => prev.map(m => m.id === tempId ? { ...m, status: 'failed' } : m))
       }
-    }
-
-    processMessage();
+    });
+    });
   }
 
   const handleUploadToGallery = async (file: ProjectFile, category: string = 'MASTER') => {
@@ -1266,7 +1276,17 @@ export default function ProjectExecutionClient({
     }
   }
 
+  // Guard: prevenir que el mismo archivo se procese 2 veces
+  const processingFilenames = useRef<Set<string>>(new Set());
+
   const processSingleUpload = async (file: ProjectFile, category?: string) => {
+    const fileKey = file.filename || (file as any).file?.name || '';
+    if (processingFilenames.current.has(fileKey)) {
+      console.log('[Gallery] Skipping duplicate:', fileKey);
+      return;
+    }
+    processingFilenames.current.add(fileKey);
+
     setLoading(true)
 
     try {
@@ -1446,16 +1466,27 @@ export default function ProjectExecutionClient({
         category: galleryPayload.category,
         isPending: true
       };
-      setOptimisticUploads(prev => [...prev, optimisticItem]);
+      setOptimisticUploads(prev => {
+        // Prevenir duplicados por ID (cada subida tiene syncId único)
+        if (prev.some(i => i.id === optimisticId)) return prev;
+        return [...prev, optimisticItem];
+      });
 
       try {
+        // DEBUG: Log qué está pasando con la subida
+        console.log(`[GALLERY DEBUG] alreadyUploaded=${alreadyUploaded}, category="${galleryPayload?.category}", file.url starts with http=${file?.url?.startsWith('http')}`);
+
         // v430: If already uploaded by ProjectUploader, skip Bunny upload
         if (!alreadyUploaded) {
           if (!uploadFile) throw new Error('No file data available');
 
           // v430: Direct binary upload to Bunny CDN — zero base64, zero RAM explosion
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
-          const folder = `projects/${project.id}/gallery`;
+          // Determinar subcarpeta según categoría de la galería
+          // MASTER/PLANOS → Planos | TODO lo demás (EVIDENCE, FINALES, ENTREGA, etc) → Finales
+          const galleryCat = (galleryPayload?.category || 'MASTER').toUpperCase();
+          const catFolder = (galleryCat === 'MASTER' || galleryCat === 'PLANOS') ? 'Planos' : 'Finales';
+          const folder = `Proyectos/${project.id}/${catFolder}`;
           const uploadResult = await uploadToBunnyClientSide(uploadFile, file.filename || 'upload', folder);
           
           // Release file reference immediately
@@ -1564,6 +1595,7 @@ export default function ProjectExecutionClient({
     } catch (e) {
       console.error(e)
     } finally {
+      processingFilenames.current.delete(fileKey);
       setLoading(false)
     }
   }
@@ -1789,7 +1821,7 @@ export default function ProjectExecutionClient({
             const match = text.match(/https?:\/\/(?:www\.)?(?:google\.com\/maps|maps\.app\.goo\.gl)\/[^\s"']+/i)
             return match ? match[0] : null
           }
-          const link = findGpsLink(fullProject.technicalSpecs) || findGpsLink(fullProject.specsTranscription) || findGpsLink(fullProject.address);
+          const link = findGpsLink(typeof fullProject.technicalSpecs === 'string' ? fullProject.technicalSpecs : fullProject.technicalSpecs?.locationLink) || findGpsLink(fullProject.specsTranscription) || findGpsLink(fullProject.address);
           return (link && link !== fullProject.locationLink) ? link : 'Ver ubicación principal';
         })()],
       ]
@@ -2188,6 +2220,7 @@ export default function ProjectExecutionClient({
                     uploaderTitle="🔼 SUBIR ARCHIVOS A: PLANOS"
                     defaultCategory="MASTER"
                     galleryLabel="Planos y Registros"
+                    projectId={project?.id}
                   />
                 </div>
 
@@ -2209,6 +2242,7 @@ export default function ProjectExecutionClient({
                     uploaderTitle="🔼 SUBIR A: FINALES"
                     defaultCategory="EVIDENCE"
                     galleryLabel="Finales"
+                    projectId={project?.id}
                   />
                 </div>
 

@@ -669,7 +669,10 @@ export default function GlobalSyncWorker() {
             if (!uploadFile || uploadFile.size === 0) throw new Error('No file data');
             
             console.log(`[Sync] 📤 Uploading: ${uploadFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)...`);
-            const uploadResult = await uploadToBunnyClientSide(uploadFile, uploadFilename, `projects/${gItem.projectId}/gallery`);
+            const cat = (p.category || 'MASTER').toUpperCase();
+            // MASTER/PLANOS → Planos | TODO lo demás (EVIDENCE, FINALES, ENTREGA, etc) → Finales
+            const sub = (cat === 'MASTER' || cat === 'PLANOS') ? 'Planos' : 'Finales';
+            const uploadResult = await uploadToBunnyClientSide(uploadFile, uploadFilename, `Proyectos/${gItem.projectId}/${sub}`);
             
             // Step 2: Immediate API POST
             const finalPayload = { ...p, url: uploadResult.url, mimeType: uploadResult.mimeType || (uploadFile as any).type };
@@ -944,7 +947,10 @@ export default function GlobalSyncWorker() {
 
               // ── SUBIR A BUNNY (mismo código que PROJECT line 1095/1105) ──
               if (uploadFile && uploadFile.size > 0) {
-                const folder = `projects/${item.projectId}`;
+                const cat = (finalPayload.category || 'MASTER').toUpperCase();
+                // MASTER/PLANOS → Planos | TODO lo demás (EVIDENCE, FINALES, ENTREGA, etc) → Finales
+                const sub = (cat === 'MASTER' || cat === 'PLANOS') ? 'Planos' : 'Finales';
+                const folder = `Proyectos/${item.projectId}/${sub}`;
                 setUploadProgress({ filename: uploadFilename, percent: 50, chunk: 1, totalChunks: 1 });
                 const uploadResult = await uploadToBunnyClientSide(uploadFile, uploadFilename, folder);
                 setUploadProgress({ filename: uploadFilename, percent: 100, chunk: 1, totalChunks: 1 });
@@ -1069,7 +1075,7 @@ export default function GlobalSyncWorker() {
                                 `sync_${Date.now()}.jpg`;
               }
 
-              const folder = item.projectId ? `projects/${item.projectId}` : 'general';
+              const folder = item.projectId ? `Proyectos/${item.projectId}/Chat` : 'Proyectos/temp';
 
               // v449: Revert to direct PUT upload matching PROJECT creation logic
               console.log(`[Sync] Direct PUT upload: ${finalFilename} (${(uploadFile.size/1024/1024).toFixed(1)}MB)`);
@@ -1288,7 +1294,8 @@ export default function GlobalSyncWorker() {
                    const batchResults = await Promise.all(batch.map(async ({ index: fi, f }) => {
                      if (f.fileData && f.fileData.buffer) {
                        const blob = new Blob([f.fileData.buffer], { type: f.fileData.type || f.mimeType || 'application/octet-stream' });
-                       const uploadResult = await uploadToBunnyClientSide(blob, f.fileData.name || f.filename, 'projects');
+                       const tempFolder = finalPayload.tempId ? `Proyectos/temp/${finalPayload.tempId}` : 'Proyectos/temp';
+                       const uploadResult = await uploadToBunnyClientSide(blob, f.fileData.name || f.filename, tempFolder);
                        const result = {
                          url: uploadResult.url,
                          filename: f.filename || f.fileData.name,
@@ -1303,7 +1310,8 @@ export default function GlobalSyncWorker() {
                        return { index: fi, result };
                      } else {
                        // File or Blob
-                       const uploadResult = await uploadToBunnyClientSide(f.file, f.filename || f.file.name, 'projects');
+                       const tempFolder2 = finalPayload.tempId ? `Proyectos/temp/${finalPayload.tempId}` : 'Proyectos/temp';
+                       const uploadResult = await uploadToBunnyClientSide(f.file, f.filename || f.file.name, tempFolder2);
                        const result = {
                          url: uploadResult.url,
                          filename: f.filename || f.file.name,

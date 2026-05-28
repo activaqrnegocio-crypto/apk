@@ -119,7 +119,8 @@ export async function POST(request: Request) {
     const { 
       title, type, subtype, address, city, startDate, endDate, client, 
       phases, team, budgetItems, categoryList, technicalSpecs, 
-      contractTypeList, clientId, specsAudioUrl, specsTranscription, status 
+      contractTypeList, clientId, specsAudioUrl, specsTranscription, status,
+      tempId
     } = data
 
     // Validate minimum required data
@@ -361,6 +362,81 @@ export async function POST(request: Request) {
         }
       })
     }, { timeout: 30000 })
+
+    // ─── Mover archivos de temp a ubicación final ───
+    if (tempId && processedFiles.length > 0 && project) {
+      const projectId = project.id;
+      const storageZone = process.env.BUNNY_STORAGE_ZONE || 'aquatechdata';
+      const storageHost = process.env.BUNNY_STORAGE_HOST || 'storage.bunnycdn.com';
+      const accessKey = process.env.BUNNY_STORAGE_API_KEY || '';
+      const oldToNewUrl: Record<string, string> = {};
+      
+      for (const file of processedFiles) {
+        // Buscar cualquier URL que contenga /temp/ (con o sin UUID)
+        const urlLow = (file.url || '').toLowerCase();
+        if (!urlLow.includes('/temp/')) continue;
+        
+        try {
+          const urlObj = new URL(file.url);
+          const pathParts = urlObj.pathname.split('/');
+          const filename = pathParts[pathParts.length - 1];
+          
+          const cat = (file.category || 'MASTER').toUpperCase();
+          const catFolder = (cat === 'MASTER' || cat === 'PLANOS') ? 'Planos' : 'Finales';
+          const newFolder = `Proyectos/${projectId}/${catFolder}`;
+          
+          // Usar URL de STORAGE (no CDN) para descargar
+          // CDN: https://aquatechdata.b-cdn.net/Proyectos/temp/file.jpg
+          // Storage: https://storage.bunnycdn.com/aquatechdata/Proyectos/temp/file.jpg
+          const tempPath = urlObj.pathname; // /Proyectos/temp/file.jpg
+          const storageUrl = `https://${storageHost}/${storageZone}${tempPath}`;
+          
+          const tempResponse = await fetch(storageUrl, {
+            headers: { AccessKey: accessKey }
+          });
+          if (!tempResponse.ok) throw new Error(`Storage fetch failed: ${tempResponse.status}`);
+          const buffer = Buffer.from(await tempResponse.arrayBuffer());
+          const contentType = tempResponse.headers.get('content-type') || file.mimeType || 'application/octet-stream';
+          
+          // Subir a ubicación final
+          const newUrl = await uploadToBunny(buffer, filename, newFolder, contentType);
+          
+          // Borrar de temp
+          try {
+            await fetch(storageUrl, {
+              method: 'DELETE',
+              headers: { AccessKey: accessKey },
+            });
+          } catch {}
+          
+          oldToNewUrl[file.url] = newUrl;
+          console.log(`[FinalizeStorage] Moved: ${filename} → ${newFolder}/${filename}`);
+        } catch (err) {
+          console.error(`[FinalizeStorage] Error moving file: ${file.filename}`, err);
+        }
+      }
+      
+      // Actualizar URLs en BD
+      for (const [oldUrl, newUrl] of Object.entries(oldToNewUrl)) {
+        try {
+          await prisma.projectGalleryItem.updateMany({
+            where: { projectId: project.id, url: oldUrl },
+            data: { url: newUrl }
+          });
+        } catch (updateErr) {
+          console.error('[FinalizeStorage] Error updating gallery URL:', updateErr);
+        }
+      }
+      
+      // Actualizar URLs en la respuesta del proyecto
+      if (project.gallery) {
+        for (const item of project.gallery) {
+          if (oldToNewUrl[item.url]) {
+            item.url = oldToNewUrl[item.url];
+          }
+        }
+      }
+    }
 
     // 🔔 Notification: Notify assigned team members in background (Non-blocking)
     if (project && team && team.length > 0) {

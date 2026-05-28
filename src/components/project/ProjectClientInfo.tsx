@@ -35,7 +35,7 @@ export default function ProjectClientInfo({ project }: ProjectClientInfoProps) {
             }
             let locLink = project?.locationLink
             if (!locLink || locLink === 'N/A') {
-              try { const specs = JSON.parse(project?.technicalSpecs || '{}'); locLink = specs.locationLink || findGpsLink(project?.address || '') || findGpsLink(project?.technicalSpecs || '') } catch { locLink = findGpsLink(project?.address || '') || findGpsLink(project?.technicalSpecs || '') }
+              try { const specs = JSON.parse(project?.technicalSpecs || '{}'); locLink = specs.locationLink || findGpsLink(project?.address || '') || findGpsLink(typeof project?.technicalSpecs === 'string' ? project?.technicalSpecs : '') } catch { locLink = findGpsLink(project?.address || '') || findGpsLink(typeof project?.technicalSpecs === 'string' ? project?.technicalSpecs : '') }
             }
             if (locLink && (locLink.includes('google.com/maps') || locLink.includes('maps.app.goo.gl') || locLink.startsWith('http'))) {
               return <a href={locLink} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ padding: '4px 12px', fontSize: '0.75rem', borderRadius: '20px', display: 'flex', alignItems: 'center', gap: '6px' }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>Ver en Mapa</a>

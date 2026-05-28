@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { formatTimeEcuador, formatDateEcuador } from '@/lib/date-utils'
 import MediaCapture from '@/components/MediaCapture'
 import CameraCapture from '@/components/camera/CameraCapture'
+import VideoThumbnail from '@/components/VideoThumbnail'
 
 // --- SVGs for WhatsApp Icons ---
 const svgProps = (size: number) => ({
@@ -838,12 +839,7 @@ export default function ProjectChatUnified({
                           alt="Media"
                         />
                       ) : media.type === 'VIDEOS' ? (
-                        <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' }}>
-                           <video src={`${media.url}#t=0.001`} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7 }} preload="metadata" muted playsInline />
-                           <div style={{ position: 'relative', zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: '4px', display: 'flex' }}>
-                             <Play size={24} />
-                           </div>
-                        </div>
+                        <VideoThumbnail url={media.url} mime={media.mimeType || 'video/mp4'} filename={media.name || media.filename || 'Video'} />
                       ) : media.type === 'AUDIOS' ? (
                         <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                            <span style={{ fontSize: '2rem' }}>🎵</span>

@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/lib/db'
 import OfflinePrefetcher from '@/components/OfflinePrefetcher'
-
+import ManualSyncButton from '@/components/ManualSyncButton'
 import ProjectCacheManager from '@/components/ProjectCacheManager'
 
 /**
@@ -359,6 +359,7 @@ export default function ProyectosPage() {
           </svg>
           Nuevo Proyecto
         </Link>
+        <ManualSyncButton />
       </div>
 
       {/* Search Bar */}

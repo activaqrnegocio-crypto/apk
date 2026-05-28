@@ -7,7 +7,7 @@ import PostDetailsModal from './PostDetailsModal'
 const DAYS_OF_WEEK = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 
 export default function MarketingCalendar() {
-  const [currentDate, setCurrentDate] = useState(new Date())
+  const [currentDate, setCurrentDate] = useState<Date>(() => new Date())
   const [posts, setPosts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedDayPosts, setSelectedDayPosts] = useState<any[] | null>(null)

@@ -1,4 +1,4 @@
-const SW_VERSION = 'v376-ts-fix';
+const SW_VERSION = 'v377-bunny-storage-reorg';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -1955,9 +1955,27 @@ async function _internalProcessOutbox(isForced = false, specificType = null) {
                 const timestamp = Date.now();
                 const safeName = (name || `file_${timestamp}`).replace(/[^a-zA-Z0-9.-]/g, '_');
                 
-                let folderPath = item.projectId ? `projects/${item.projectId}` : subfolder;
-                if (subfolder === 'gallery' && item.projectId) {
-                  folderPath = `projects/${item.projectId}/gallery`;
+                let folderPath;
+                if (item.projectId) {
+                  // Si tiene projectId, usar ruta estructurada
+                  if (subfolder === 'gallery') {
+                    const cat = (item.payload?.category || 'MASTER');
+                    // MASTER/PLANOS → Planos | TODO lo demás (EVIDENCE, FINALES, ENTREGA, etc) → Finales
+                    const catFolder = (cat === 'MASTER' || cat === 'PLANOS') ? 'Planos' : 'Finales';
+                    folderPath = `Proyectos/${item.projectId}/${catFolder}`;
+                  } else if (subfolder === 'messages') {
+                    folderPath = `Proyectos/${item.projectId}/Chat`;
+                  } else if (subfolder === 'expenses') {
+                    folderPath = `Proyectos/${item.projectId}/Gastos`;
+                  } else {
+                    folderPath = `Proyectos/${item.projectId}`;
+                  }
+                } else if (item.payload?.tempId) {
+                  // Sin projectId pero con tempId → carpeta temporal
+                  folderPath = `Proyectos/temp/${item.payload.tempId}`;
+                } else {
+                  // Fallback seguro: siempre bajo Proyectos/temp
+                  folderPath = 'Proyectos/temp';
                 }
                 
                 const path = `/${config.storageZone}/${folderPath}/${timestamp}-${safeName}`;
@@ -2017,8 +2035,23 @@ const uploadInChunksSW = async (blob, filename, subfolder = 'uploads', mimeType 
                 
                 // v316: Ensure we send the correct subfolder
                 let finalSubfolder = subfolder;
-                if (subfolder === 'gallery' && item.projectId) {
-                  finalSubfolder = `projects/${item.projectId}/gallery`;
+                if (item.projectId) {
+                  if (subfolder === 'gallery') {
+                    const cat = (item.payload?.category || 'MASTER');
+                    // MASTER/PLANOS → Planos | TODO lo demás → Finales
+                    const catFolder = (cat === 'MASTER' || cat === 'PLANOS') ? 'Planos' : 'Finales';
+                    finalSubfolder = `Proyectos/${item.projectId}/${catFolder}`;
+                  } else if (subfolder === 'messages') {
+                    finalSubfolder = `Proyectos/${item.projectId}/Chat`;
+                  } else if (subfolder === 'expenses') {
+                    finalSubfolder = `Proyectos/${item.projectId}/Gastos`;
+                  } else {
+                    finalSubfolder = `Proyectos/${item.projectId}`;
+                  }
+                } else if (item.payload?.tempId) {
+                  finalSubfolder = `Proyectos/temp/${item.payload.tempId}`;
+                } else {
+                  finalSubfolder = 'Proyectos/temp';
                 }
                 formData.append('subfolder', finalSubfolder);
 

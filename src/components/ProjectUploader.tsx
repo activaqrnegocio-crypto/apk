@@ -40,6 +40,7 @@ interface ProjectUploaderProps {
   onFilterChange?: (filter: FilterType) => void
   hideCaptureButtons?: boolean
   defaultCategory?: string
+  projectId?: number              // ← NUEVO: para ruta estructurada en BunnyCDN
 }
 
 type FilterType = 'ALL' | 'IMAGE' | 'VIDEO' | 'DOCUMENT' | 'AUDIO' | 'EXPENSE'
@@ -54,7 +55,8 @@ export default function ProjectUploader({
   showGrid = true,
   onFilterChange,
   hideCaptureButtons = false,
-  defaultCategory = 'MASTER'
+  defaultCategory = 'MASTER',
+  projectId                      // ← NUEVO
 }: ProjectUploaderProps) {
   const [isDeleting, setIsDeleting] = useState<string | null>(null)
   const [selectedFileForPreview, setSelectedFileForPreview] = useState<ProjectFile | null>(null)
@@ -167,7 +169,12 @@ export default function ProjectUploader({
               }
             }
 
-            const data = await uploadToBunnyClientSide(uploadFile, finalFilename, 'projects')
+            const normCategory = (defaultCategory || 'MASTER').toUpperCase();
+            // MASTER/PLANOS → Planos | TODO lo demás (EVIDENCE, FINALES, ENTREGA, etc) → Finales
+            const catFolder = (normCategory === 'MASTER' || normCategory === 'PLANOS') ? 'Planos' : 'Finales';
+            const uploadFolder = projectId ? `Proyectos/${projectId}/${catFolder}` : `Proyectos/temp`;
+            console.log(`[UPLOADER DEBUG] defaultCategory="${defaultCategory}" norm="${normCategory}" → folder="${catFolder}" projectId=${projectId} uploadFolder="${uploadFolder}"`);
+            const data = await uploadToBunnyClientSide(uploadFile, finalFilename, uploadFolder)
             onAddFile({
               ...data,
               category: defaultCategory,

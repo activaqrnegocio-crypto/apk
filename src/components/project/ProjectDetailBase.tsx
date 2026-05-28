@@ -13,6 +13,7 @@ import { PROJECT_TYPES, translateType, PROJECT_CATEGORIES, translateCategory } f
 import ProjectChatUnified from '@/components/chat/ProjectChatUnified'
 import { compressImage as optimizedCompress, isCompressibleImage, blobToBase64 } from '@/lib/image-optimization'
 import { useProjectCache } from '@/hooks/useProjectCache'
+import VideoThumbnail from '@/components/VideoThumbnail'
 import { db } from '@/lib/db'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { revalidateRoute } from '@/actions/revalidate'
@@ -327,7 +328,7 @@ export default function ProjectDetailBase({
     amount: '',
     description: '',
     isNote: false,
-    date: typeof window !== 'undefined' ? new Date().toISOString().split('T')[0] : ''
+    date: ''
   })
   const [isSavingExpense, setIsSavingExpense] = useState(false)
   const [expenseImage, setExpenseImage] = useState<string | null>(null)
@@ -1243,7 +1244,9 @@ export default function ProjectDetailBase({
         if (rawFileObject) {
           // PRIMARY: raw File/Blob object (most reliable)
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
-          const folder = `projects/${project.id}`;
+          const cat = (category || file.category || 'MASTER').toUpperCase();
+          const sub = (cat === 'MASTER' || cat === 'PLANOS') ? 'Planos' : 'Finales';
+          const folder = `Proyectos/${project.id}/${sub}`;
           const uploadResult = await uploadToBunnyClientSide(rawFileObject, file.filename || 'media', folder);
           finalUrl = uploadResult.url;
           finalMime = uploadResult.mimeType || finalMime;
@@ -1255,7 +1258,9 @@ export default function ProjectDetailBase({
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
           const res = await fetch(file.url as string);
           const blob = await res.blob();
-          const folder = `projects/${project.id}`;
+          const cat = (category || file.category || 'MASTER').toUpperCase();
+          const sub = (cat === 'MASTER' || cat === 'PLANOS') ? 'Planos' : 'Finales';
+          const folder = `Proyectos/${project.id}/${sub}`;
           const uploadResult = await uploadToBunnyClientSide(blob, file.filename || 'media', folder);
           finalUrl = uploadResult.url;
           finalMime = uploadResult.mimeType || finalMime;
@@ -1355,6 +1360,8 @@ export default function ProjectDetailBase({
         syncId
       });
       console.log(`[Gallery] ✅ Outbox saved: ${fileName} | file=${!!(rawFileObject)} | fileData=${!!(storedFileData?.buffer)} | size=${(fileSize/1024/1024).toFixed(1)}MB`);
+      // Remove optimistic item — pendingUploads from outbox will show the pending status
+      setGallery((prev: any) => prev.filter((i: any) => i.id !== optimisticId));
       triggerBackgroundSync();
     } catch (e: any) {
       console.error('[Gallery] ❌ Outbox save failed:', e);
@@ -1582,8 +1589,34 @@ export default function ProjectDetailBase({
   }
 
   // Handler for ProjectChatUnified component
-   const handleChatUnifiedSend = async (content: string, type: string, extraData?: any) => {
+   const handleChatUnifiedSend = (content: string, type: string, extraData?: any) => {
     console.log('Sending message:', { content, type, extraData }) // Debug log
+    
+    // --- OPTIMISTIC UI UPDATE (IMMEDIATE, before compression) ---
+    const tempId = `temp-${Date.now()}-${Math.random()}`
+    const file = extraData?.file as File | undefined
+    let tempMediaUrl: string | null = null
+    if (file) {
+      try { tempMediaUrl = URL.createObjectURL(file) } catch(e) {}
+    }
+    setChatMessages((prev: any[]) => deduplicateMessages([
+      ...prev,
+      {
+        id: tempId,
+        content,
+        type: type,
+        media: tempMediaUrl ? { url: tempMediaUrl, mimeType: file?.type || '' } : null,
+        extraData: extraData || null,
+        createdAt: new Date().toISOString(),
+        isMe: true,
+        userName: session?.user?.name || 'Administrador',
+        status: 'pending'
+      }
+    ]))
+
+    // Defer compression and upload to let React render the optimistic message
+    requestAnimationFrame(() => {
+      requestAnimationFrame(async () => {
     try {
       let payload: any = {
         content,
@@ -1592,9 +1625,7 @@ export default function ProjectDetailBase({
         extraData: extraData || {}
       }
 
-      if (extraData?.file) {
-        const file = extraData.file as File
-        
+      if (file) {
         // Compress images (including HEIC/HEIF) before upload
         let processedFile: File | Blob = file;
         let processedName = file.name;
@@ -1620,7 +1651,7 @@ export default function ProjectDetailBase({
         } else {
           // Online: upload to Bunny
           const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
-          const uploadResult = await uploadToBunnyClientSide(processedFile, processedName, `projects/${project.id}/chat`)
+          const uploadResult = await uploadToBunnyClientSide(processedFile, processedName, `Proyectos/${project.id}/Chat`)
           payload.media = {
             url: uploadResult.url,
             filename: uploadResult.filename,
@@ -1664,23 +1695,6 @@ export default function ProjectDetailBase({
         });
         return;
       }
-
-      // --- OPTIMISTIC UI UPDATE (Only when Online) ---
-      const tempId = `temp-${Date.now()}-${Math.random()}`
-      setChatMessages((prev: any[]) => deduplicateMessages([
-        ...prev,
-        {
-          id: tempId,
-          content: payload.content,
-          type: payload.type,
-          media: payload.media ? { url: payload.media.base64 || payload.media.url, mimeType: payload.media.mimeType } : null,
-          extraData: Object.keys(payload.extraData || {}).length > 0 ? payload.extraData : null,
-          createdAt: new Date().toISOString(),
-          isMe: true,
-          userName: session?.user?.name || 'Administrador',
-          status: 'pending'
-        }
-      ]))
 
       // Online: Send to Server
       const res = await fetch(`/api/projects/${project.id}/messages`, {
@@ -1730,6 +1744,8 @@ export default function ProjectDetailBase({
       console.error('Error sending message:', error)
       alert('Error al enviar el mensaje')
     }
+    });
+    });
   }
 
   // --- EXPENSE HANDLERS ---
@@ -2484,7 +2500,7 @@ export default function ProjectDetailBase({
                             const match = text.match(/https?:\/\/(?:www\.)?(?:google\.com\/maps|maps\.app\.goo\.gl)\/[^\s"']+/i)
                             return match ? match[0] : null
                           }
-                          const gpsLink = project?.locationLink || findGpsLink(project?.address) || findGpsLink(project?.technicalSpecs?.locationLink) || findGpsLink(project?.technicalSpecs)
+                          const gpsLink = project?.locationLink || findGpsLink(project?.address) || findGpsLink(project?.technicalSpecs?.locationLink) || findGpsLink(typeof project?.technicalSpecs === 'string' ? project?.technicalSpecs : null)
 
                           if (gpsLink) {
                             return (
@@ -2812,6 +2828,8 @@ export default function ProjectDetailBase({
                     minimal={true}
                     showGrid={false}
                     onFilterChange={(f) => setGalleryFilter(f)}
+                    projectId={project?.id}
+                    defaultCategory="MASTER"
                   />
                 </div>
               </div>
@@ -2885,23 +2903,7 @@ export default function ProjectDetailBase({
                       if (realMime.startsWith('image/')) {
                         return <img src={item.url} alt={fileName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
                       } else if (realMime.startsWith('video/')) {
-                        return (
-                          <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'black' }}>
-                            <video 
-                              src={`${item.url}#t=0.001`} 
-                              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7 }} 
-                              preload="metadata" 
-                              muted 
-                              playsInline 
-                            />
-                            <div style={{ position: 'relative', zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: '6px', display: 'flex', boxShadow: '0 2px 10px rgba(0,0,0,0.3)' }}>
-                              <svg width="24" height="24" viewBox="0 0 24 24" fill="white" style={{ marginLeft: '2px' }}><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                            </div>
-                            <div style={{ position: 'absolute', bottom: '8px', left: '8px', zIndex: 2, background: 'rgba(0,0,0,0.5)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.6rem', color: 'white' }}>
-                              {fileName}
-                            </div>
-                          </div>
-                        );
+                        return <VideoThumbnail url={item.url} mime={realMime} filename={fileName} />;
                       } else if (realMime.startsWith('audio/')) {
                         return (
                           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '10px' }}>
@@ -2982,7 +2984,7 @@ export default function ProjectDetailBase({
                       
                       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '4px', pointerEvents: 'auto' }}>
                         <div 
-                          onClick={(e) => { e.stopPropagation(); window.open(item.url, '_blank'); }}
+                          onClick={(e) => { e.stopPropagation(); setSelectedPreviewImage(item); }}
                           style={{ 
                             backgroundColor: 'rgba(56, 189, 248, 0.95)', 
                             color: 'white', 
@@ -3035,6 +3037,8 @@ export default function ProjectDetailBase({
                     minimal={true}
                     showGrid={false}
                     onFilterChange={(f) => setEvidenceFilter(f)}
+                    projectId={project?.id}
+                    defaultCategory="EVIDENCE"
                   />
                 </div>
               </div>
@@ -3087,23 +3091,7 @@ export default function ProjectDetailBase({
                       if (realMime.startsWith('image/')) {
                         return <img src={item.url} alt={fileName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
                       } else if (realMime.startsWith('video/')) {
-                        return (
-                          <div style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'black' }}>
-                            <video 
-                              src={`${item.url}#t=0.001`} 
-                              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: 0.7 }} 
-                              preload="metadata" 
-                              muted 
-                              playsInline 
-                            />
-                            <div style={{ position: 'relative', zIndex: 2, background: 'rgba(0,0,0,0.5)', borderRadius: '50%', padding: '6px', display: 'flex', boxShadow: '0 2px 10px rgba(0,0,0,0.3)' }}>
-                              <svg width="24" height="24" viewBox="0 0 24 24" fill="white" style={{ marginLeft: '2px' }}><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                            </div>
-                            <div style={{ position: 'absolute', bottom: '8px', left: '8px', zIndex: 2, background: 'rgba(0,0,0,0.5)', padding: '2px 6px', borderRadius: '4px', fontSize: '0.6rem', color: 'white' }}>
-                              {fileName}
-                            </div>
-                          </div>
-                        );
+                        return <VideoThumbnail url={item.url} mime={realMime} filename={fileName} />;
                       } else if (realMime.startsWith('audio/')) {
                         return (
                           <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '10px' }}>

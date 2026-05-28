@@ -26,6 +26,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
   const [loading, setLoading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState('')
   const [gpsLoading, setGpsLoading] = useState(false)
+  const [uploadTempId] = useState(() => crypto.randomUUID())
   const isCreatingRef = useRef(false)
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
     address: '',
     locationLink: '',
     city: '',
-    startDate: new Date().toISOString().split('T')[0],
+    startDate: '',
     endDate: '',
     categoryList: [] as string[],
     otherCategory: '',
@@ -363,6 +364,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
         // and the GlobalSyncWorker/SW will handle uploading them to Bunny during sync.
         const offlinePayload = {
           ...payload,
+          tempId: uploadTempId,
           files: payload.files.map((f: any) => {
             // Keep the file reference for sync, but don't try to JSON.stringify it
             const { file, ...rest } = f;
@@ -509,7 +511,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                 return { url: f.url, filename: f.filename, mimeType: f.mimeType, type: f.type, category: f.category, size: f.size };
               }
               
-              const uploadResult = await uploadToBunnyClientSide(blob, filename, 'projects');
+              const uploadResult = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`);
               return {
                 url: uploadResult.url,
                 filename: filename,
@@ -533,6 +535,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
 
       const cleanPayload = {
         ...payload,
+        tempId: uploadTempId,
         files: uploadedFiles
       };
 
@@ -1123,7 +1126,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
 
                                 if (isOnline) {
                                   const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
-                                  const result = await uploadToBunnyClientSide(blob, filename, 'projects');
+                                  const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`);
                                   url = result.url;
                                   filename = result.filename;
                                 } else {
@@ -1253,7 +1256,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
 
                                   if (isOnline) {
                                     const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
-                                    const result = await uploadToBunnyClientSide(blob, filename, 'projects')
+                                    const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`)
                                     url = result.url;
                                     filename = result.filename;
                                   } else {
@@ -1289,7 +1292,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
 
                                   if (isOnline) {
                                     const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
-                                    const result = await uploadToBunnyClientSide(blob, filename, 'projects')
+                                    const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`)
                                     url = result.url;
                                     filename = result.filename;
                                   } else {

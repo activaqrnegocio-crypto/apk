@@ -63,3 +63,74 @@ export async function deleteFromBunny(fileUrl: string): Promise<void> {
     },
   })
 }
+
+/** Delete a file from BunnyCDN storage by direct storage path (e.g. "Proyectos/temp/uuid/file.jpg") */
+export async function deleteBunnyFileByPath(storagePath: string): Promise<void> {
+  const fullPath = `/${BUNNY_STORAGE_ZONE}/${storagePath}`;
+  const res = await fetch(`https://${BUNNY_STORAGE_HOST}${fullPath}`, {
+    method: 'DELETE',
+    headers: {
+      AccessKey: BUNNY_STORAGE_API_KEY,
+    },
+  });
+  if (!res.ok && res.status !== 404) {
+    console.warn(`[Bunny] Delete failed (${res.status}) for: ${storagePath}`);
+  }
+}
+
+/**
+ * List contents of a directory in BunnyCDN storage.
+ * Returns array of { ObjectName, IsDirectory, Size, LastChanged }.
+ */
+export async function listBunnyDirectory(storagePath: string): Promise<{
+  ObjectName: string;
+  IsDirectory: boolean;
+  Size: number;
+  LastChanged: string;
+}[]> {
+  const fullPath = `/${BUNNY_STORAGE_ZONE}/${storagePath}/`;
+  const res = await fetch(`https://${BUNNY_STORAGE_HOST}${fullPath}`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      AccessKey: BUNNY_STORAGE_API_KEY,
+    },
+  });
+  if (!res.ok) {
+    if (res.status === 404) return [];
+    throw new Error(`Bunny list failed (${res.status}) for: ${storagePath}`);
+  }
+  return res.json();
+}
+
+/** Delete an entire directory tree from BunnyCDN recursively */
+export async function deleteBunnyDirectory(storagePath: string): Promise<{ deleted: number; failed: number }> {
+  const items = await listBunnyDirectory(storagePath);
+  let deleted = 0;
+  let failed = 0;
+
+  for (const item of items) {
+    const childPath = `${storagePath}/${item.ObjectName}`;
+    if (item.IsDirectory) {
+      const sub = await deleteBunnyDirectory(childPath);
+      deleted += sub.deleted;
+      failed += sub.failed;
+    } else {
+      try {
+        await deleteBunnyFileByPath(childPath);
+        deleted++;
+      } catch {
+        failed++;
+      }
+    }
+  }
+
+  // Try to remove the now-empty directory (Bunny may or may not support this)
+  try {
+    await deleteBunnyFileByPath(storagePath + '/');
+  } catch {
+    // ignore — directory delete often no-op
+  }
+
+  return { deleted, failed };
+}
