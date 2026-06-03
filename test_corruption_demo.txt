@@ -1,0 +1,3 @@
+Este es un archivo de prueba - EDITADO.
+Vamos a editarlo para ver si aparece el error de base64 - MODIFICADO.
+Línea 3 de prueba - ACTUALIZADA.

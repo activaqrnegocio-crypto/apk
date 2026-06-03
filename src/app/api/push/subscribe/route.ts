@@ -3,20 +3,45 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 
-// POST: Register a new push subscription
+// POST: Register a new push subscription (VAPID or FCM)
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions)
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const userId = Number(session.user.id)
-    const { subscription, deviceName } = await req.json()
+    const body = await req.json()
+    const { subscription, deviceName, type } = body
 
+    // v380: Handle FCM tokens (Android native)
+    if (type === 'fcm' && subscription?.token) {
+      const pushSub = await prisma.pushSubscription.upsert({
+        where: {
+          userId_fcmToken: {
+            userId,
+            fcmToken: subscription.token,
+          }
+        },
+        update: {
+          fcmToken: subscription.token,
+          deviceName: deviceName || null,
+        },
+        create: {
+          userId,
+          type: 'fcm',
+          fcmToken: subscription.token,
+          deviceName: deviceName || null,
+        }
+      })
+      console.log(`[PUSH] FCM subscription registered for user ${userId}`)
+      return NextResponse.json({ success: true, id: pushSub.id })
+    }
+
+    // v380: Handle VAPID subscriptions (PWA/iOS)
     if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
       return NextResponse.json({ error: 'Invalid subscription data' }, { status: 400 })
     }
 
-    // Upsert: create or update if same endpoint exists
     const pushSub = await prisma.pushSubscription.upsert({
       where: {
         userId_endpoint: {
@@ -31,6 +56,7 @@ export async function POST(req: Request) {
       },
       create: {
         userId,
+        type: 'vapid',
         endpoint: subscription.endpoint,
         p256dh: subscription.keys.p256dh,
         auth: subscription.keys.auth,
@@ -38,7 +64,7 @@ export async function POST(req: Request) {
       }
     })
 
-    console.log(`[PUSH] Subscription registered for user ${userId} (${deviceName || 'unknown device'})`)
+    console.log(`[PUSH] VAPID subscription registered for user ${userId}`)
     return NextResponse.json({ success: true, id: pushSub.id })
   } catch (error) {
     console.error('[PUSH Subscribe ERROR]:', error)
@@ -53,17 +79,27 @@ export async function DELETE(req: Request) {
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const userId = Number(session.user.id)
-    const { endpoint } = await req.json()
+    const { endpoint, fcmToken } = await req.json()
 
+    // v380: Delete FCM token
+    if (fcmToken) {
+      await prisma.pushSubscription.deleteMany({
+        where: { userId, fcmToken }
+      })
+      console.log(`[PUSH] FCM subscription removed for user ${userId}`)
+      return NextResponse.json({ success: true })
+    }
+
+    // v380: Delete VAPID endpoint
     if (!endpoint) {
-      return NextResponse.json({ error: 'Missing endpoint' }, { status: 400 })
+      return NextResponse.json({ error: 'Missing endpoint or fcmToken' }, { status: 400 })
     }
 
     await prisma.pushSubscription.deleteMany({
       where: { userId, endpoint }
     })
 
-    console.log(`[PUSH] Subscription removed for user ${userId}`)
+    console.log(`[PUSH] VAPID subscription removed for user ${userId}`)
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('[PUSH Unsubscribe ERROR]:', error)

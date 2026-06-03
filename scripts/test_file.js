@@ -1,0 +1,10 @@
+const fs = require('fs');
+const path = 'd:/Abel paginas/Aquatech/crm mayo/aquatech-render-main/test_agent.txt';
+const content = 'Test from agent: 1234567890 abcdefghijklmnopqrstuvwxyz';
+fs.writeFileSync(path, content);
+const read = fs.readFileSync(path);
+console.log('File exists:', fs.existsSync(path));
+console.log('Content:', read.toString('utf8'));
+console.log('Length:', read.length);
+console.log('Hex:', read.toString('hex'));
+console.log('Last 10 bytes hex:', read.slice(-10).toString('hex'));

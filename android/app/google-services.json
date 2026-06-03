@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "827596669177",
+    "project_id": "aquatech-crm-ff50b",
+    "storage_bucket": "aquatech-crm-ff50b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:827596669177:android:2719ba65901ea6119ae228",
+        "android_client_info": {
+          "package_name": "com.aquatech.crm"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBY9MuumIc1WzipyN0lIutfeAi7zTR3vlc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -46,7 +46,7 @@ export async function GET() {
         success: true,
         message: 'Notificación enviada OK',
         subsCount: subs.length,
-        endpoint: subs[0].endpoint.substring(0, 50)
+        endpoint: subs[0]?.endpoint?.substring(0, 50) || 'N/A'
       })
 
     } catch (pushErr: any) {
@@ -60,7 +60,7 @@ export async function GET() {
         vapidPrivatePresent: !!vapidPrivate,
         vapidPublicFirst20: vapidPublic?.substring(0, 20),
         subsCount: subs.length,
-        endpointStart: subs[0].endpoint.substring(0, 60)
+        endpointStart: subs[0]?.endpoint?.substring(0, 60) || 'N/A'
       })
     }
 

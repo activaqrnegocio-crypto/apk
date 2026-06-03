@@ -345,15 +345,19 @@ model ProjectGalleryItem {
 model PushSubscription {
   id         Int      @id @default(autoincrement())
   userId     Int      @map("user_id")
-  endpoint   String   @db.VarChar(500)
-  p256dh     String   @db.VarChar(200)
-  auth       String   @db.VarChar(100)
+  type       String   @default("vapid") // "vapid" or "fcm"
+  endpoint   String?  @db.VarChar(500)  // Only for VAPID
+  p256dh     String?  @db.VarChar(200)  // Only for VAPID
+  auth       String?  @db.VarChar(100)  // Only for VAPID
+  fcmToken   String?  @map("fcm_token") @db.VarChar(500) // Only for FCM
   deviceName String?  @map("device_name") @db.VarChar(100)
   createdAt  DateTime @default(now()) @map("created_at")
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, endpoint])
+  @@unique([userId, fcmToken])
   @@index([userId])
+  @@index([type])
   @@map("push_subscriptions")
 }
 

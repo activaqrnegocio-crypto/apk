@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from '@/lib/db'
+import { addToOutbox } from '@/lib/storage'
 import CalendarView from '@/components/Calendar/CalendarView'
 import DayOverviewModal from '@/components/Calendar/DayOverviewModal'
 import CalendarAssistant from '@/components/Calendar/CalendarAssistant'
@@ -285,7 +286,7 @@ export default function AdminCalendarClient({
 
       // Offline interceptor
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        await db.outbox.add({
+        await addToOutbox({
           type: 'TASK',
           projectId: Number(payload.projectId) || 0,
           payload: { ...payload, isNew },
@@ -327,7 +328,7 @@ export default function AdminCalendarClient({
       } catch (fetchErr) {
         // Network error (Lie-Fi) - fallback to offline outbox
         console.warn('Network error during save, falling back to offline outbox:', fetchErr);
-        await db.outbox.add({
+        await addToOutbox({
           type: 'TASK',
           projectId: Number(payload.projectId) || 0,
           payload: { ...payload, isNew },

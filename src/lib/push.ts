@@ -1,5 +1,6 @@
 import webpush from 'web-push'
 import { prisma } from './prisma'
+import { sendFCMToToken, type FCMPayload } from './firebase-admin'
 
 // Configure VAPID details only if keys are present
 // v301: Robust VAPID key loading with server-side fallback
@@ -31,8 +32,9 @@ interface PushPayload {
 }
 
 /**
- * Send a push notification to all devices of a specific user.
+ * v380: Send a push notification to all devices of a specific user.
  * Automatically cleans up expired subscriptions (410 Gone).
+ * Handles both VAPID (web-push) and FCM (Firebase) subscriptions.
  */
 export async function sendPushToUser(userId: number, payload: PushPayload) {
   try {
@@ -42,7 +44,11 @@ export async function sendPushToUser(userId: number, payload: PushPayload) {
 
     if (subs.length === 0) return []
 
-    const pushPayload = JSON.stringify({
+    // v380: Separate FCM and VAPID subscriptions
+    const fcmSubs = subs.filter(s => s.type === 'fcm' && s.fcmToken)
+    const vapidSubs = subs.filter(s => s.type === 'vapid' || (!s.fcmToken && s.endpoint))
+
+    const pushPayloadStr = JSON.stringify({
       title: payload.title,
       body: payload.body,
       icon: payload.icon || '/icon-192.png',
@@ -55,28 +61,61 @@ export async function sendPushToUser(userId: number, payload: PushPayload) {
       renotify: true
     })
 
-    const results = await Promise.allSettled(
-      subs.map(sub =>
-        webpush.sendNotification(
-          {
-            endpoint: sub.endpoint,
-            keys: { p256dh: sub.p256dh, auth: sub.auth }
-          },
-          pushPayload,
-          {
-            TTL: 86400,
-            urgency: 'high'
+    const results: any[] = []
+
+    // v380: Send to FCM tokens (Android)
+    for (const sub of fcmSubs) {
+      if (sub.fcmToken) {
+        try {
+          const fcmPayload: FCMPayload = {
+            title: payload.title,
+            body: payload.body,
+            data: {
+              url: payload.url || '/admin/operador',
+              tag: payload.tag || 'general',
+              icon: payload.icon || '/icon-192.png',
+            }
           }
-        ).catch(async (err: any) => {
+          const result = await sendFCMToToken(sub.fcmToken, fcmPayload)
+          if (result === 'INVALID_TOKEN') {
+            // Delete invalid FCM token
+            await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {})
+            console.log(`[PUSH] Removed invalid FCM token for user ${userId}`)
+          }
+          results.push({ success: true, type: 'fcm' })
+        } catch (err: any) {
+          console.error('[PUSH] FCM error:', err)
+          results.push({ success: false, type: 'fcm', error: err.message })
+        }
+      }
+    }
+
+    // v380: Send to VAPID endpoints (PWA/iOS)
+    for (const sub of vapidSubs) {
+      if (sub.endpoint && sub.p256dh && sub.auth) {
+        try {
+          await webpush.sendNotification(
+            {
+              endpoint: sub.endpoint,
+              keys: { p256dh: sub.p256dh, auth: sub.auth }
+            },
+            pushPayloadStr,
+            {
+              TTL: 86400,
+              urgency: 'high'
+            }
+          )
+          results.push({ success: true, type: 'vapid' })
+        } catch (err: any) {
           // If the endpoint expired (410 Gone or 404), delete the subscription
           if (err.statusCode === 410 || err.statusCode === 404) {
             await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {})
-            console.log(`[PUSH] Removed expired subscription for user ${userId}`)
+            console.log(`[PUSH] Removed expired VAPID subscription for user ${userId}`)
           }
-          throw err
-        })
-      )
-    )
+          results.push({ success: false, type: 'vapid', error: err.message })
+        }
+      }
+    }
 
     return results
   } catch (error) {

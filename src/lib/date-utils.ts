@@ -35,9 +35,39 @@ export function formatToEcuador(date: Date | string | number | null | undefined,
 
 /**
  * Helper para mostrar solo la hora (HH:mm AM/PM) en Ecuador
+ * Versión manual para evitar problemas con hour12 en Android WebView
  */
 export function formatTimeEcuador(date: Date | string | number | null | undefined): string {
-  return formatToEcuador(date, { hour: '2-digit', minute: '2-digit', hour12: true });
+  if (!date) return '';
+  const d = typeof date === 'string' || typeof date === 'number' ? new Date(date) : date;
+  
+  // Forzar interpretación en zona Ecuador
+  const options: Intl.DateTimeFormatOptions = {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: ECUADOR_TIMEZONE
+  };
+  
+  // Algunos Android WebView no respetan hour12, así que formateamos manualmente
+  const formatted = d.toLocaleString('en-US', options);
+  
+  // Si parece que hour12 no funcionó (muestra 00 en vez de 12), ajustar manualmente
+  if (formatted.includes(':00 ') && !formatted.includes('12:')) {
+    const match = formatted.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+    if (match) {
+      let hours = parseInt(match[1]);
+      const mins = match[2];
+      const period = match[3].toUpperCase();
+      
+      // Si hour12 falló y muestra 00, convertir a 12 para AM o mantener para PM
+      if (hours === 0) hours = 12;
+      
+      return `${hours.toString().padStart(2, '0')}:${mins}${period}`;
+    }
+  }
+  
+  return formatted;
 }
 
 /**

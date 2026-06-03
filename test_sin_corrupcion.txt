@@ -1,0 +1,2 @@
+Test sin corrupción.
+Verificando que VSCODE_INJECTION está desactivado.

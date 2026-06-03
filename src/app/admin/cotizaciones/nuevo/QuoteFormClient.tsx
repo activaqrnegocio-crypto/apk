@@ -6,6 +6,8 @@ import MediaCapture from '@/components/MediaCapture'
 import BudgetBuilder, { BudgetItem } from '@/components/BudgetBuilder'
 import { generateProfessionalPDF } from '@/lib/pdf-generator'
 import { useSession } from 'next-auth/react'
+import { db } from '@/lib/db'
+import { addToOutbox } from '@/lib/storage'
 
 interface QuoteFormProps {
   clients: any[]
@@ -410,9 +412,8 @@ export default function QuoteFormClient({ clients, materials, projects = [], pre
           // Generamos el PDF y lo abrimos en pestaña nueva para el administrador
           generatePreviewPDF()
 
-          const { db } = await import('@/lib/db')
           const tempId = Date.now()
-          const actualId = await db.outbox.add({
+          await addToOutbox({
              type: 'QUOTE',
              projectId: Number(selectedProjectId) || 0,
              payload,

@@ -1,10 +1,12 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { formatTimeEcuador, formatDateEcuador } from '@/lib/date-utils'
 import MediaCapture from '@/components/MediaCapture'
-import CameraCapture from '@/components/camera/CameraCapture'
 import VideoThumbnail from '@/components/VideoThumbnail'
+import CameraCapture from '@/components/camera/CameraCapture'
+import NativeCameraCapture from '@/components/NativeCameraCapture'
 
 // --- SVGs for WhatsApp Icons ---
 const svgProps = (size: number) => ({
@@ -16,6 +18,7 @@ const Paperclip = ({ size = 20 }: any) => <svg {...svgProps(size)}><path d="m21.
 const Camera = ({ size = 20 }: any) => <svg {...svgProps(size)}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
 const Mic = ({ size = 20 }: any) => <svg {...svgProps(size)}><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
 const Send = ({ size = 20 }: any) => <svg {...svgProps(size)}><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+const StopCircle = ({ size = 20 }: any) => <svg {...svgProps(size)}><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6"/></svg>
 const MoreVertical = ({ size = 20 }: any) => <svg {...svgProps(size)}><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
 const Smile = ({ size = 20 }: any) => <svg {...svgProps(size)}><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/></svg>
 const Play = ({ size = 16 }: any) => <svg {...svgProps(size)} fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -68,7 +71,12 @@ export default function ProjectChatUnified({
 }: ProjectChatUnifiedProps) {
   const [inputValue, setInputValue] = useState('')
   const [showAttachments, setShowAttachments] = useState(false)
-  const [showMediaCapture, setShowMediaCapture] = useState<'audio' | 'video' | null>(null)
+  const [showMediaCapture, setShowMediaCapture] = useState<'audio' | 'video' | 'photo' | undefined>(undefined)
+  // Voice recording state for WhatsApp-style in APK
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false)
+  const [voiceRecordingTimer, setVoiceRecordingTimer] = useState(0)
+  const [voiceStartX, setVoiceStartX] = useState(0)
+  const voiceTimerRef = useRef<any>(null)
   const [showMenu, setShowMenu] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -87,6 +95,8 @@ export default function ProjectChatUnified({
   const [gpsStatus, setGpsStatus] = useState<string | null>(null)
   const [filesFilter, setFilesFilter] = useState<'ALL' | 'IMAGES' | 'VIDEOS' | 'AUDIOS' | 'DOCS' | 'EXPENSES'>('ALL')
   const [showCamera, setShowCamera] = useState(false)
+  const [showCameraTypeModal, setShowCameraTypeModal] = useState(false)
+  const [capturedMedia, setCapturedMedia] = useState<{type: string; blob: Blob; url: string} | null>(null)
   const [selectedPreviewMedia, setSelectedPreviewMedia] = useState<any>(null)
   
   const allMedia = useMemo(() => {
@@ -185,52 +195,167 @@ export default function ProjectChatUnified({
     setTimeout(() => { sendLockRef.current = false }, 400)
   }
 
-  const handleGetGPS = () => {
-    if (!navigator.geolocation) {
-      return alert('La geolocalización no es compatible con este navegador.')
+  // WhatsApp-style voice recording for APK
+  const startVoiceRecording = async () => {
+    // Prevent multiple simultaneous recording attempts
+    if (isRecordingVoice) return;
+    
+    try {
+      const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
+      const perm = await CapacitorAudioRecorder.requestPermissions();
+      if (perm.recordAudio !== 'granted') {
+        alert('Permiso de micrófono denegado');
+        return;
+      }
+      await CapacitorAudioRecorder.startRecording({ sampleRate: 44100, bitRate: 128000 });
+      setIsRecordingVoice(true);
+      setVoiceRecordingTimer(0);
+      voiceTimerRef.current = setInterval(() => setVoiceRecordingTimer(t => t + 1), 1000);
+    } catch (err) {
+      console.error('[APK] Error inicio voz:', err);
+      alert('Error: ' + err);
+    }
+  };
+
+  const stopVoiceRecording = async (send: boolean) => {
+    // Clear timer immediately
+    if (voiceTimerRef.current) {
+      clearInterval(voiceTimerRef.current);
+      voiceTimerRef.current = null;
     }
     
-    setGpsStatus('Obteniendo ubicación...')
+    // Stop recording state immediately to prevent double-stop
+    const wasRecording = isRecordingVoice;
+    setIsRecordingVoice(false);
     
-    const options = { 
-      enableHighAccuracy: true, 
-      timeout: 10000, 
-      maximumAge: 0 
+    if (!send || !wasRecording) {
+      // Cancel - discard recording
+      try {
+        const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
+        await CapacitorAudioRecorder.stopRecording();
+      } catch {}
+      return;
     }
-
-    const onSuccess = (position: any) => {
-      const { latitude, longitude } = position.coords
-      const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`
-      onSendMessage(`📍 Ubicación compartida: ${mapsUrl}`, 'LOCATION', { 
-         phaseId: selectedPhaseId,
-         lat: latitude,
-         lng: longitude
-      })
-      setGpsStatus(null)
+    
+    try {
+      const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
+      const result = await CapacitorAudioRecorder.stopRecording();
+      if (result.uri) {
+        // Use XMLHttpRequest for file:// URIs (native paths)
+        const uri = result.uri;
+        return new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('GET', uri, true);
+          xhr.responseType = 'blob';
+          xhr.onload = () => {
+            if (xhr.status === 200) {
+              const blob = xhr.response;
+              const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+              const mediaFile = new File([blob], `voice_${Date.now()}.${ext}`, { type: blob.type });
+              onSendMessage(`🎤 Nota de voz (${voiceRecordingTimer}s)`, 'AUDIO', { file: mediaFile });
+              resolve(null);
+            } else {
+              console.error('[APK] Error XHR:', xhr.status);
+              reject(new Error('Failed to load audio'));
+            }
+          };
+          xhr.onerror = () => {
+            console.error('[APK] XHR error');
+            reject(new Error('Network error'));
+          };
+          xhr.send();
+        });
+      } else {
+        console.warn('[APK] Grabación voz - URI vacío');
+      }
+    } catch (err) {
+      console.error('[APK] Error stop voz:', err);
     }
+  };
 
-    const onError = (error: any) => {
-      console.warn('GPS High Accuracy Error, trying normal:', error)
-      // Fallback a baja precisión si falla la alta (común en PC)
-      navigator.geolocation.getCurrentPosition(
-        onSuccess,
-        (err2) => {
-          console.error('GPS Fatal Error:', err2)
-          let msg = 'No se pudo obtener la ubicación.';
-          switch(err2.code) {
-            case 1: msg = 'Permiso denegado. Por favor, permita el acceso a la ubicación.'; break;
-            case 2: msg = 'La ubicación no está disponible.'; break;
-            case 3: msg = 'Se agotó el tiempo de espera.'; break;
+  const handleGetGPS = async () => {
+    try {
+      const { Capacitor } = await import('@capacitor/core');
+      
+      if (Capacitor.isNativePlatform()) {
+        // APK: usar plugin nativo
+        const { Geolocation } = await import('@capacitor/geolocation');
+        setGpsStatus('Obteniendo ubicacion...');
+        
+        try {
+          const perm = await Geolocation.requestPermissions();
+          if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+            alert('Permiso de ubicacion denegado');
+            setGpsStatus(null);
+            return;
           }
-          alert(msg);
-          setGpsStatus(null)
-        },
-        { enableHighAccuracy: false, timeout: 15000 }
-      )
+        } catch (permErr) {
+          console.warn('[APK] Permiso no disponible, intentando directo');
+        }
+        
+        const position = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true
+        });
+        
+        const { latitude, longitude } = position.coords;
+        const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        onSendMessage(`📍 Ubicacion compartida: ${mapsUrl}`, 'LOCATION', { 
+          phaseId: selectedPhaseId,
+          lat: latitude,
+          lng: longitude
+        });
+        setGpsStatus(null);
+      } else {
+        // PWA: usar geolocation del navegador
+        if (!navigator.geolocation) {
+          return alert('La geolocalizacion no es compatible con este navegador.');
+        }
+        
+        setGpsStatus('Obteniendo ubicacion...');
+        const options = { 
+          enableHighAccuracy: true, 
+          timeout: 10000, 
+          maximumAge: 0 
+        };
+        
+        const onSuccess = (position: any) => {
+          const { latitude, longitude } = position.coords;
+          const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+          onSendMessage(`📍 Ubicacion compartida: ${mapsUrl}`, 'LOCATION', { 
+            phaseId: selectedPhaseId,
+            lat: latitude,
+            lng: longitude
+          });
+          setGpsStatus(null);
+        };
+        
+        const onError = (error: any) => {
+          console.warn('GPS High Accuracy Error, trying normal:', error);
+          navigator.geolocation.getCurrentPosition(
+            onSuccess,
+            (err2) => {
+              console.error('GPS Fatal Error:', err2);
+              let msg = 'No se pudo obtener la ubicacion.';
+              switch(err2.code) {
+                case 1: msg = 'Permiso denegado. Por favor, permita el acceso a la ubicacion.'; break;
+                case 2: msg = 'La ubicacion no esta disponible.'; break;
+                case 3: msg = 'Se agoto el tiempo de espera.'; break;
+              }
+              alert(msg);
+              setGpsStatus(null);
+            },
+            { enableHighAccuracy: false, timeout: 15000 }
+          );
+        };
+        
+        navigator.geolocation.getCurrentPosition(onSuccess, onError, options);
+      }
+    } catch (err) {
+      console.error('[GPS] Error:', err);
+      alert('Error al obtener ubicacion: ' + err);
+      setGpsStatus(null);
     }
-
-    navigator.geolocation.getCurrentPosition(onSuccess, onError, options)
-  }
+  };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -697,7 +822,10 @@ export default function ProjectChatUnified({
               icon={<Camera size={28} />} 
               label="CÁMARA" 
               color="#d946ef" 
-              onClick={() => setShowCamera(true)} 
+              onClick={() => {
+                // APK: Use native camera only, never show PWA modal
+                console.log('[APK] Camera button pressed');
+              }} 
             />
             <AttachmentItem 
               icon={<ImageIcon size={28} />} 
@@ -1016,40 +1144,22 @@ export default function ProjectChatUnified({
         </div>
       )}
 
-      {/* --- MEDIA CAPTURE MODAL --- */}
-      {showMediaCapture && (
-        <div className="media-modal-overlay">
-           <div className="media-modal-content">
-              <button 
-                className="close-btn" 
-                onClick={() => setShowMediaCapture(null)}
-              >✕</button>
-              <MediaCapture 
-                mode={showMediaCapture}
-                skipTranscription={true}
-                onCapture={(blob, type, transcription) => {
-                  const fileStr = type === 'audio' ? 'AUDIO' : type === 'photo' ? 'IMAGE' : 'VIDEO';
-                  
-                  // Use actual mime type for extension fallback
-                  let ext = 'webm';
-                  if (blob.type.includes('mp4')) ext = 'mp4';
-                  else if (blob.type.includes('mpeg')) ext = 'mp3';
-                  else if (blob.type.includes('ogg')) ext = 'ogg';
-                  else if (blob.type.includes('jpeg') || type === 'photo') ext = 'jpg';
-                  else if (blob.type.includes('png')) ext = 'png';
-
-                  const mediaFile = new File([blob], `capture_${Date.now()}.${ext}`, { type: blob.type });
-                  
-                  // For audio without transcription, we can pass a small placeholder or just empty
-                  onSendMessage(transcription || (type === 'audio' ? 'Nota de voz' : ''), fileStr, { file: mediaFile });
-                  setShowMediaCapture(null);
-                }}
-              />
-           </div>
-        </div>
+      {/* --- MEDIA CAPTURE MODAL - APK AUDIO RECORDER --- */}
+      {showMediaCapture === 'audio' && (
+        <NativeCameraCapture
+          onPhotoCapture={() => {}}
+          onVideoCapture={() => {}}
+          onAudioCapture={(blob, url) => {
+            const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+            const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
+            onSendMessage('Nota de voz', 'AUDIO', { file: mediaFile });
+            setShowMediaCapture(undefined);
+          }}
+          onClose={() => setShowMediaCapture(undefined)}
+        />
       )}
 
-      {/* --- INPUT BAR --- */}
+      {/* --- APK CAMERA TYPE MODAL --- */}
       <footer className="chat-footer">
         <div className="input-row">
            <button className="btn-icon"><Smile /></button>
@@ -1064,21 +1174,119 @@ export default function ProjectChatUnified({
               <button onClick={() => setShowAttachments(!showAttachments)} className="btn-icon">
                  <Paperclip />
               </button>
-              <button onClick={() => setShowCamera(true)} className="btn-icon" title="Cámara (Foto/Video)">
+              <button 
+                onClick={async () => {
+                  const { Capacitor } = await import('@capacitor/core');
+                  
+                  if (Capacitor.isNativePlatform()) {
+                    // APK: Mostrar selector foto/video
+                    setShowCameraTypeModal(true);
+                  } else {
+                    // PWA: Mostrar modal de cámara custom
+                    setShowCamera(true);
+                  }
+                }} 
+                className="btn-icon" 
+                title="Cámara (Foto/Video)"
+              >
                  <Camera />
               </button>
             </div>
            
            <button 
-            className={`btn-send ${inputValue.trim() ? 'active' : ''}`}
-            onClick={inputValue.trim() ? handleSend : () => setShowMediaCapture('audio')}
+            className={`btn-send ${inputValue.trim() ? 'active' : ''} ${isRecordingVoice ? 'recording' : ''}`}
+            onClick={inputValue.trim() ? handleSend : async () => {
+              const { Capacitor } = await import('@capacitor/core');
+              if (!Capacitor.isNativePlatform()) {
+                // PWA: open audio modal
+                setShowMediaCapture('audio');
+              } else {
+                // APK: WhatsApp-style voice recording
+                if (isRecordingVoice) {
+                  // Stop and send voice message
+                  stopVoiceRecording(true);
+                } else {
+                  // Start recording
+                  startVoiceRecording();
+                }
+              }
+            }}
+            onTouchStart={(e) => {
+              if (!inputValue.trim() && !isRecordingVoice) {
+                const touch = e.touches[0];
+                setVoiceStartX(touch.clientX);
+                startVoiceRecording();
+              }
+            }}
+            onTouchEnd={() => {
+              if (isRecordingVoice) {
+                stopVoiceRecording(true);
+              }
+            }}
+            onTouchCancel={() => {
+              if (isRecordingVoice) {
+                stopVoiceRecording(false);
+              }
+            }}
+            onMouseDown={(e) => {
+              if (!inputValue.trim() && !isRecordingVoice) {
+                setVoiceStartX(e.clientX);
+                startVoiceRecording();
+              }
+            }}
+            onMouseUp={() => {
+              if (isRecordingVoice) {
+                stopVoiceRecording(true);
+              }
+            }}
+            onMouseLeave={() => {
+              if (isRecordingVoice) {
+                stopVoiceRecording(false);
+              }
+            }}
             disabled={isSending}
             style={{ opacity: isSending ? 0.5 : 1, cursor: isSending ? 'wait' : 'pointer' }}
            >
-             {inputValue.trim() ? <Send /> : <Mic />}
+             {inputValue.trim() ? <Send /> : (isRecordingVoice ? <StopCircle /> : <Mic />)}
            </button>
         </div>
       </footer>
+
+      {/* --- VOICE RECORDING INDICATOR (WhatsApp style) --- */}
+      {isRecordingVoice && (
+        <div style={{
+          position: 'fixed',
+          bottom: '90px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          backgroundColor: '#1a1a1a',
+          borderRadius: '24px',
+          padding: '12px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+          zIndex: 9999,
+        }}>
+          <div style={{
+            width: '12px',
+            height: '12px',
+            borderRadius: '50%',
+            backgroundColor: '#ef4444',
+            animation: 'pulse 1s infinite',
+          }} />
+          <span style={{ color: 'white', fontSize: '16px', fontWeight: 'bold' }}>
+            {Math.floor(voiceRecordingTimer / 60)}:{String(voiceRecordingTimer % 60).padStart(2, '0')}
+          </span>
+          <span style={{ color: '#a0a0a0', fontSize: '14px' }}>Grabando...</span>
+          <style>{`
+            @keyframes pulse {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.5; }
+            }
+          `}</style>
+        </div>
+      )}
 
       {/* --- EXPENSE MODAL --- */}
       {expenseModal.isOpen && (
@@ -1242,30 +1450,132 @@ export default function ProjectChatUnified({
         </div>
       )}
 
-      {/* --- CAMERA MODAL --- */}
+      {/* --- PWA CAMERA MODAL --- */}
       {showCamera && (
         <div className="media-modal-overlay" style={{ zIndex: 1100 }}>
-          <div className="media-modal-content" style={{ maxWidth: '500px', padding: '10px' }}>
-            <button className="close-btn" onClick={() => setShowCamera(false)} style={{ top: '10px', right: '10px' }}>✕</button>
-            <div style={{ marginTop: '20px' }}>
-              <CameraCapture 
-                onPhotoCapture={(blob) => {
-                  const file = new File([blob], `camera_${Date.now()}.jpg`, { type: 'image/jpeg' });
-                  onSendMessage('', 'IMAGE', { file, phaseId: selectedPhaseId });
-                  setShowCamera(false);
-                }}
-                onVideoCapture={(blob) => {
-                  const file = new File([blob], `video_${Date.now()}.mp4`, { type: 'video/mp4' });
-                  onSendMessage('', 'VIDEO', { file, phaseId: selectedPhaseId });
-                  setShowCamera(false);
-                }}
-                onClose={() => setShowCamera(false)}
-              />
-            </div>
-          </div>
+          <CameraCapture 
+            onPhotoCapture={(blob, url) => {
+              setCapturedMedia({ type: 'photo', blob, url });
+              setShowCamera(false);
+            }}
+            onVideoCapture={(blob, url) => {
+              setCapturedMedia({ type: 'video', blob, url });
+              setShowCamera(false);
+            }}
+            onClose={() => setShowCamera(false)}
+          />
         </div>
       )}
 
+      {/* --- APK CAMERA TYPE MODAL --- */}
+      {showCameraTypeModal && (
+        <div className="media-modal-overlay" onClick={() => setShowCameraTypeModal(false)}>
+          <div className="media-modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '320px', textAlign: 'center' }}>
+            <h3 style={{ marginTop: 0 }}>📷 Seleccionar tipo</h3>
+            <p style={{ color: '#a0a0a0', marginBottom: '20px' }}>¿Qué deseas capturar?</p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button
+                onClick={async () => {
+                  setShowCameraTypeModal(false);
+                  try {
+                    const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera');
+                    const media = await Camera.getPhoto({
+                      quality: 90,
+                      allowEditing: false,
+                      resultType: CameraResultType.Uri,
+                      source: CameraSource.Camera,
+                    });
+                    if (media.webPath) {
+                      const resp = await fetch(media.webPath);
+                      const blob = await resp.blob();
+                      setCapturedMedia({ 
+                        type: 'photo', 
+                        blob, 
+                        url: URL.createObjectURL(blob) 
+                      });
+                    }
+                  } catch (err) {
+                    console.error('[APK] Error cámara foto:', err);
+                    alert('Error: ' + err);
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  padding: '20px',
+                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                  border: 'none',
+                  borderRadius: '12px',
+                  color: 'white',
+                  fontSize: '16px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                <span style={{ fontSize: '32px' }}>📷</span>
+                <span>Foto</span>
+              </button>
+              <button
+                onClick={async () => {
+                  setShowCameraTypeModal(false);
+                  try {
+                    const { Camera } = await import('@capacitor/camera');
+                    const media = await Camera.recordVideo({});
+                    console.log('[APK] Video grabado:', media);
+                    if (media.uri) {
+                      const resp = await fetch(media.uri);
+                      const blob = await resp.blob();
+                      setCapturedMedia({ 
+                        type: 'video', 
+                        blob, 
+                        url: URL.createObjectURL(blob) 
+                      });
+                    }
+                  } catch (err) {
+                    console.error('[APK] Error cámara video:', err);
+                    alert('Error: ' + err);
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  padding: '20px',
+                  background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                  border: 'none',
+                  borderRadius: '12px',
+                  color: 'white',
+                  fontSize: '16px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
+                <span style={{ fontSize: '32px' }}>🎥</span>
+                <span>Video</span>
+              </button>
+            </div>
+            <button
+              onClick={() => setShowCameraTypeModal(false)}
+              style={{
+                marginTop: '16px',
+                background: 'transparent',
+                border: 'none',
+                color: '#a0a0a0',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+      
       <style jsx>{`
         .whatsapp-chat-container {
           display: flex;

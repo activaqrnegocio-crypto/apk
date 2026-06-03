@@ -12,7 +12,10 @@ import { useLocalStorage } from '@/hooks/useLocalStorage'
 import { useDexieDraft } from '@/hooks/useDexieDraft'
 import { PROJECT_TYPES, translateType, PROJECT_CATEGORIES, translateCategory } from '@/lib/constants'
 import { db } from '@/lib/db'
+import { addToOutbox } from '@/lib/storage'
 import CameraCapture from '@/components/camera/CameraCapture'
+import { Capacitor } from '@capacitor/core'
+import { CameraSource } from '@capacitor/camera'
 
 interface ProjectCreationWizardProps {
   panelBase?: string; // e.g. "/admin/proyectos" or "/admin/operador"
@@ -26,7 +29,17 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
   const [loading, setLoading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState('')
   const [gpsLoading, setGpsLoading] = useState(false)
-  const [uploadTempId] = useState(() => crypto.randomUUID())
+  const [uploadTempId] = useState(() => {
+    // Fallback para Android WebView que no soporta crypto.randomUUID
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  })
   const isCreatingRef = useRef(false)
 
   useEffect(() => {
@@ -184,6 +197,179 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
   const [showGallery, setShowGallery] = useState(false)
   const [showCameraCapture, setShowCameraCapture] = useState(false)
+  const [showCameraTypeModal, setShowCameraTypeModal] = useState(false)
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false)
+  const isRecordingRef = useRef(false)
+
+  // APK Voice Recording Functions
+  const startVoiceRecording = async () => {
+    // Prevent multiple simultaneous recording attempts using ref
+    if (isRecordingRef.current) return;
+    
+    try {
+      const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
+      const perm = await CapacitorAudioRecorder.requestPermissions();
+      if (perm.recordAudio !== 'granted') {
+        alert('Permiso de micrófono denegado');
+        return;
+      }
+      isRecordingRef.current = true;
+      setIsRecordingVoice(true);
+      await CapacitorAudioRecorder.startRecording({ sampleRate: 44100, bitRate: 128000 });
+    } catch (err) {
+      console.error('[APK] Error starting recording:', err);
+      isRecordingRef.current = false;
+      setIsRecordingVoice(false);
+      alert('Error: ' + err);
+    }
+  };
+
+  const stopVoiceRecording = async (send: boolean) => {
+    // Clear recording state immediately
+    const wasRecording = isRecordingRef.current;
+    isRecordingRef.current = false;
+    setIsRecordingVoice(false);
+    
+    if (!send || !wasRecording) return;
+    
+    try {
+      const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
+      const result = await CapacitorAudioRecorder.stopRecording();
+      console.log('[APK] Audio grabado:', result);
+      if (result.uri) {
+        // Use XMLHttpRequest for file:// URIs (native paths)
+        const uri = result.uri;
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', uri, true);
+        xhr.responseType = 'blob';
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            const blob = xhr.response;
+            console.log('[APK] Audio blob obtenido:', blob.size, 'bytes');
+            const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+            const filename = `specs-audio-${Date.now()}.${ext}`;
+            const isOnline = navigator.onLine;
+            if (isOnline) {
+              import('@/lib/storage-client').then(({ uploadToBunnyClientSide }) => {
+                uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`).then(uploadResult => {
+                  console.log('[APK] Audio subido:', uploadResult.url);
+                  setProjectData(prev => ({ ...prev, specsAudioUrl: uploadResult.url }));
+                  const fileObj: any = {
+                    id: `audio-${Date.now()}`,
+                    name: filename,
+                    type: 'AUDIO',
+                    url: uploadResult.url,
+                    size: blob.size,
+                    category: 'MASTER',
+                    mimeType: blob.type || 'audio/webm'
+                  };
+                  setUploadedFiles(prev => [...prev, fileObj]);
+                  alert('Audio guardado correctamente');
+                }).catch(err => {
+                  console.error('[APK] Error subiendo audio:', err);
+                });
+              });
+            } else {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const url = reader.result as string;
+                console.log('[APK] Audio offline guardado');
+                setProjectData(prev => ({ ...prev, specsAudioUrl: url }));
+                const fileObj: any = {
+                  id: `audio-${Date.now()}`,
+                  name: filename,
+                  type: 'AUDIO',
+                  url: url,
+                  size: blob.size,
+                  category: 'MASTER',
+                  mimeType: blob.type || 'audio/webm'
+                };
+                setUploadedFiles(prev => [...prev, fileObj]);
+                alert('Audio guardado correctamente');
+              };
+              reader.readAsDataURL(blob);
+            }
+          } else {
+            console.error('[APK] XHR status:', xhr.status);
+          }
+        };
+        xhr.onerror = async () => {
+          console.error('[APK] XHR error, intentando con Filesystem API');
+          try {
+            const { Filesystem } = await import('@capacitor/filesystem');
+            const { Capacitor } = await import('@capacitor/core');
+            
+            // Read the file using Filesystem API
+            const contents = await Filesystem.readFile({ path: uri });
+            
+            // Contents is base64 encoded on some platforms, need to convert
+            let blob: Blob;
+            if (typeof contents === 'string') {
+              // It's base64 - convert to blob
+              const binary = atob(contents);
+              const bytes = new Uint8Array(binary.length);
+              for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+              }
+              blob = new Blob([bytes], { type: 'audio/webm' });
+            } else if ((contents as any).data) {
+              // It's an array with data property
+              blob = new Blob([(contents as any).data], { type: 'audio/webm' });
+            } else {
+              throw new Error('Unknown format');
+            }
+            
+            console.log('[APK] Audio blob (Filesystem):', blob.size, 'bytes');
+            const filename = `specs-audio-${Date.now()}.webm`;
+            const isOnline = navigator.onLine;
+            if (isOnline) {
+              import('@/lib/storage-client').then(({ uploadToBunnyClientSide }) => {
+                uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`).then(uploadResult => {
+                  console.log('[APK] Audio subido:', uploadResult.url);
+                  setProjectData(prev => ({ ...prev, specsAudioUrl: uploadResult.url }));
+                  const fileObj: any = {
+                    id: `audio-${Date.now()}`,
+                    name: filename,
+                    type: 'AUDIO',
+                    url: uploadResult.url,
+                    size: blob.size,
+                    category: 'MASTER',
+                    mimeType: blob.type || 'audio/webm'
+                  };
+                  setUploadedFiles(prev => [...prev, fileObj]);
+                  alert('Audio guardado correctamente');
+                });
+              });
+            } else {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const url = reader.result as string;
+                setProjectData(prev => ({ ...prev, specsAudioUrl: url }));
+                const fileObj: any = {
+                  id: `audio-${Date.now()}`,
+                  name: filename,
+                  type: 'AUDIO',
+                  url: url,
+                  size: blob.size,
+                  category: 'MASTER',
+                  mimeType: blob.type || 'audio/webm'
+                };
+                setUploadedFiles(prev => [...prev, fileObj]);
+                alert('Audio guardado correctamente');
+              };
+              reader.readAsDataURL(blob);
+            }
+          } catch (fsErr) {
+            console.error('[APK] Filesystem API error:', fsErr);
+            alert('Error al guardar audio: ' + fsErr);
+          }
+        };
+        xhr.send();
+      }
+    } catch (err) {
+      console.error('[APK] Error stopping recording:', err);
+    }
+  };
 
   const fetchTeam = useCallback(async () => {
     // v264: Robust user fetching with offline fallback
@@ -284,21 +470,61 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
 
   const handleGetGPS = async () => {
     setGpsLoading(true)
-    if (!navigator.geolocation) {
-      alert('Tu navegador no soporta geolocalización')
-      setGpsLoading(false)
-      return
+    
+    try {
+      const { Capacitor } = await import('@capacitor/core');
+      
+      if (Capacitor.isNativePlatform()) {
+        // APK: usar plugin nativo
+        const { Geolocation } = await import('@capacitor/geolocation');
+        
+        try {
+          const perm = await Geolocation.requestPermissions();
+          if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+            alert('Permiso de ubicación denegado');
+            setGpsLoading(false);
+            return;
+          }
+        } catch (permErr) {
+          console.warn('[APK] Permiso no disponible, intentando directo');
+        }
+        
+        const position = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true
+        });
+        
+        const { latitude, longitude } = position.coords;
+        const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+        setProjectData({ ...projectData, locationLink: mapsUrl });
+        setGpsLoading(false);
+      } else {
+        // PWA: usar geolocation del navegador
+        if (!navigator.geolocation) {
+          alert('Tu navegador no soporta geolocalización');
+          setGpsLoading(false);
+          return;
+        }
+        
+        navigator.geolocation.getCurrentPosition((pos) => {
+          const { latitude, longitude } = pos.coords;
+          const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+          setProjectData({ ...projectData, locationLink: mapsUrl });
+          setGpsLoading(false);
+        }, (err) => {
+          console.error(err);
+          alert('No se pudo obtener la ubicación');
+          setGpsLoading(false);
+        }, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0
+        });
+      }
+    } catch (err) {
+      console.error('[GPS] Error:', err);
+      alert('Error al obtener ubicación: ' + err);
+      setGpsLoading(false);
     }
-    navigator.geolocation.getCurrentPosition((pos) => {
-      const { latitude, longitude } = pos.coords
-      const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`
-      setProjectData({ ...projectData, locationLink: mapsUrl })
-      setGpsLoading(false)
-    }, (err) => {
-      console.error(err)
-      alert('No se pudo obtener la ubicación')
-      setGpsLoading(false)
-    })
   }
 
   const handleCreate = async () => {
@@ -437,7 +663,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
           }
         }
 
-        await db.outbox.add({
+        await addToOutbox({
           type: 'PROJECT',
           projectId: 0,
           payload: offlinePayload,
@@ -1109,65 +1335,105 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }} className="media-capture-row">
                        <label className="form-label" style={{ margin: 0 }}>Descripción Técnica y Multimedia</label>
                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                          <MediaCapture 
-                            mode="audio" 
-                            compact 
-                            onCapture={async (blob, type, text) => {
-                              try {
-                                const isOnline = navigator.onLine;
-                                let url = '';
-                                
-                                // Determine extension
-                                let ext = 'webm';
-                                if (blob.type.includes('mp4')) ext = 'm4a';
-                                else if (blob.type.includes('mpeg')) ext = 'mp3';
-                                
-                                let filename = `specs-audio-${Date.now()}.${ext}`;
-
-                                if (isOnline) {
-                                  const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
-                                  const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`);
-                                  url = result.url;
-                                  filename = result.filename;
-                                } else {
-                                  url = await new Promise((resolve) => {
-                                    const reader = new FileReader();
-                                    reader.onload = () => resolve(reader.result as string);
-                                    reader.readAsDataURL(blob);
-                                  });
+                          {Capacitor.isNativePlatform() ? (
+                            // APK: Botón de audio estilo WhatsApp
+                            <button
+                              type="button"
+                              onMouseDown={() => startVoiceRecording()}
+                              onMouseUp={() => stopVoiceRecording(true)}
+                              onTouchStart={(e) => { e.preventDefault(); startVoiceRecording(); }}
+                              onTouchEnd={() => stopVoiceRecording(true)}
+                              onTouchCancel={() => stopVoiceRecording(false)}
+                              className="btn-icon"
+                              style={{
+                                width: '44px',
+                                height: '44px',
+                                borderRadius: '50%',
+                                backgroundColor: isRecordingVoice ? '#e53935' : 'var(--primary)',
+                                color: 'white',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                border: 'none',
+                                cursor: 'pointer',
+                                boxShadow: isRecordingVoice ? '0 0 20px rgba(229, 57, 53, 0.6)' : '0 4px 15px var(--primary-glow)',
+                                animation: isRecordingVoice ? 'pulse 1s infinite' : 'none',
+                                transition: 'all 0.2s'
+                              }}
+                              title="Grabar Audio"
+                            >
+                              {isRecordingVoice ? (
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                              ) : (
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                              )}
+                            </button>
+                          ) : (
+                            // PWA: MediaCapture original
+                            <MediaCapture 
+                              mode="audio" 
+                              compact 
+                              onCapture={async (blob, type, text) => {
+                                try {
+                                  const isOnline = navigator.onLine;
+                                  let url = '';
+                                  let ext = 'webm';
+                                  if (blob.type.includes('mp4')) ext = 'm4a';
+                                  else if (blob.type.includes('mpeg')) ext = 'mp3';
+                                  let filename = `specs-audio-${Date.now()}.${ext}`;
+                                  if (isOnline) {
+                                    const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
+                                    const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`);
+                                    url = result.url;
+                                    filename = result.filename;
+                                  } else {
+                                    url = await new Promise((resolve) => {
+                                      const reader = new FileReader();
+                                      reader.onload = () => resolve(reader.result as string);
+                                      reader.readAsDataURL(blob);
+                                    });
+                                  }
+                                  setProjectData(prev => ({ ...prev, specsAudioUrl: isOnline ? url : '' }));
+                                  const fileObj: any = {
+                                    id: `audio-${Date.now()}`,
+                                    name: filename,
+                                    type: 'AUDIO',
+                                    url: url,
+                                    size: blob.size,
+                                    category: 'MASTER',
+                                    mimeType: blob.type || 'audio/webm'
+                                  }
+                                  setUploadedFiles(prev => [...prev, fileObj]);
+                                  if (text && !text.includes('Error:')) {
+                                    updateSpec('description', (projectData.technicalSpecs.description || '') + (projectData.technicalSpecs.description ? ' ' : '') + text);
+                                  }
+                                } catch (err) {
+                                  console.error('Error handling specs audio:', err);
                                 }
-
-                                setProjectData(prev => ({ ...prev, specsAudioUrl: isOnline ? url : '' }));
-                                
-                                // Also add to gallery as MASTER
-                                const fileObj: any = {
-                                  id: `audio-${Date.now()}`,
-                                  name: filename,
-                                  type: 'AUDIO',
-                                  url: url,
-                                  size: blob.size,
-                                  category: 'MASTER',
-                                  mimeType: blob.type || 'audio/webm'
-                                }
-                                setUploadedFiles(prev => [...prev, fileObj]);
-                                
-                                // Only append if text is valid (not empty or error message)
-                                if (text && !text.includes('Error:')) {
-                                  updateSpec('description', (projectData.technicalSpecs.description || '') + (projectData.technicalSpecs.description ? ' ' : '') + text);
-                                }
-                              } catch (err) {
-                                console.error('Error handling specs audio:', err);
-                              }
-                            }} 
-                          />
-                          <button 
-                             type="button"
-                             onClick={() => setShowCameraCapture(true)} 
-                             className="btn btn-secondary" 
-                             style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 15px', borderRadius: '16px' }}
-                          >
-                             📸 Cámara (Foto/Video)
-                          </button>
+                              }} 
+                            />
+                          )}
+                          {Capacitor.isNativePlatform() ? (
+                            // APK: Selector de Foto/Video
+                            <button 
+                              type="button"
+                              onClick={() => setShowCameraTypeModal(true)} 
+                              className="btn btn-secondary" 
+                              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 15px', borderRadius: '16px' }}
+                            >
+                              📷 Cámara (Foto/Video)
+                            </button>
+                          ) : (
+                            // PWA: Cámara original
+                            <button 
+                              type="button"
+                              onClick={() => setShowCameraCapture(true)} 
+                              className="btn btn-secondary" 
+                              style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '0 15px', borderRadius: '16px' }}
+                            >
+                              📸 Cámara (Foto/Video)
+                            </button>
+                          )}
                           <button 
                              type="button"
                              onClick={() => setShowGallery(true)} 
@@ -1243,10 +1509,162 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                       </div>
                     )}
 
-                    {showCameraCapture && (
-                      <div className="animate-slide-down" style={{ marginBottom: '25px', padding: '20px', backgroundColor: 'var(--bg-deep)', borderRadius: '16px', border: '1px solid var(--border)' }}>
-                         <h3 style={{ marginTop: 0, marginBottom: '15px', fontSize: '1.1rem', textAlign: 'center' }}>Cámara Integrada</h3>
-                         <CameraCapture 
+                    {Capacitor.isNativePlatform() ? (
+                      // APK: Modal Nativo de Foto/Video
+                      <>
+                        {showCameraTypeModal && (
+                          <div className="media-modal-overlay" onClick={() => setShowCameraTypeModal(false)}>
+                            <div className="media-modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '320px', textAlign: 'center' }}>
+                              <h3 style={{ marginTop: 0 }}>📷 Seleccionar tipo</h3>
+                              <p style={{ color: '#a0a0a0', marginBottom: '20px' }}>¿Qué deseas capturar?</p>
+                              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+                                <button
+                                  onClick={async () => {
+                                    setShowCameraTypeModal(false);
+                                    try {
+                                      const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera');
+                                      const media = await Camera.getPhoto({
+                                        quality: 90,
+                                        allowEditing: false,
+                                        resultType: CameraResultType.Uri,
+                                        source: CameraSource.Camera,
+                                      });
+                                      if (media.webPath) {
+                                        const resp = await fetch(media.webPath);
+                                        const blob = await resp.blob();
+                                        const filename = `Foto-${Date.now()}.jpg`;
+                                        let url = '';
+                                        const isOnline = navigator.onLine;
+                                        if (isOnline) {
+                                          const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
+                                          const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`);
+                                          url = result.url;
+                                        } else {
+                                          url = await new Promise((resolve) => {
+                                            const reader = new FileReader();
+                                            reader.onload = () => resolve(reader.result as string);
+                                            reader.readAsDataURL(blob);
+                                          });
+                                        }
+                                        const fileObj: any = {
+                                          id: `capture-${Date.now()}`,
+                                          name: filename,
+                                          type: 'IMAGE',
+                                          url: url,
+                                          size: blob.size,
+                                          category: 'MASTER',
+                                          mimeType: 'image/jpeg'
+                                        };
+                                        setUploadedFiles(prev => [...prev, fileObj]);
+                                      }
+                                    } catch (err) {
+                                      console.error('[APK] Error cámara foto:', err);
+                                      alert('Error: ' + err);
+                                    }
+                                  }}
+                                  style={{
+                                    flex: 1,
+                                    padding: '20px',
+                                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                                    border: 'none',
+                                    borderRadius: '12px',
+                                    color: 'white',
+                                    fontSize: '16px',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    gap: '8px'
+                                  }}
+                                >
+                                  <span style={{ fontSize: '32px' }}>📷</span>
+                                  <span>Foto</span>
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    setShowCameraTypeModal(false);
+                                    try {
+                                      const { Camera } = await import('@capacitor/camera');
+                                      const media = await Camera.recordVideo({});
+                                      console.log('[APK] Video grabado:', media);
+                                      if (media.uri) {
+                                        const resp = await fetch(media.uri);
+                                        const blob = await resp.blob();
+                                        const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+                                        const filename = `Video-${Date.now()}.${ext}`;
+                                        let url = '';
+                                        const isOnline = navigator.onLine;
+                                        if (isOnline) {
+                                          const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
+                                          const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`);
+                                          url = result.url;
+                                        } else {
+                                          url = await new Promise((resolve) => {
+                                            const reader = new FileReader();
+                                            reader.onload = () => resolve(reader.result as string);
+                                            reader.readAsDataURL(blob);
+                                          });
+                                        }
+                                        const fileObj: any = {
+                                          id: `capture-${Date.now()}`,
+                                          name: filename,
+                                          type: 'VIDEO',
+                                          url: url,
+                                          size: blob.size,
+                                          category: 'MASTER',
+                                          mimeType: blob.type
+                                        };
+                                        setUploadedFiles(prev => [...prev, fileObj]);
+                                      }
+                                    } catch (err) {
+                                      console.error('[APK] Error cámara video:', err);
+                                      alert('Error: ' + err);
+                                    }
+                                  }}
+                                  style={{
+                                    flex: 1,
+                                    padding: '20px',
+                                    background: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                                    border: 'none',
+                                    borderRadius: '12px',
+                                    color: 'white',
+                                    fontSize: '16px',
+                                    fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    gap: '8px'
+                                  }}
+                                >
+                                  <span style={{ fontSize: '32px' }}>🎥</span>
+                                  <span>Video</span>
+                                </button>
+                              </div>
+                              <button
+                                onClick={() => setShowCameraTypeModal(false)}
+                                style={{
+                                  marginTop: '16px',
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#a0a0a0',
+                                  cursor: 'pointer',
+                                  fontSize: '14px'
+                                }}
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      // PWA: Cámara custom
+                      showCameraCapture && (
+                        <div className="animate-slide-down" style={{ marginBottom: '25px', padding: '20px', backgroundColor: 'var(--bg-deep)', borderRadius: '16px', border: '1px solid var(--border)' }}>
+                           <h3 style={{ marginTop: 0, marginBottom: '15px', fontSize: '1.1rem', textAlign: 'center' }}>Cámara Integrada</h3>
+                           <CameraCapture 
                                        onPhotoCapture={async (blob) => {
                                try {
                                   setShowCameraCapture(false)
@@ -1320,7 +1738,8 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                             }}
                             onClose={() => setShowCameraCapture(false)}
                          />
-                      </div>
+                        </div>
+                      )
                     )}
                   </div>
                 )}

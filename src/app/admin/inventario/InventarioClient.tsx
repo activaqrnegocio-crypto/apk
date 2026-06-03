@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { revalidateRoute } from '@/actions/revalidate'
+import { db } from '@/lib/db'
+import { addToOutbox } from '@/lib/storage'
 
 export default function InventarioClient({ initialMaterials }: { initialMaterials: any[] }) {
   const [materials, setMaterials] = useState(initialMaterials)
@@ -91,31 +93,30 @@ export default function InventarioClient({ initialMaterials }: { initialMaterial
     const payload = { ...newItem, unitPrice: Number(newItem.unitPrice), stock: Number(newItem.stock) }
 
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        try {
-            const { db } = await import('@/lib/db')
-            await db.outbox.add({
-               type: 'MATERIAL',
-               projectId: 0,
-               payload,
-               timestamp: Date.now(),
-               status: 'pending'
-            })
-            const tempMaterial = { 
-               ...payload, 
-               id: Date.now(), 
-               isActive: true, 
-               createdAt: new Date(), 
-               updatedAt: new Date()
-            }
-            setMaterials([tempMaterial, ...materials])
-            setShowModal(false)
-            setNewItem({ code: '', name: '', description: '', unitPrice: 0, stock: 1, category: '' })
-            alert('Material encolado sin conexión. Se sincronizará pronto.')
-            return
-        } catch (e) {
-            alert('Error en IndexedDB local.')
-            return
+      try {
+        await addToOutbox({
+           type: 'MATERIAL',
+           projectId: 0,
+           payload,
+           timestamp: Date.now(),
+           status: 'pending'
+        })
+        const tempMaterial = { 
+           ...payload, 
+           id: Date.now(), 
+           isActive: true, 
+           createdAt: new Date(), 
+           updatedAt: new Date()
         }
+        setMaterials([tempMaterial, ...materials])
+        setShowModal(false)
+        setNewItem({ code: '', name: '', description: '', unitPrice: 0, stock: 1, category: '' })
+        alert('Material encolado sin conexión. Se sincronizará pronto.')
+        return
+      } catch (e) {
+        alert('Error en IndexedDB local.')
+        return
+      }
     }
 
     try {

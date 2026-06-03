@@ -1,0 +1,1 @@
+Test desde PowerShell directo sin corrupcion

@@ -15,6 +15,7 @@ import { compressImage as optimizedCompress, isCompressibleImage, blobToBase64 }
 import { useProjectCache } from '@/hooks/useProjectCache'
 import VideoThumbnail from '@/components/VideoThumbnail'
 import { db } from '@/lib/db'
+import { addToOutbox } from '@/lib/storage'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { revalidateRoute } from '@/actions/revalidate'
 import ProjectHeader from '@/components/project/ProjectHeader'
@@ -820,7 +821,7 @@ export default function ProjectDetailBase({
       try {
         const syncId = `gallery-delete-${project.id}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
         await db.transaction('rw', db.outbox, async () => {
-          await db.outbox.add({
+          await addToOutbox({
             type: 'GALLERY_DELETE',
             projectId: project.id,
             payload: { galleryId: itemId },
@@ -887,7 +888,7 @@ export default function ProjectDetailBase({
         // v277: Simplified delete for bulk operations
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
            const syncId = `gallery-delete-${project.id}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-           await db.outbox.add({
+           await addToOutbox({
              type: 'GALLERY_DELETE',
              projectId: project.id,
              payload: { galleryId: item.id },
@@ -947,7 +948,7 @@ export default function ProjectDetailBase({
       try {
         const syncId = `project-update-${project.id}-${Date.now()}-${Math.random().toString(36).substring(7)}`;
         await db.transaction('rw', db.outbox, async () => {
-          await db.outbox.add({
+          await addToOutbox({
             type: 'PROJECT_UPDATE',
             projectId: project.id,
             payload: fichaPayload,
@@ -1098,7 +1099,7 @@ export default function ProjectDetailBase({
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       try {
         await db.transaction('rw', db.outbox, async () => {
-          await db.outbox.add({
+          await addToOutbox({
             type: 'EXPENSE',
             projectId: project?.id || 0,
             payload: expensePayload,
@@ -1163,7 +1164,7 @@ export default function ProjectDetailBase({
     setIsSavingBudget(true)
     try {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        await db.outbox.add({
+        await addToOutbox({
           type: 'PROJECT_UPDATE',
           projectId: project.id,
           payload: { estimatedBudget: Number(editBudget) },
@@ -1367,7 +1368,7 @@ export default function ProjectDetailBase({
       }
 
       // Exactly like ProjectCreationWizard line 438-444:
-      await db.outbox.add({
+      await addToOutbox({
         type: 'GALLERY_UPLOAD',
         projectId: project.id,
         payload: {
@@ -1404,7 +1405,7 @@ export default function ProjectDetailBase({
     setIsRenamingItem(true)
     try {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        await db.outbox.add({
+        await addToOutbox({
           type: 'GALLERY_RENAME',
           projectId: project.id,
           payload: { galleryId: itemId, filename: editingFilename },
@@ -1442,7 +1443,7 @@ export default function ProjectDetailBase({
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         for (const phase of editingPhases) {
           if (phase.isNew) {
-            await db.outbox.add({
+            await addToOutbox({
               type: 'PHASE_CREATE', // Note: Need to check if worker handles this, or use POST to /phases
               projectId: project.id,
               payload: { ...phase, displayOrder: editingPhases.indexOf(phase) + 1 },
@@ -1450,7 +1451,7 @@ export default function ProjectDetailBase({
               status: 'pending'
             })
           } else {
-            await db.outbox.add({
+            await addToOutbox({
               type: 'PHASE_UPDATE',
               projectId: project.id,
               payload: { 
@@ -1566,7 +1567,7 @@ export default function ProjectDetailBase({
             let offlinePayload = { ...payload }
             // v262: Transacción atómica
             await db.transaction('rw', db.outbox, async () => {
-              await db.outbox.add({
+              await addToOutbox({
                  type: 'MESSAGE',
                  projectId: project.id,
                  payload: offlinePayload,
@@ -1705,7 +1706,7 @@ export default function ProjectDetailBase({
         }
 
         await db.transaction('rw', db.outbox, async () => {
-          await db.outbox.add({
+          await addToOutbox({
              type: 'MESSAGE',
              projectId: project.id,
              payload: {
@@ -1803,7 +1804,7 @@ export default function ProjectDetailBase({
       }
 
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        await db.outbox.add({
+        await addToOutbox({
           type: 'EXPENSE',
           projectId: project.id,
           payload: editingExpense ? { ...payload, id: editingExpense.id } : payload,
@@ -1862,7 +1863,7 @@ export default function ProjectDetailBase({
     setIsDeletingExpense(true)
     try {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        await db.outbox.add({
+        await addToOutbox({
           type: 'EXPENSE_DELETE',
           projectId: project.id,
           payload: { expenseId },
@@ -2275,7 +2276,7 @@ export default function ProjectDetailBase({
     setIsUpdatingStatus(true)
     try {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        await db.outbox.add({
+        await addToOutbox({
           type: 'PROJECT_UPDATE',
           projectId: project.id,
           payload: { status: newStatus },

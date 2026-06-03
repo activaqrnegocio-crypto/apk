@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { getLocalNow, formatToEcuador, toEcuadorISODate } from '@/lib/date-utils'
 import { db } from '@/lib/db'
+import { addToOutbox } from '@/lib/storage'
 import { useLiveQuery } from 'dexie-react-hooks'
 import Link from 'next/link'
 import { usePushNotifications } from '@/hooks/usePushNotifications'
@@ -638,7 +639,7 @@ export default function OperatorDashboardClient({
 
         if (!success) {
           // Queue in outbox if fetch failed or returned error (offline case)
-          await db.outbox.add({
+          await addToOutbox({
             type: 'PROJECT_DELETE',
             projectId: Number(pId),
             payload: { id: pId },
@@ -866,7 +867,7 @@ export default function OperatorDashboardClient({
       try {
         const parsed = JSON.parse(legacy)
         parsed.forEach(async (p: any) => {
-          await db.outbox.add({
+          await addToOutbox({
             type: 'PROJECT',
             projectId: 0,
             payload: p.payload,
@@ -919,7 +920,7 @@ export default function OperatorDashboardClient({
       await db.appointmentsCache.update(task.id, { status: newStatus })
     } catch (e) {
       console.warn('[Offline] Task status toggle failed or offline, adding to outbox')
-      await db.outbox.add({
+      await addToOutbox({
         type: 'TASK_STATUS_TOGGLE',
         projectId: task.project?.id || task.projectId || 0,
         payload: { appointmentId: task.id, status: newStatus },

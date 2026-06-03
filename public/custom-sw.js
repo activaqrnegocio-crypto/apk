@@ -1,10 +1,24 @@
-const SW_VERSION = 'v377-bunny-storage-reorg';
+﻿const SW_VERSION = 'v377-bunny-storage-reorg';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
 const ASSETS_CACHE = `aquatech-assets-${SW_VERSION}`;
 const FONTS_CACHE  = `aquatech-fonts-${SW_VERSION}`;
 const RSC_CACHE    = `aquatech-rsc-${SW_VERSION}`;
+
+// ─── v380: NATIVE PLATFORM DETECTION ────────────────────────
+// Detecta si estamos en APK (Capacitor) vs PWA (browser)
+// Esto permite hacer routing entre SQLite nativo (APK) e IndexedDB (PWA)
+var isAndroidNative = false;
+try {
+  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform) {
+    isAndroidNative = window.Capacitor.isNativePlatform();
+  }
+} catch (e) {
+  // Capacitor no disponible - somos PWA
+  isAndroidNative = false;
+}
+console.log('[SW] Plataforma detectada:', isAndroidNative ? 'Android APK' : 'PWA/Browser');
 
 // ─── v337: SELF-WAKING POLLER ───────────────────────────────
 // The ONLY reliable way to ensure background sync on mobile devices.
@@ -1408,6 +1422,296 @@ function openAquatechDB() {
   });
 }
 
+// ─── v380: NATIVE SQLITE BRIDGE FOR APK ───────────────────────────
+// The SW cannot access SQLite directly (no native plugin access).
+// Instead, it sends a message to the main app context which has
+// native-storage initialized, and gets the pending items back.
+async function getNativePendingItems() {
+  if (!isAndroidNative) return null;
+  
+  try {
+    const pending = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Native SQLite timeout'));
+      }, 8000);
+      
+      // Send message to native context (main app window)
+      // The native-storage.ts in the app context listens for this and responds
+      window.postMessage({ type: 'SW_NATIVE_SYNC_REQUEST', timestamp: Date.now() }, '*');
+      
+      // Listen for response
+      const handler = (event) => {
+        if (event.data?.type === 'SW_NATIVE_SYNC_RESPONSE') {
+          clearTimeout(timeout);
+          window.removeEventListener('message', handler);
+          resolve(event.data.items || []);
+        }
+      };
+      window.addEventListener('message', handler);
+    });
+    
+    console.log(`[SW] APK: Got ${pending?.length || 0} items from native SQLite`);
+    return pending;
+  } catch (e) {
+    console.warn('[SW] APK: Native SQLite not available, will use IndexedDB:', e.message);
+    return null;
+  }
+}
+
+// Mark an item as processed in native SQLite
+async function markNativeItemProcessed(id) {
+  if (!isAndroidNative) return;
+  
+  try {
+    window.postMessage({ type: 'SW_NATIVE_MARK_PROCESSED', id, timestamp: Date.now() }, '*');
+  } catch (e) {
+    console.warn('[SW] APK: Failed to mark item as processed in SQLite:', e.message);
+  }
+}
+
+// v380: Process a single outbox item (used by APK native sync)
+async function processOutboxItemSync(item) {
+  try {
+    // Get auth from IndexedDB
+    const auth = await getAuthFromIndexedDB();
+    if (!auth) {
+      return { success: false, error: 'No auth found' };
+    }
+
+    const token = auth.username; // In this app, username is the session token
+    const baseUrl = self.location.origin;
+    
+    const syncId = item.syncId || `native-${item.id}-${Date.now()}`;
+    
+    // Build headers
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-sync-id': syncId,
+      'Cookie': `next-auth.session-token=${token}`,
+    };
+
+    // Process based on type
+    switch (item.type) {
+      case 'MESSAGE': {
+        const { projectId, ...msgPayload } = item.payload;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}/messages`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(msgPayload)
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`MESSAGE failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'EXPENSE': {
+        const projectId = item.payload?.projectId || item.projectId || 0;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}/expenses`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(item.payload)
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`EXPENSE failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'EXPENSE_DELETE': {
+        const projectId = item.payload?.projectId || item.projectId || 0;
+        const expenseId = item.payload?.expenseId;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}/expenses/${expenseId}`, {
+            method: 'DELETE',
+            headers
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`EXPENSE_DELETE failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'PROJECT': {
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(item.payload)
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`PROJECT failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'PROJECT_UPDATE': {
+        const projectId = item.payload?.id || item.projectId;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify(item.payload)
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`PROJECT_UPDATE failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'PROJECT_DELETE': {
+        const projectId = item.payload?.id || item.projectId;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}`, {
+            method: 'DELETE',
+            headers
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`PROJECT_DELETE failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'TASK':
+      case 'TASK_STATUS_TOGGLE': {
+        const projectId = item.payload?.projectId || item.projectId || 0;
+        const taskId = item.payload?.id || item.payload?.appointmentId;
+        
+        if (item.type === 'TASK_STATUS_TOGGLE') {
+          const status = item.payload?.status;
+          const res = await fetchWithTimeout(
+            new Request(`${baseUrl}/api/appointments/${taskId}/status`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify({ status })
+            }),
+            30000
+          );
+          if (!res.ok) throw new Error(`TASK_STATUS_TOGGLE failed: ${res.status}`);
+        } else {
+          const res = await fetchWithTimeout(
+            new Request(`${baseUrl}/api/appointments`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(item.payload)
+            }),
+            30000
+          );
+          if (!res.ok) throw new Error(`TASK failed: ${res.status}`);
+        }
+        return { success: true };
+      }
+      
+      case 'GALLERY_DELETE': {
+        const projectId = item.payload?.projectId || item.projectId || 0;
+        const galleryId = item.payload?.galleryId;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}/gallery/${galleryId}`, {
+            method: 'DELETE',
+            headers
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`GALLERY_DELETE failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'GALLERY_RENAME': {
+        const projectId = item.payload?.projectId || item.projectId || 0;
+        const galleryId = item.payload?.galleryId;
+        const filename = item.payload?.filename;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}/gallery/${galleryId}`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ filename })
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`GALLERY_RENAME failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'MATERIAL': {
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/materials`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(item.payload)
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`MATERIAL failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'QUOTE': {
+        const projectId = item.projectId || 0;
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/projects/${projectId}/quotes`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(item.payload)
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`QUOTE failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      case 'PHASE_CREATE':
+      case 'PHASE_UPDATE': {
+        const projectId = item.projectId || 0;
+        const phaseId = item.payload?.phaseId;
+        
+        if (item.type === 'PHASE_CREATE') {
+          const res = await fetchWithTimeout(
+            new Request(`${baseUrl}/api/projects/${projectId}/phases`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(item.payload)
+            }),
+            30000
+          );
+          if (!res.ok) throw new Error(`PHASE_CREATE failed: ${res.status}`);
+        } else {
+          const res = await fetchWithTimeout(
+            new Request(`${baseUrl}/api/projects/${projectId}/phases/${phaseId}`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify(item.payload)
+            }),
+            30000
+          );
+          if (!res.ok) throw new Error(`PHASE_UPDATE failed: ${res.status}`);
+        }
+        return { success: true };
+      }
+      
+      case 'DAY_START':
+      case 'DAY_END': {
+        const res = await fetchWithTimeout(
+          new Request(`${baseUrl}/api/attendance`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(item.payload)
+          }),
+          30000
+        );
+        if (!res.ok) throw new Error(`${item.type} failed: ${res.status}`);
+        return { success: true };
+      }
+      
+      default:
+        return { success: false, error: `Unknown type: ${item.type}` };
+    }
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
+
 /**
  * v319: Centralized logger for SW to IndexedDB
  */
@@ -1473,6 +1777,47 @@ async function processOutboxSync(isForced = false, specificType = null) {
 }
 
 async function _internalProcessOutbox(isForced = false, specificType = null) {
+  // v380: APK with native storage — use message passing to get items from SQLite
+  if (isAndroidNative) {
+    try {
+      const nativeItems = await getNativePendingItems();
+      
+      if (nativeItems && nativeItems.length > 0) {
+        console.log(`[SW] APK mode: Processing ${nativeItems.length} items from SQLite`);
+        
+        // Process items directly (SQLite items already have id, type, payload, createdAt)
+        // Use the same sync logic but without IndexedDB
+        for (const item of nativeItems) {
+          try {
+            // Process via fetch (same as normal sync flow)
+            const result = await processOutboxItemSync(item);
+            if (result.success) {
+              // Mark as processed in native SQLite
+              await markNativeItemProcessed(item.id);
+              console.log(`[SW] APK: Synced item ${item.id} (${item.type})`);
+            } else {
+              console.warn(`[SW] APK: Failed to sync item ${item.id}:`, result.error);
+            }
+          } catch (e) {
+            console.error(`[SW] APK: Error processing item ${item.id}:`, e);
+          }
+        }
+        
+        console.log(`[SW] APK: Finished processing ${nativeItems.length} items from SQLite`);
+        isSyncingGlobal = false;
+        return;
+      } else {
+        console.log('[SW] APK mode: No pending items in SQLite');
+        isSyncingGlobal = false;
+        return;
+      }
+    } catch (e) {
+      console.warn('[SW] APK mode: Native sync failed, falling back to IndexedDB:', e.message);
+      // Fall through to IndexedDB fallback
+    }
+  }
+
+  // PWA or APK fallback: Use IndexedDB
   let db;
   try {
     db = await openAquatechDB();

@@ -1,0 +1,2 @@
+Prueba 2: Verificación de corrupción.
+Este archivo debería estar limpio también.

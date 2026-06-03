@@ -1,0 +1,33 @@
+package com.aquatech.crm
+
+android {
+    namespace 'com.aquatech.crm'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.aquatech.crm"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+    }
+
+    lint {
+        abortOnError false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'src/main', include: ['*.jar'])
+}

@@ -56,6 +56,7 @@ const config: NextConfig = {
   // The next-pwa wrapper injects a webpack config internally, but Next 16 defaults to Turbopack.
   // An empty turbopack config tells Next.js we're aware and it's intentional.
   turbopack: {},
+  allowedDevOrigins: ['10.0.2.2'],
   experimental: {
     serverActions: {
       bodySizeLimit: '200mb',
