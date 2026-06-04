@@ -6,6 +6,8 @@ import { usePathname } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import ServiceWorkerRegistration from '@/components/ServiceWorkerRegistration'
 import StorageInitializer from '@/components/StorageInitializer'
+import NotificationPrompt from '@/components/NotificationPrompt'
+import NativePluginsPrefetcher from '@/components/NativePluginsPrefetcher'
 import { Suspense } from 'react'
 import dynamic from 'next/dynamic'
 
@@ -85,9 +87,11 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       <StorageInitializer>
         {children}
       </StorageInitializer>
+      <NotificationPrompt />
       {showSync && (
         <>
           <GlobalSyncWorker />
+          <NativePluginsPrefetcher />
           <OfflinePrefetcher urls={pagesToPrefetch} />
           <SyncToast />
         </>

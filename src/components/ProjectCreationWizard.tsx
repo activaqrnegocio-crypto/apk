@@ -225,12 +225,27 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
   };
 
   const stopVoiceRecording = async (send: boolean) => {
-    // Clear recording state immediately
+    // Prevent double-stop race condition
+    if (!isRecordingRef.current && !isRecordingVoice) {
+      console.log('[APK] stopVoiceRecording: no estaba grabando, ignorando');
+      return;
+    }
+    
     const wasRecording = isRecordingRef.current;
     isRecordingRef.current = false;
     setIsRecordingVoice(false);
     
-    if (!send || !wasRecording) return;
+    if (!send || !wasRecording) {
+      console.log('[APK] stopVoiceRecording: no enviando, solo parando');
+      // If it was recording, force stop anyway (for onTouchCancel case)
+      try {
+        const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
+        await CapacitorAudioRecorder.stopRecording();
+      } catch (e) {
+        // Ignore stop errors
+      }
+      return;
+    }
     
     try {
       const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
@@ -1339,11 +1354,12 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                             // APK: Botón de audio estilo WhatsApp
                             <button
                               type="button"
-                              onMouseDown={() => startVoiceRecording()}
-                              onMouseUp={() => stopVoiceRecording(true)}
+                              onMouseDown={(e) => { e.preventDefault(); startVoiceRecording(); }}
+                              onMouseUp={(e) => { e.preventDefault(); stopVoiceRecording(true); }}
+                              onMouseLeave={() => stopVoiceRecording(false)}
                               onTouchStart={(e) => { e.preventDefault(); startVoiceRecording(); }}
-                              onTouchEnd={() => stopVoiceRecording(true)}
-                              onTouchCancel={() => stopVoiceRecording(false)}
+                              onTouchEnd={(e) => { e.preventDefault(); stopVoiceRecording(true); }}
+                              onTouchCancel={(e) => { e.preventDefault(); stopVoiceRecording(false); }}
                               className="btn-icon"
                               style={{
                                 width: '44px',
@@ -1705,12 +1721,16 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                   setShowCameraCapture(false)
                                   const isOnline = navigator.onLine;
                                   let url = '';
-                                  const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+                                  // Forzar extensión correcta para videos nativos de Android
+                                  const ext = 'mp4'; // Android casi siempre genera mp4 via Camera plugin
                                   let filename = `Video-${Date.now()}.${ext}`;
+                                  const videoMimeType = 'video/mp4';
 
                                   if (isOnline) {
                                     const { uploadToBunnyClientSide } = await import('@/lib/storage-client')
-                                    const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`)
+                                    // Crear blob con tipo correcto
+                                    const properBlob = new Blob([blob], { type: videoMimeType });
+                                    const result = await uploadToBunnyClientSide(properBlob, filename, `Proyectos/temp/${uploadTempId}`)
                                     url = result.url;
                                     filename = result.filename;
                                   } else {
@@ -1728,7 +1748,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                      url: url,
                                      size: blob.size,
                                      category: 'MASTER',
-                                     mimeType: blob.type
+                                     mimeType: videoMimeType
                                   }
                                   setUploadedFiles(prev => [...prev, fileObj])
                                } catch (err) {

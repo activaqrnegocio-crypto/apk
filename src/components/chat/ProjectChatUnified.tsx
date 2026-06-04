@@ -1144,19 +1144,41 @@ export default function ProjectChatUnified({
         </div>
       )}
 
-      {/* --- MEDIA CAPTURE MODAL - APK AUDIO RECORDER --- */}
+      {/* --- MEDIA CAPTURE MODAL - AUDIO (PWA: MediaCapture, APK: NativeCameraCapture) --- */}
       {showMediaCapture === 'audio' && (
-        <NativeCameraCapture
-          onPhotoCapture={() => {}}
-          onVideoCapture={() => {}}
-          onAudioCapture={(blob, url) => {
-            const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
-            const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
-            onSendMessage('Nota de voz', 'AUDIO', { file: mediaFile });
-            setShowMediaCapture(undefined);
-          }}
-          onClose={() => setShowMediaCapture(undefined)}
-        />
+        (() => {
+          const isNative = typeof navigator !== 'undefined' && navigator.userAgent.includes('Capacitor');
+          if (isNative) {
+            // APK: Use native audio recorder
+            return (
+              <NativeCameraCapture
+                onPhotoCapture={() => {}}
+                onVideoCapture={() => {}}
+                onAudioCapture={(blob, url) => {
+                  const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+                  const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
+                  onSendMessage('Nota de voz', 'AUDIO', { file: mediaFile });
+                  setShowMediaCapture(undefined);
+                }}
+                onClose={() => setShowMediaCapture(undefined)}
+              />
+            );
+          } else {
+            // PWA: Use browser MediaCapture API
+            return (
+              <MediaCapture
+                onCapture={(blob, type, transcription) => {
+                  const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+                  const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
+                  onSendMessage(`🎤 Nota de voz`, 'AUDIO', { file: mediaFile });
+                  setShowMediaCapture(undefined);
+                }}
+                mode="audio"
+                placeholder="Grabando nota de voz..."
+              />
+            );
+          }
+        })()
       )}
 
       {/* --- APK CAMERA TYPE MODAL --- */}
@@ -1455,11 +1477,16 @@ export default function ProjectChatUnified({
         <div className="media-modal-overlay" style={{ zIndex: 1100 }}>
           <CameraCapture 
             onPhotoCapture={(blob, url) => {
-              setCapturedMedia({ type: 'photo', blob, url });
+              // PWA: Enviar foto directamente al chat
+              const ext = blob.type.includes('jpeg') || blob.type.includes('jpg') ? 'jpg' : 'png';
+              const mediaFile = new File([blob], `photo_${Date.now()}.${ext}`, { type: blob.type });
+              onSendMessage('📷 Foto', 'IMAGE', { file: mediaFile });
               setShowCamera(false);
             }}
             onVideoCapture={(blob, url) => {
-              setCapturedMedia({ type: 'video', blob, url });
+              // PWA: Enviar video directamente al chat
+              const mediaFile = new File([blob], `video_${Date.now()}.mp4`, { type: 'video/mp4' });
+              onSendMessage('🎥 Video', 'VIDEO', { file: mediaFile });
               setShowCamera(false);
             }}
             onClose={() => setShowCamera(false)}
@@ -1485,14 +1512,14 @@ export default function ProjectChatUnified({
                       resultType: CameraResultType.Uri,
                       source: CameraSource.Camera,
                     });
-                    if (media.webPath) {
-                      const resp = await fetch(media.webPath);
+                    // v382: Use webPath for Uri result type ( Capacitor Camera )
+                    const path = (media as any).uri || (media as any).webPath;
+                    if (path) {
+                      const resp = await fetch(path);
                       const blob = await resp.blob();
-                      setCapturedMedia({ 
-                        type: 'photo', 
-                        blob, 
-                        url: URL.createObjectURL(blob) 
-                      });
+                      // APK: Enviar foto directamente al chat
+                      const mediaFile = new File([blob], `photo_${Date.now()}.jpg`, { type: 'image/jpeg' });
+                      onSendMessage('📷 Foto', 'IMAGE', { file: mediaFile });
                     }
                   } catch (err) {
                     console.error('[APK] Error cámara foto:', err);
@@ -1528,11 +1555,9 @@ export default function ProjectChatUnified({
                     if (media.uri) {
                       const resp = await fetch(media.uri);
                       const blob = await resp.blob();
-                      setCapturedMedia({ 
-                        type: 'video', 
-                        blob, 
-                        url: URL.createObjectURL(blob) 
-                      });
+                      // APK: Enviar video directamente al chat
+                      const mediaFile = new File([blob], `video_${Date.now()}.mp4`, { type: 'video/mp4' });
+                      onSendMessage('🎥 Video', 'VIDEO', { file: mediaFile });
                     }
                   } catch (err) {
                     console.error('[APK] Error cámara video:', err);

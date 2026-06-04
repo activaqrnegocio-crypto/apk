@@ -525,17 +525,19 @@ async function rscNetworkFirst(request) {
                                    url.pathname.includes('/operador/proyecto/');
 
       if (isAdminProjectRsc || isOperatorProjectRsc) {
-        console.log(`[SW ${VERSION}] RSC cache miss for project — trying Universal RSC Shell...`);
-        const shellRscUrl = isOperatorProjectRsc 
-          ? '/admin/operador/proyecto/offline-shell'
-          : '/admin/proyectos/offline-shell';
-        
-        const shellRsc = await rscCache.match(shellRscUrl, { ignoreVary: true, ignoreSearch: true });
-        if (shellRsc) return shellRsc;
-
+        // v381: APK should show the app shell, not 204
+        if (isAndroidNative) {
+          return caches.match('/admin/proyectos/offline-shell', { ignoreVary: true, ignoreSearch: true })
+            .then(shell => shell || new Response(null, { status: 204 }));
+        }
         return new Response(null, { status: 204 }); 
       }
       console.warn(`[SW ${VERSION}] RSC Network First failed completely for:`, url.pathname);
+      // v381: APK should try shell before returning 204
+      if (isAndroidNative) {
+        return caches.match('/admin/proyectos/offline-shell', { ignoreVary: true, ignoreSearch: true })
+          .then(shell => shell || new Response(null, { status: 204 }));
+      }
       return new Response(null, { status: 204 }); 
     }
   } catch (globalErr) {
@@ -706,11 +708,56 @@ async function navigationHandler(request) {
       }
     }
 
-    // ── STEP 4: OFFLINE FALLBACK ────────────────────────────
+    // ── STEP 4: APK OFFLINE — Serve app shell instead of offline.html ───
+    // v381: For Android APK, NEVER show offline.html. 
+    // Instead, redirect to the offline-shell which has the full app UI.
+    // This makes the APK feel like it's always online.
+    if (isAndroidNative) {
+      console.log('[SW v381] APK offline — serving app shell instead of offline.html');
+      
+      // Try to serve the operator or admin shell
+      const shellUrl = url.pathname.includes('/operador') 
+        ? '/admin/operador/proyecto/offline-shell'
+        : '/admin/proyectos/offline-shell';
+      
+      const shellMatch = await caches.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
+      if (isValidHTMLResponse(shellMatch)) {
+        return shellMatch;
+      }
+      
+      // If no shell, try dashboard
+      const dashboardUrl = url.pathname.includes('/operador') 
+        ? '/admin/operador'
+        : '/admin';
+      const dashboardMatch = await caches.match(dashboardUrl, { ignoreVary: true, ignoreSearch: true });
+      if (isValidHTMLResponse(dashboardMatch)) {
+        return dashboardMatch;
+      }
+      
+      // Last resort: try the offline-shell regardless of path
+      const fallbackShell = await caches.match('/admin/proyectos/offline-shell', { ignoreVary: true, ignoreSearch: true });
+      if (isValidHTMLResponse(fallbackShell)) {
+        return fallbackShell;
+      }
+      
+      // If nothing cached, return a minimal HTML that loads the app
+      return new Response(
+        '<!DOCTYPE html><html><head>' +
+        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<title>Aquatech CRM</title>' +
+        '<script>window.location.href="/admin/proyectos/offline-shell";</script>' +
+        '</head><body style="background:#0a0f1e;color:white;font-family:system-ui;">' +
+        '<p style="text-align:center;margin-top:50px;">Cargando app...</p>' +
+        '</body></html>',
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+      );
+    }
+    
+    // ── STEP 5: PWA Offline fallback ───────────────────────
     const offlinePage = await caches.match('/offline.html');
     if (offlinePage) return offlinePage;
 
-    // ── STEP 5: Absolute last resort ────────────────────────
+    // ── STEP 6: Absolute last resort (PWA) ──────────────────
     return new Response(
       '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
       '<title>Sin conexión</title></head>' +
