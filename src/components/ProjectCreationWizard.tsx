@@ -1625,7 +1625,8 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                           try {
                                             const { Filesystem } = await import('@capacitor/filesystem');
                                             const contents = await Filesystem.readFile({ path: media.uri });
-                                            const binary = atob(contents.data || contents);
+                                            const dataStr = typeof contents === 'string' ? contents : (contents.data ? String(contents.data) : '');
+                                            const binary = atob(dataStr);
                                             const bytes = new Uint8Array(binary.length);
                                             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
                                             blob = new Blob([bytes], { type: 'video/mp4' });
