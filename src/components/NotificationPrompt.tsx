@@ -23,20 +23,13 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
       return;
     }
 
-    // Verificar si ya se rechazó previamente
-    const dismissedKey = 'notifications_prompt_dismissed'
-    if (localStorage.getItem(dismissedKey)) {
-      console.log('[NotificationPrompt] Ya fue descartado antes')
-      return
-    }
-
-    // Verificar si ya tiene permiso
+    // En APK siempre mostrar el prompt después de 2 segundos (si no está concedido ya)
     PushNotifications.checkPermissions().then(result => {
       if (result.receive === 'granted') {
         console.log('[NotificationPrompt] Ya tiene permiso')
         return
       }
-      // Mostrar prompt después de 2 segundos
+      // Mostrar prompt después de 2 segundos siempre en APK
       setTimeout(() => setVisible(true), 2000)
     }).catch(() => {
       setTimeout(() => setVisible(true), 2000)
@@ -69,7 +62,7 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
   }
 
   const handleDismiss = () => {
-    localStorage.setItem('notifications_prompt_dismissed', 'true')
+    // No guardar en localStorage - siempre mostrar al entrar a la APK
     setDismissed(true)
     setVisible(false)
     onDismiss?.()

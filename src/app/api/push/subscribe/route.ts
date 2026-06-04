@@ -66,9 +66,17 @@ export async function POST(req: Request) {
 
     console.log(`[PUSH] VAPID subscription registered for user ${userId}`)
     return NextResponse.json({ success: true, id: pushSub.id })
-  } catch (error) {
+  } catch (error: any) {
     console.error('[PUSH Subscribe ERROR]:', error)
-    return NextResponse.json({ error: 'Error registering subscription' }, { status: 500 })
+    // Detallar el error para debugging
+    const errorMessage = error?.message || 'Unknown error'
+    const errorCode = error?.code || 'No code'
+    console.error('[PUSH] Error details:', {
+      message: errorMessage,
+      code: errorCode,
+      stack: error?.stack
+    })
+    return NextResponse.json({ error: 'Error registering subscription', details: errorMessage }, { status: 500 })
   }
 }
 
