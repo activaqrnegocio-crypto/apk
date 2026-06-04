@@ -450,21 +450,45 @@ self.addEventListener('fetch', (event) => {
   // ── Full-page navigation → CACHE FIRST with network update
   if (request.mode === 'navigate') {
     event.respondWith(
-      navigationHandler(request).catch((err) => {
+      navigationHandler(request).catch(async (err) => {
         console.error('[SW] Navigation handler crashed:', err);
-        // ABSOLUTE FALLBACK — never show ERR_FAILED
-        return caches.match('/offline.html').then(offlinePage => {
-          if (offlinePage) return offlinePage;
+        // v385: APK should NEVER show offline.html — always serve app shell
+        if (isAndroidNative) {
+          // Try app shell first (admin or operador based on URL)
+          const url = new URL(request.url);
+          const shellUrl = url.pathname.includes('/operador') 
+            ? '/admin/operador/proyecto/offline-shell'
+            : '/admin/proyectos/offline-shell';
+          const shellMatch = await caches.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
+          if (shellMatch) return shellMatch;
+          // Fallback to dashboard
+          const dashboardUrl = url.pathname.includes('/operador') ? '/admin/operador' : '/admin';
+          const dashMatch = await caches.match(dashboardUrl, { ignoreVary: true, ignoreSearch: true });
+          if (dashMatch) return dashMatch;
+          // Last resort: redirect to dashboard
           return new Response(
-            '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-            '<title>Sin conexión</title></head>' +
-            '<body style="font-family:system-ui;text-align:center;padding:50px;background:#0a0f1e;color:white;">' +
-            '<h1>📡 Sin conexión</h1><p>Conecta a internet y recarga.</p>' +
-            '<button onclick="location.reload()" style="margin-top:20px;padding:12px 24px;background:#3b82f6;color:white;border:none;border-radius:8px;">Reintentar</button>' +
+            '<!DOCTYPE html><html><head>' +
+            '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<title>Aquatech CRM</title>' +
+            '<script>window.location.href="/admin/proyectos/offline-shell";</script>' +
+            '</head><body style="background:#0a0f1e;color:white;font-family:system-ui;">' +
+            '<p style="text-align:center;margin-top:50px;">Cargando app...</p>' +
             '</body></html>',
             { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
           );
-        });
+        }
+        // PWA fallback
+        const offlinePage = await caches.match('/offline.html');
+        if (offlinePage) return offlinePage;
+        return new Response(
+          '<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+          '<title>Sin conexión</title></head>' +
+          '<body style="font-family:system-ui;text-align:center;padding:50px;background:#0a0f1e;color:white;">' +
+          '<h1>📡 Sin conexión</h1><p>Conecta a internet y recarga.</p>' +
+          '<button onclick="location.reload()" style="margin-top:20px;padding:12px 24px;background:#3b82f6;color:white;border:none;border-radius:8px;">Reintentar</button>' +
+          '</body></html>',
+          { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+        );
       })
     );
     return;
@@ -472,9 +496,28 @@ self.addEventListener('fetch', (event) => {
 
   // ── Everything else → Network First with cache
   event.respondWith(
-    networkFirst(request, ASSETS_CACHE).catch(() => 
-      caches.match('/offline.html')
-    )
+    networkFirst(request, ASSETS_CACHE).catch(async () => {
+      // v385: APK should NEVER show offline.html — try app shell first
+      if (isAndroidNative) {
+        const shellMatch = await caches.match('/admin/proyectos/offline-shell', { ignoreVary: true, ignoreSearch: true });
+        if (shellMatch) return shellMatch;
+        const dashMatch = await caches.match('/admin', { ignoreVary: true, ignoreSearch: true });
+        if (dashMatch) return dashMatch;
+      }
+      // PWA fallback
+      const offlinePage = await caches.match('/offline.html');
+      if (offlinePage) return offlinePage;
+      return new Response(
+        '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+        '<title>Sin conexión</title></head>' +
+        '<body style="font-family:system-ui,sans-serif;text-align:center;padding:50px;background:#0a0f1e;color:white;">' +
+        '<h1 style="margin-bottom:16px;">📡 Sin conexión</h1>' +
+        '<p style="color:#94a3b8;">Conecta a internet y recarga.</p>' +
+        '<button onclick="window.location.reload()" style="margin-top:20px;padding:12px 24px;background:#3b82f6;color:white;border:none;border-radius:8px;cursor:pointer;">Reintentar</button>' +
+        '</body></html>',
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+      );
+    })
   );
 });
 

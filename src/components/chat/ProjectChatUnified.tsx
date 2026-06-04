@@ -78,6 +78,7 @@ export default function ProjectChatUnified({
   const [voiceRecordingTimer, setVoiceRecordingTimer] = useState(0)
   const [voiceStartX, setVoiceStartX] = useState(0)
   const voiceTimerRef = useRef<any>(null)
+  const isRecordingRef = useRef(false) // Prevent double-stop race condition
   const [showMenu, setShowMenu] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -199,7 +200,7 @@ export default function ProjectChatUnified({
   // WhatsApp-style voice recording for APK
   const startVoiceRecording = async () => {
     // Prevent multiple simultaneous recording attempts
-    if (isRecordingVoice) return;
+    if (isRecordingVoice || isRecordingRef.current) return;
     
     try {
       const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
@@ -209,24 +210,33 @@ export default function ProjectChatUnified({
         return;
       }
       await CapacitorAudioRecorder.startRecording({ sampleRate: 44100, bitRate: 128000 });
+      isRecordingRef.current = true;
       setIsRecordingVoice(true);
       setVoiceRecordingTimer(0);
       voiceTimerRef.current = setInterval(() => setVoiceRecordingTimer(t => t + 1), 1000);
     } catch (err) {
       console.error('[APK] Error inicio voz:', err);
+      isRecordingRef.current = false;
+      setIsRecordingVoice(false);
       alert('Error: ' + err);
     }
   };
 
   const stopVoiceRecording = async (send: boolean) => {
+    // Prevent double-stop race condition
+    if (!isRecordingRef.current && !isRecordingVoice) {
+      console.log('[APK] stopVoiceRecording: no estaba grabando, ignorando');
+      return;
+    }
+    
     // Clear timer immediately
     if (voiceTimerRef.current) {
       clearInterval(voiceTimerRef.current);
       voiceTimerRef.current = null;
     }
     
-    // Stop recording state immediately to prevent double-stop
-    const wasRecording = isRecordingVoice;
+    const wasRecording = isRecordingRef.current;
+    isRecordingRef.current = false;
     setIsRecordingVoice(false);
     
     if (!send || !wasRecording) {

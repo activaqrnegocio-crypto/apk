@@ -23,21 +23,16 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
       return;
     }
 
-    // En APK siempre mostrar el prompt después de 2 segundos (si no está concedido ya)
-    PushNotifications.checkPermissions().then(result => {
-      if (result.receive === 'granted') {
-        console.log('[NotificationPrompt] Ya tiene permiso')
-        return
-      }
-      // Mostrar prompt después de 2 segundos siempre en APK
-      setTimeout(() => setVisible(true), 2000)
-    }).catch(() => {
-      setTimeout(() => setVisible(true), 2000)
-    })
-
+    // En APK siempre mostrar el prompt después de 3 segundos
+    // No dependemos de checkPermissions - simplemente preguntamos
+    const timer = setTimeout(() => {
+      console.log('[NotificationPrompt] Mostrando prompt de notificaciones');
+      setVisible(true);
+    }, 3000);
+    
     return () => {
-      // Cleanup
-    }
+      clearTimeout(timer);
+    };
   }, [])
 
   const handleAccept = async () => {
