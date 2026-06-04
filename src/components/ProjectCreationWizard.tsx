@@ -1351,15 +1351,17 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                        <label className="form-label" style={{ margin: 0 }}>Descripción Técnica y Multimedia</label>
                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                           {Capacitor.isNativePlatform() ? (
-                            // APK: Botón de audio estilo WhatsApp
+                            // APK: Botón de audio estilo WhatsApp - UN TOQUE para grabar/parar
                             <button
                               type="button"
-                              onMouseDown={(e) => { e.preventDefault(); startVoiceRecording(); }}
-                              onMouseUp={(e) => { e.preventDefault(); stopVoiceRecording(true); }}
-                              onMouseLeave={() => stopVoiceRecording(false)}
-                              onTouchStart={(e) => { e.preventDefault(); startVoiceRecording(); }}
-                              onTouchEnd={(e) => { e.preventDefault(); stopVoiceRecording(true); }}
-                              onTouchCancel={(e) => { e.preventDefault(); stopVoiceRecording(false); }}
+                              onClick={(e) => { 
+                                e.preventDefault(); 
+                                if (isRecordingVoice) {
+                                  stopVoiceRecording(true);
+                                } else {
+                                  startVoiceRecording();
+                                }
+                              }}
                               className="btn-icon"
                               style={{
                                 width: '44px',
@@ -1376,7 +1378,7 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                 animation: isRecordingVoice ? 'pulse 1s infinite' : 'none',
                                 transition: 'all 0.2s'
                               }}
-                              title="Grabar Audio"
+                              title={isRecordingVoice ? "Detener grabación" : "Grabar Audio"}
                             >
                               {isRecordingVoice ? (
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
@@ -1605,19 +1607,48 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                       const media = await Camera.recordVideo({});
                                       console.log('[APK] Video grabado:', media);
                                       if (media.uri) {
-                                        const resp = await fetch(media.uri);
-                                        const blob = await resp.blob();
-                                        const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
-                                        const filename = `Video-${Date.now()}.${ext}`;
+                                        let blob;
+                                        let filename;
+                                        let mimeType;
                                         let url = '';
+                                        let fileData = null;
+                                        
+                                        try {
+                                          const resp = await fetch(media.uri);
+                                          blob = await resp.blob();
+                                          mimeType = blob.type || 'video/mp4';
+                                          const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+                                          filename = `Video-${Date.now()}.${ext}`;
+                                        } catch (fetchErr) {
+                                          // Offline: leer desde Filesystem API
+                                          console.warn('[APK] Video offline, usando Filesystem API');
+                                          try {
+                                            const { Filesystem } = await import('@capacitor/filesystem');
+                                            const contents = await Filesystem.readFile({ path: media.uri });
+                                            const binary = atob(contents.data || contents);
+                                            const bytes = new Uint8Array(binary.length);
+                                            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                                            blob = new Blob([bytes], { type: 'video/mp4' });
+                                            mimeType = 'video/mp4';
+                                            const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+                                            filename = `Video-${Date.now()}.${ext}`;
+                                            // Guardar como base64 para offline
+                                            fileData = { buffer: bytes.buffer, type: mimeType, name: filename };
+                                          } catch (fsErr) {
+                                            console.error('[APK] Error leyendo video:', fsErr);
+                                            alert('Error: ' + fsErr);
+                                            return;
+                                          }
+                                        }
+                                        
                                         const isOnline = navigator.onLine;
                                         if (isOnline) {
                                           const { uploadToBunnyClientSide } = await import('@/lib/storage-client');
                                           const result = await uploadToBunnyClientSide(blob, filename, `Proyectos/temp/${uploadTempId}`);
                                           url = result.url;
                                         } else {
+                                          const reader = new FileReader();
                                           url = await new Promise((resolve) => {
-                                            const reader = new FileReader();
                                             reader.onload = () => resolve(reader.result as string);
                                             reader.readAsDataURL(blob);
                                           });
@@ -1627,9 +1658,10 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
                                           name: filename,
                                           type: 'VIDEO',
                                           url: url,
-                                          size: blob.size,
+                                          size: blob?.size || 0,
                                           category: 'MASTER',
-                                          mimeType: blob.type
+                                          mimeType: mimeType,
+                                          fileData: fileData
                                         };
                                         setUploadedFiles(prev => [...prev, fileObj]);
                                       }

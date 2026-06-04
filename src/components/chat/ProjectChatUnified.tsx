@@ -1208,33 +1208,98 @@ export default function ProjectChatUnified({
               <button onClick={() => setShowAttachments(!showAttachments)} className="btn-icon">
                  <Paperclip />
               </button>
-              <button 
-                onClick={async () => {
-                  const { Capacitor } = await import('@capacitor/core');
-                  
-                  if (Capacitor.isNativePlatform()) {
-                    // APK: Mostrar selector foto/video
-                    setShowCameraTypeModal(true);
-                  } else {
-                    // PWA: Mostrar modal de cámara custom
-                    setShowCamera(true);
-                  }
-                }} 
-                className="btn-icon" 
-                title="Cámara (Foto/Video)"
-              >
-                 <Camera />
-              </button>
+              
+              {/* APK: WhatsApp-style mic button - UN TOQUE para grabar/parar */}
+              {Capacitor.isNativePlatform() ? (
+                <button
+                  onClick={() => {
+                    if (isRecordingVoice) {
+                      stopVoiceRecording(true);
+                    } else {
+                      startVoiceRecording();
+                    }
+                  }}
+                  className="btn-icon"
+                  style={{
+                    width: '44px',
+                    height: '44px',
+                    borderRadius: '50%',
+                    backgroundColor: isRecordingVoice ? '#e53935' : 'var(--primary)',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: 'none',
+                    cursor: 'pointer',
+                    boxShadow: isRecordingVoice ? '0 0 20px rgba(229, 57, 53, 0.6)' : '0 4px 15px var(--primary-glow)',
+                    animation: isRecordingVoice ? 'pulse 1s infinite' : 'none',
+                    transition: 'all 0.2s'
+                  }}
+                  title={isRecordingVoice ? "Detener grabación" : "Grabar Audio"}
+                >
+                  {isRecordingVoice ? (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                  ) : (
+                    <Mic size={20} />
+                  )}
+                </button>
+              ) : (
+                <button 
+                  onClick={async () => {
+                    const { Capacitor } = await import('@capacitor/core');
+                    
+                    if (Capacitor.isNativePlatform()) {
+                      // APK: Mostrar selector foto/video
+                      setShowCameraTypeModal(true);
+                    } else {
+                      // PWA: Mostrar modal de cámara custom
+                      setShowCamera(true);
+                    }
+                  }} 
+                  className="btn-icon" 
+                  title="Cámara (Foto/Video)"
+                >
+                   <Camera />
+                </button>
+              )}
             </div>
            
-           <button 
-            className={`btn-send ${inputValue.trim() ? 'active' : ''}`}
-            onClick={inputValue.trim() ? handleSend : () => setShowMediaCapture('audio')}
-            disabled={isSending}
-            style={{ opacity: isSending ? 0.5 : 1, cursor: isSending ? 'wait' : 'pointer' }}
-           >
-             {inputValue.trim() ? <Send /> : <Mic />}
-           </button>
+           {/* APK: Send button - si está grabando, parar. Si no, enviar mensaje o grabar */}
+           {Capacitor.isNativePlatform() ? (
+             <button 
+               className={`btn-send ${isRecordingVoice ? 'recording' : (inputValue.trim() ? 'active' : '')}`}
+               onClick={() => {
+                 if (isRecordingVoice) {
+                   stopVoiceRecording(true);
+                 } else if (inputValue.trim()) {
+                   handleSend();
+                 } else {
+                   startVoiceRecording();
+                 }
+               }}
+               disabled={isSending}
+               style={{ 
+                 opacity: isSending ? 0.5 : 1, 
+                 cursor: isSending ? 'wait' : 'pointer',
+                 backgroundColor: isRecordingVoice ? '#e53935' : undefined
+               }}
+             >
+               {isRecordingVoice ? (
+                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+               ) : (
+                 inputValue.trim() ? <Send /> : <Mic />
+               )}
+             </button>
+           ) : (
+             <button 
+              className={`btn-send ${inputValue.trim() ? 'active' : ''}`}
+              onClick={inputValue.trim() ? handleSend : () => setShowMediaCapture('audio')}
+              disabled={isSending}
+              style={{ opacity: isSending ? 0.5 : 1, cursor: isSending ? 'wait' : 'pointer' }}
+             >
+               {inputValue.trim() ? <Send /> : <Mic />}
+             </button>
+           )}
         </div>
       </footer>
 
@@ -1517,11 +1582,39 @@ export default function ProjectChatUnified({
                     const media = await Camera.recordVideo({});
                     console.log('[APK] Video grabado:', media);
                     if (media.uri) {
-                      const resp = await fetch(media.uri);
-                      const blob = await resp.blob();
+                      let blob;
+                      let filename;
+                      let mimeType;
+                      let fileData = null;
+                      
+                      try {
+                        const resp = await fetch(media.uri);
+                        blob = await resp.blob();
+                        mimeType = blob.type || 'video/mp4';
+                        filename = `video_${Date.now()}.mp4`;
+                      } catch (fetchErr) {
+                        // Offline: leer desde Filesystem API
+                        console.warn('[APK] Video offline, usando Filesystem API');
+                        try {
+                          const { Filesystem } = await import('@capacitor/filesystem');
+                          const contents = await Filesystem.readFile({ path: media.uri });
+                          const binary = atob(contents.data || contents);
+                          const bytes = new Uint8Array(binary.length);
+                          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                          blob = new Blob([bytes], { type: 'video/mp4' });
+                          mimeType = 'video/mp4';
+                          filename = `video_${Date.now()}.mp4`;
+                          fileData = { buffer: bytes.buffer, type: mimeType, name: filename };
+                        } catch (fsErr) {
+                          console.error('[APK] Error leyendo video:', fsErr);
+                          alert('Error: ' + fsErr);
+                          return;
+                        }
+                      }
+                      
                       // APK: Enviar video directamente al chat
-                      const mediaFile = new File([blob], `video_${Date.now()}.mp4`, { type: 'video/mp4' });
-                      onSendMessage('🎥 Video', 'VIDEO', { file: mediaFile });
+                      const mediaFile = new File([blob], filename, { type: mimeType });
+                      onSendMessage('🎥 Video', 'VIDEO', { file: mediaFile, fileData });
                     }
                   } catch (err) {
                     console.error('[APK] Error cámara video:', err);

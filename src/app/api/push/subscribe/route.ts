@@ -15,26 +15,32 @@ export async function POST(req: Request) {
 
     // v380: Handle FCM tokens (Android native)
     if (type === 'fcm' && subscription?.token) {
-      const pushSub = await prisma.pushSubscription.upsert({
-        where: {
-          userId_fcmToken: {
+      // Check if record exists first to handle case where type column doesn't exist
+      const existing = await prisma.pushSubscription.findFirst({
+        where: { userId, fcmToken: subscription.token }
+      })
+      
+      if (existing) {
+        await prisma.pushSubscription.update({
+          where: { id: existing.id },
+          data: {
+            fcmToken: subscription.token,
+            deviceName: deviceName || null,
+          }
+        })
+        console.log(`[PUSH] FCM subscription updated for user ${userId}`)
+        return NextResponse.json({ success: true, id: existing.id })
+      } else {
+        const pushSub = await prisma.pushSubscription.create({
+          data: {
             userId,
             fcmToken: subscription.token,
+            deviceName: deviceName || null,
           }
-        },
-        update: {
-          fcmToken: subscription.token,
-          deviceName: deviceName || null,
-        },
-        create: {
-          userId,
-          type: 'fcm',
-          fcmToken: subscription.token,
-          deviceName: deviceName || null,
-        }
-      })
-      console.log(`[PUSH] FCM subscription registered for user ${userId}`)
-      return NextResponse.json({ success: true, id: pushSub.id })
+        })
+        console.log(`[PUSH] FCM subscription registered for user ${userId}`)
+        return NextResponse.json({ success: true, id: pushSub.id })
+      }
     }
 
     // v380: Handle VAPID subscriptions (PWA/iOS)
@@ -42,30 +48,35 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid subscription data' }, { status: 400 })
     }
 
-    const pushSub = await prisma.pushSubscription.upsert({
-      where: {
-        userId_endpoint: {
+    // Check if record exists first to handle case where type column doesn't exist
+    const existing = await prisma.pushSubscription.findFirst({
+      where: { userId, endpoint: subscription.endpoint }
+    })
+    
+    if (existing) {
+      await prisma.pushSubscription.update({
+        where: { id: existing.id },
+        data: {
+          p256dh: subscription.keys.p256dh,
+          auth: subscription.keys.auth,
+          deviceName: deviceName || null,
+        }
+      })
+      console.log(`[PUSH] VAPID subscription updated for user ${userId}`)
+      return NextResponse.json({ success: true, id: existing.id })
+    } else {
+      const pushSub = await prisma.pushSubscription.create({
+        data: {
           userId,
           endpoint: subscription.endpoint,
+          p256dh: subscription.keys.p256dh,
+          auth: subscription.keys.auth,
+          deviceName: deviceName || null,
         }
-      },
-      update: {
-        p256dh: subscription.keys.p256dh,
-        auth: subscription.keys.auth,
-        deviceName: deviceName || null,
-      },
-      create: {
-        userId,
-        type: 'vapid',
-        endpoint: subscription.endpoint,
-        p256dh: subscription.keys.p256dh,
-        auth: subscription.keys.auth,
-        deviceName: deviceName || null,
-      }
-    })
-
-    console.log(`[PUSH] VAPID subscription registered for user ${userId}`)
-    return NextResponse.json({ success: true, id: pushSub.id })
+      })
+      console.log(`[PUSH] VAPID subscription registered for user ${userId}`)
+      return NextResponse.json({ success: true, id: pushSub.id })
+    }
   } catch (error: any) {
     console.error('[PUSH Subscribe ERROR]:', error)
     // Detallar el error para debugging
