@@ -5,6 +5,7 @@ import './admin.css'
 import { usePathname } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import ServiceWorkerRegistration from '@/components/ServiceWorkerRegistration'
+import StorageInitializer from '@/components/StorageInitializer'
 import { Suspense } from 'react'
 import dynamic from 'next/dynamic'
 
@@ -81,6 +82,9 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   return (
     <div className="admin-layout">
       <ServiceWorkerRegistration />
+      <StorageInitializer>
+        {children}
+      </StorageInitializer>
       {showSync && (
         <>
           <GlobalSyncWorker />
