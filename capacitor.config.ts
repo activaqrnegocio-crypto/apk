@@ -5,10 +5,10 @@ const config: CapacitorConfig = {
   appName: 'Aquatech CRM',
   webDir: '.next',
   
-  // LOCAL DEV - apuntando a Next.js local
+  // PRODUCTION - apuntando a Vercel
   server: {
-    url: 'http://10.0.2.2:3000',
-    cleartext: true,  // HTTP OK para local
+    url: 'https://apk-ten-pi.vercel.app/',
+    cleartext: false,
     appStartPath: '/admin',
   },
   
