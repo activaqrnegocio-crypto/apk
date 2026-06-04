@@ -1640,8 +1640,7 @@ export default function ProjectDetailBase({
     ]))
 
     // Defer compression and upload to let React render the optimistic message
-    requestAnimationFrame(() => {
-      requestAnimationFrame(async () => {
+    requestAnimationFrame(async () => {
     try {
       let payload: any = {
         content,
@@ -1769,7 +1768,6 @@ export default function ProjectDetailBase({
       console.error('Error sending message:', error)
       alert('Error al enviar el mensaje')
     }
-    });
     });
   }
 

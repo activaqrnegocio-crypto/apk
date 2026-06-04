@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { Capacitor } from '@capacitor/core'
 import { usePushNotifications } from '@/hooks/usePushNotifications'
 import { NotificationOnboarding } from '@/components/NotificationOnboarding'
 import { IosInstallBanner } from '@/components/IosInstallBanner'
@@ -172,6 +173,10 @@ export default function DashboardClient({
   }, [initialStats, initialExpenses, initialMessages, initialProjects, initialTeam])
 
   const [pushDismissed, setPushDismissed] = useState(true)
+  
+  // v500: Usar hook correcto según plataforma
+  const isApk = typeof window !== 'undefined' && Capacitor.isNativePlatform()
+  
   const { 
     status: pushStatus, 
     subscribe: pushSubscribe, 

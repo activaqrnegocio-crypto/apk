@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { Capacitor } from '@capacitor/core'
+import { Geolocation } from '@capacitor/geolocation'
 import { formatTimeEcuador, formatDateEcuador } from '@/lib/date-utils'
 import MediaCapture from '@/components/MediaCapture'
 import VideoThumbnail from '@/components/VideoThumbnail'
@@ -275,11 +276,8 @@ export default function ProjectChatUnified({
 
   const handleGetGPS = async () => {
     try {
-      const { Capacitor } = await import('@capacitor/core');
-      
       if (Capacitor.isNativePlatform()) {
-        // APK: usar plugin nativo
-        const { Geolocation } = await import('@capacitor/geolocation');
+        // APK: usar plugin nativo (ya importado arriba)
         setGpsStatus('Obteniendo ubicacion...');
         
         try {

@@ -16,6 +16,7 @@ import { addToOutbox } from '@/lib/storage'
 import CameraCapture from '@/components/camera/CameraCapture'
 import { Capacitor } from '@capacitor/core'
 import { CameraSource } from '@capacitor/camera'
+import { Geolocation } from '@capacitor/geolocation'
 
 interface ProjectCreationWizardProps {
   panelBase?: string; // e.g. "/admin/proyectos" or "/admin/operador"
@@ -487,11 +488,8 @@ export default function ProjectCreationWizard({ panelBase = '/admin/proyectos' }
     setGpsLoading(true)
     
     try {
-      const { Capacitor } = await import('@capacitor/core');
-      
       if (Capacitor.isNativePlatform()) {
-        // APK: usar plugin nativo
-        const { Geolocation } = await import('@capacitor/geolocation');
+        // APK: usar plugin nativo (ya importado arriba)
         
         try {
           const perm = await Geolocation.requestPermissions();
