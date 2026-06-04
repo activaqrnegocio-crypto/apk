@@ -84,9 +84,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   return (
     <div className="admin-layout">
       <ServiceWorkerRegistration />
-      <StorageInitializer>
-        {children}
-      </StorageInitializer>
+      <StorageInitializer />
       <NotificationPrompt />
       {showSync && (
         <>

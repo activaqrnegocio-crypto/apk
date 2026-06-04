@@ -686,62 +686,93 @@ export default function OperatorDashboardClient({
 
   const canManageCalendar = hasModuleAccess(user, 'calendario')
 
-  // 1. Initial hydration and offline cache for appointments
-  const syncTriggeredRef = useRef(false);
-
-  // v289/v302: Stable warm-cache logic with 30min throttling
+  // v289/v302/v485: Stable warm-cache logic with 30min throttling
+  // v485: FIX - Added warmCacheTriggeredRef to prevent double execution
   const warmedProjectIdsRef = useRef<Set<number>>(new Set());
+  const warmCacheTimerRef = useRef<any>(null);
+  const warmCacheTriggeredRef = useRef<boolean>(false);
   
   useEffect(() => {
+    let isMounted = true;
+    
     const triggerWarmCache = async () => {
-      if (!projects || projects.length === 0 || !navigator.onLine) return;
+      // v485: Guard to prevent multiple rapid executions - check if already triggered for current batch
+      if (warmCacheTriggeredRef.current) {
+        console.log('[WarmCache] Already triggered for this batch, skipping');
+        return;
+      }
+      
+      // Debounce: wait 500ms for projects to stabilize
+      warmCacheTimerRef.current = setTimeout(async () => {
+        if (!isMounted) return;
+        if (!projects || projects.length === 0 || !navigator.onLine) return;
 
-      // v302: Use the same cache key as CacheManager to ensure sync consistency
-      const userId = user?.id || localUser?.id || 'default';
-      const cacheKey = `projects_bulk_${userId}`;
-      
-      // 30min Throttling check
-      const meta = await db.cacheMetadata.get(cacheKey);
-      if (meta?.lastSync) {
-        const minsSinceLastSync = (Date.now() - meta.lastSync) / 60000;
-        if (minsSinceLastSync < 30) {
-          // console.log(`[WarmCache-Op] Skipping. Last sync was ${Math.round(minsSinceLastSync)}m ago.`);
-          return;
-        }
-      }
-      
-      // Extract only stable IDs to compare
-      const currentIds = projects.slice(0, 20)
-        .filter(p => p.id && !String(p.id).startsWith('pending'))
-        .map(p => Number(p.id));
-      
-      // Check if we have any new projects to warm
-      const newIds = currentIds.filter(id => !warmedProjectIdsRef.current.has(id));
-      
-      if (newIds.length > 0) {
-        const urls = newIds.map(id => `/admin/operador/proyecto/${id}`);
-        console.log(`[WarmCache] Messaging SW to pre-cache ${urls.length} NEW operator projects`);
+        // v485: Mark as triggered BEFORE executing to prevent double execution
+        warmCacheTriggeredRef.current = true;
         
-        if (navigator.serviceWorker?.controller) {
-          navigator.serviceWorker.controller.postMessage({
-            type: 'PRECACHE_URLS',
-            urls
-          });
-          // Mark as warmed
-          newIds.forEach(id => warmedProjectIdsRef.current.add(id));
-          
-          // v315: Removed db.cacheMetadata.update(cacheKey, { status: 'syncing' })
-          // Warm caching now happens silently in the background without disturbing the green UI.
+        // v302: Use the same cache key as CacheManager to ensure sync consistency
+        const userId = user?.id || localUser?.id || 'default';
+        const cacheKey = `projects_bulk_${userId}`;
+        
+        // 30min Throttling check
+        const meta = await db.cacheMetadata.get(cacheKey);
+        if (meta?.lastSync) {
+          const minsSinceLastSync = (Date.now() - meta.lastSync) / 60000;
+          if (minsSinceLastSync < 30) {
+            return;
+          }
         }
-      }
+        
+        // Extract only stable IDs to compare
+        const currentIds = projects.slice(0, 20)
+          .filter(p => p.id && !String(p.id).startsWith('pending'))
+          .map(p => Number(p.id));
+        
+        // Check if we have any new projects to warm
+        const newIds = currentIds.filter(id => !warmedProjectIdsRef.current.has(id));
+        
+        if (newIds.length > 0) {
+          const urls = newIds.map(id => `/admin/operador/proyecto/${id}`);
+          console.log(`[WarmCache] Messaging SW to pre-cache ${urls.length} NEW operator projects`);
+          
+          if (navigator.serviceWorker?.controller) {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'PRECACHE_URLS',
+              urls
+            });
+            // Mark as warmed
+            newIds.forEach(id => warmedProjectIdsRef.current.add(id));
+          }
+        }
+      }, 500);
     };
 
+    // v485: Reset triggered flag when dependencies change to allow re-triggering
+    warmCacheTriggeredRef.current = false;
     triggerWarmCache();
+    
+    return () => {
+      isMounted = false;
+      if (warmCacheTimerRef.current) {
+        clearTimeout(warmCacheTimerRef.current);
+      }
+    };
   }, [projects?.length, user?.id, localUser?.id]);
 
-  // v264: Instant Outbox Kick - Force sync and refresh projects when returning to focus or online
+  // v264/v485: Instant Outbox Kick - Force sync and refresh projects when returning to focus or online
+  // v485: Added syncTriggeredRef to prevent double execution on mount
+  const syncTriggeredRef = useRef(false);
   useEffect(() => {
+    let isMounted = true;
+    
     const triggerSync = async () => {
+      // v485: Guard to prevent multiple sync triggers
+      if (syncTriggeredRef.current) {
+        console.log('[SyncKick] Already triggered, skipping');
+        return;
+      }
+      syncTriggeredRef.current = true;
+      
       if (typeof window !== 'undefined' && navigator.serviceWorker.controller && navigator.onLine) {
         // Trigger the outbox sync explicitly
         navigator.serviceWorker.controller.postMessage({ type: 'FORCE_SYNC_OUTBOX' });
@@ -751,11 +782,13 @@ export default function OperatorDashboardClient({
       }
     };
 
-    window.addEventListener('focus', triggerSync);
-    window.addEventListener('online', triggerSync);
     triggerSync(); // Initial trigger
 
+    window.addEventListener('focus', triggerSync);
+    window.addEventListener('online', triggerSync);
+    
     return () => {
+      isMounted = false;
       window.removeEventListener('focus', triggerSync);
       window.removeEventListener('online', triggerSync);
     };

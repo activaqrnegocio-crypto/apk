@@ -695,13 +695,13 @@ export default function ProjectChatUnified({
                      
                      {(m.mimeType?.startsWith('video/') || m.type === 'VIDEO' || (!m.mimeType && m.url?.match(/\.(mp4|mov|webm)$/i))) && (
                        <div className="media-preview video">
-                         <video src={`${m.url}#t=0.001`} controls preload="metadata" />
+                         <video src={Capacitor.isNativePlatform() ? Capacitor.convertFileSrc(m.url) : m.url + '#t=0.001'} controls preload="metadata" />
                        </div>
                      )}
                      
                      {(m.mimeType?.startsWith('audio/') || m.type === 'AUDIO') && (
                        <div className="audio-bubble">
-                         <audio src={m.url} controls style={{ height: '32px', width: '220px' }} />
+                         <audio src={Capacitor.isNativePlatform() ? Capacitor.convertFileSrc(m.url) : m.url} controls style={{ height: '32px', width: '220px' }} />
                        </div>
                      )}
 
@@ -1144,41 +1144,53 @@ export default function ProjectChatUnified({
         </div>
       )}
 
-      {/* --- MEDIA CAPTURE MODAL - AUDIO (PWA: MediaCapture, APK: NativeCameraCapture) --- */}
-      {showMediaCapture === 'audio' && (
-        (() => {
-          const isNative = typeof navigator !== 'undefined' && navigator.userAgent.includes('Capacitor');
-          if (isNative) {
-            // APK: Use native audio recorder
-            return (
-              <NativeCameraCapture
-                onPhotoCapture={() => {}}
-                onVideoCapture={() => {}}
-                onAudioCapture={(blob, url) => {
-                  const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
-                  const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
-                  onSendMessage('Nota de voz', 'AUDIO', { file: mediaFile });
-                  setShowMediaCapture(undefined);
-                }}
-                onClose={() => setShowMediaCapture(undefined)}
-              />
-            );
-          } else {
-            // PWA: Use browser MediaCapture API
-            return (
-              <MediaCapture
-                onCapture={(blob, type, transcription) => {
-                  const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
-                  const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
-                  onSendMessage(`🎤 Nota de voz`, 'AUDIO', { file: mediaFile });
-                  setShowMediaCapture(undefined);
-                }}
-                mode="audio"
-                placeholder="Grabando nota de voz..."
-              />
-            );
-          }
-        })()
+      {/* --- APK: Show NativeCameraCapture for audio mode --- */}
+      {showMediaCapture === 'audio' && Capacitor.isNativePlatform() && (
+        <NativeCameraCapture
+          onPhotoCapture={() => {}}
+          onVideoCapture={() => {}}
+          onAudioCapture={(blob, url) => {
+            const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+            const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
+            onSendMessage('Nota de voz', 'AUDIO', { file: mediaFile });
+            setShowMediaCapture(undefined);
+          }}
+          onClose={() => setShowMediaCapture(undefined)}
+        />
+      )}
+
+      {/* --- PWA: Use browser MediaCapture API with modal wrapper --- */}
+      {showMediaCapture === 'audio' && !Capacitor.isNativePlatform() && (
+        <div className="media-modal-overlay">
+          <div className="media-modal-content" style={{ position: 'relative' }}>
+            <button 
+              onClick={() => setShowMediaCapture(undefined)}
+              style={{
+                position: 'absolute',
+                top: '-40px',
+                right: '0',
+                background: 'none',
+                border: 'none',
+                color: 'white',
+                fontSize: '1.5rem',
+                cursor: 'pointer',
+                zIndex: 10
+              }}
+            >
+              ✕
+            </button>
+            <MediaCapture
+              onCapture={(blob, type, transcription) => {
+                const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+                const mediaFile = new File([blob], `audio_${Date.now()}.${ext}`, { type: blob.type });
+                onSendMessage(`🎤 Nota de voz`, 'AUDIO', { file: mediaFile });
+                setShowMediaCapture(undefined);
+              }}
+              mode="audio"
+              placeholder="Grabando nota de voz..."
+            />
+          </div>
+        </div>
       )}
 
       {/* --- APK CAMERA TYPE MODAL --- */}
@@ -1216,66 +1228,18 @@ export default function ProjectChatUnified({
             </div>
            
            <button 
-            className={`btn-send ${inputValue.trim() ? 'active' : ''} ${isRecordingVoice ? 'recording' : ''}`}
-            onClick={inputValue.trim() ? handleSend : async () => {
-              const { Capacitor } = await import('@capacitor/core');
-              if (!Capacitor.isNativePlatform()) {
-                // PWA: open audio modal
-                setShowMediaCapture('audio');
-              } else {
-                // APK: WhatsApp-style voice recording
-                if (isRecordingVoice) {
-                  // Stop and send voice message
-                  stopVoiceRecording(true);
-                } else {
-                  // Start recording
-                  startVoiceRecording();
-                }
-              }
-            }}
-            onTouchStart={(e) => {
-              if (!inputValue.trim() && !isRecordingVoice) {
-                const touch = e.touches[0];
-                setVoiceStartX(touch.clientX);
-                startVoiceRecording();
-              }
-            }}
-            onTouchEnd={() => {
-              if (isRecordingVoice) {
-                stopVoiceRecording(true);
-              }
-            }}
-            onTouchCancel={() => {
-              if (isRecordingVoice) {
-                stopVoiceRecording(false);
-              }
-            }}
-            onMouseDown={(e) => {
-              if (!inputValue.trim() && !isRecordingVoice) {
-                setVoiceStartX(e.clientX);
-                startVoiceRecording();
-              }
-            }}
-            onMouseUp={() => {
-              if (isRecordingVoice) {
-                stopVoiceRecording(true);
-              }
-            }}
-            onMouseLeave={() => {
-              if (isRecordingVoice) {
-                stopVoiceRecording(false);
-              }
-            }}
+            className={`btn-send ${inputValue.trim() ? 'active' : ''}`}
+            onClick={inputValue.trim() ? handleSend : () => setShowMediaCapture('audio')}
             disabled={isSending}
             style={{ opacity: isSending ? 0.5 : 1, cursor: isSending ? 'wait' : 'pointer' }}
            >
-             {inputValue.trim() ? <Send /> : (isRecordingVoice ? <StopCircle /> : <Mic />)}
+             {inputValue.trim() ? <Send /> : <Mic />}
            </button>
         </div>
       </footer>
 
-      {/* --- VOICE RECORDING INDICATOR (WhatsApp style) --- */}
-      {isRecordingVoice && (
+      {/* --- VOICE RECORDING INDICATOR (WhatsApp style) - APK ONLY --- */}
+      {Capacitor.isNativePlatform() && isRecordingVoice && (
         <div style={{
           position: 'fixed',
           bottom: '90px',

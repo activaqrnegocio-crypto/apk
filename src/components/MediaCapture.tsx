@@ -24,6 +24,7 @@ interface MediaCaptureProps {
   placeholder?: string
   transcriptionOnly?: boolean
   skipTranscription?: boolean
+  compact?: boolean
 }
 
 export default function MediaCapture({ 
@@ -33,7 +34,7 @@ export default function MediaCapture({
   transcriptionOnly = false,
   skipTranscription = false,
   compact = false
-}: MediaCaptureProps & { compact?: boolean }) {
+}: MediaCaptureProps) {
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [mediaBlob, setMediaBlob] = useState<Blob | null>(null)
@@ -43,7 +44,7 @@ export default function MediaCapture({
   const [recordedDuration, setRecordedDuration] = useState(0)
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioRecorderRef = useRef<MediaRecorder | null>(null) // Separate audio recorder for video transcription
+  const audioRecorderRef = useRef<MediaRecorder | null>(null)
   const timerRef = useRef<any>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -52,7 +53,7 @@ export default function MediaCapture({
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment')
   const [cameraSubMode, setCameraSubMode] = useState<'photo' | 'video'>('photo')
   const chunksRef = useRef<Blob[]>([])
-  const audioChunksRef = useRef<Blob[]>([]) // Separate audio chunks
+  const audioChunksRef = useRef<Blob[]>([])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -74,7 +75,7 @@ export default function MediaCapture({
         return mime
       }
     }
-    return '' // Let browser choose default
+    return ''
   }
 
   const initStream = async () => {
@@ -118,11 +119,9 @@ export default function MediaCapture({
       const stream = await initStream()
       if (!stream) return
 
-      // --- Main recorder (video+audio or audio-only) ---
       const supportedMime = getSupportedMimeType(mode)
       const options: MediaRecorderOptions = supportedMime ? { mimeType: supportedMime } : {}
       
-      // Safety check for browsers that don't support specified mime
       let recorder: MediaRecorder
       try {
         recorder = new MediaRecorder(stream, options)
@@ -138,7 +137,6 @@ export default function MediaCapture({
         if (e.data.size > 0) chunksRef.current.push(e.data)
       }
 
-      // --- Separate AUDIO-ONLY recorder for video transcription ---
       let audioRecorder: MediaRecorder | null = null
       if (mode === 'video') {
         const audioTracks = stream.getAudioTracks()
@@ -164,7 +162,6 @@ export default function MediaCapture({
         setMediaBlob(videoBlob)
         setPreviewUrl(URL.createObjectURL(videoBlob))
         
-        // Stop all tracks to release camera/mic
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop())
           streamRef.current = null
@@ -234,7 +231,6 @@ export default function MediaCapture({
     try {
       const formData = new FormData()
       
-      // Determine correct extension based on mime type
       let ext = 'webm'
       if (audioBlob.type.includes('mp4')) ext = 'm4a'
       else if (audioBlob.type.includes('mpeg')) ext = 'mp3'
@@ -264,8 +260,6 @@ export default function MediaCapture({
       setTranscription(`Error: ${err.message || 'No se pudo transcribir'}`)
     } finally {
       setIsProcessing(false)
-      // ALWAYS call onCapture, but only with valid text or empty string if it failed
-      // We don't want to pass "Error: ..." as the transcription text to the parent
       const finalText = transcribedText.startsWith('Error:') ? '' : transcribedText
       onCapture(originalBlob, mode, finalText)
     }
@@ -366,9 +360,6 @@ export default function MediaCapture({
           </div>
         )}
 
-        {/* Native camera replaces all this logic */}
-
-        {/* Record / Stop / Photo buttons */}
         {!isRecording && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             <button 

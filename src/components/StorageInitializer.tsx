@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { initStorage } from '@/lib/storage'
 import { Capacitor } from '@capacitor/core'
 
-export default function StorageInitializer({ children }: { children: React.ReactNode }) {
+export default function StorageInitializer({ children }: { children?: React.ReactNode }) {
   const [initialized, setInitialized] = useState(false)
 
   useEffect(() => {

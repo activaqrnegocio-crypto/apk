@@ -15,9 +15,12 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
 
   useEffect(() => {
     // Solo mostrar en APK (no en PWA)
-    if (!Capacitor.isNativePlatform()) {
-      console.log('[NotificationPrompt] No es APK, omitiendo prompt')
-      return
+    const isNative = Capacitor.isNativePlatform();
+    console.log('[NotificationPrompt] isNativePlatform:', isNative);
+    
+    if (!isNative) {
+      console.log('[NotificationPrompt] No es APK, omitiendo prompt');
+      return;
     }
 
     // Verificar si ya se rechazó previamente
