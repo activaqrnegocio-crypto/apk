@@ -1,20 +1,10 @@
+// src/components/NativePluginsPrefetcher.tsx
+// Pre-carga plugins de Capacitor para evitar CHUNKLOADERROR offline en APK
 'use client'
 
 import { useEffect } from 'react'
 import { Capacitor } from '@capacitor/core'
 
-/**
- * APK Native Plugins Prefetcher
- * 
- * Descarga y cachea los recursos necesarios para que los plugins nativos
- * de Capacitor funcionen offline en la APK:
- * - Camera
- * - Audio Recorder  
- * - Geolocation
- * - Filesystem
- * 
- * Solo se ejecuta en APK (Capacitor.isNativePlatform())
- */
 export default function NativePluginsPrefetcher() {
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
@@ -26,47 +16,54 @@ export default function NativePluginsPrefetcher() {
       console.log('[NativePluginsPrefetcher] Iniciando cache de plugins nativos...')
       
       try {
-        // APIs que necesitan estar cacheadas para funcionar offline
+        const pluginModules = [
+          '@capgo/capacitor-audio-recorder',
+          '@capacitor/camera',
+          '@capacitor/filesystem',
+          '@capacitor/geolocation',
+          '@capacitor/push-notifications',
+          '@capacitor-firebase/messaging',
+        ]
+
+        console.log('[NativePluginsPrefetcher] Pre-cargando plugins JavaScript...')
+        
+        await Promise.allSettled(
+          pluginModules.map(async (moduleName) => {
+            try {
+              await import(/* webpackIgnore: true */ moduleName)
+              console.log('[NativePluginsPrefetcher] Pre-cargado: ' + moduleName)
+            } catch (err) {
+              console.warn('[NativePluginsPrefetcher] Error pre-cargando ' + moduleName + ':', err)
+            }
+          })
+        )
+
+        console.log('[NativePluginsPrefetcher] Pre-carga de plugins completada')
+        
         const apiEndpoints = [
-          // Auth y session
           '/api/auth/session',
-          
-          // Projects - críticos para operación offline
           '/api/projects',
           '/api/operator/projects',
-          
-          // Materials/Inventory
           '/api/materials',
-          
-          // Clients
           '/api/clients',
-          
-          // Appointments/Calendar
           '/api/appointments',
           '/api/admin/calendar/query',
-          
-          // Quotes
           '/api/quotes',
-          
-          // Users/Team
           '/api/users',
           '/api/admin/calendar/projects-by-operators',
         ]
 
-        // Cache each endpoint
         for (const endpoint of apiEndpoints) {
           try {
             const response = await fetch(endpoint)
             if (response.ok) {
-              console.log(`[NativePluginsPrefetcher] Cacheado: ${endpoint}`)
+              console.log('[NativePluginsPrefetcher] Cacheado: ' + endpoint)
             }
           } catch (err) {
-            // Silently fail - endpoint might not be available offline
-            console.warn(`[NativePluginsPrefetcher] No cacheado (offline): ${endpoint}`)
+            console.warn('[NativePluginsPrefetcher] No cacheado (offline): ' + endpoint)
           }
         }
 
-        // Cache las páginas de offline shells específicas
         const offlineShells = [
           '/admin/proyectos/offline-shell',
           '/admin/operador/proyecto/offline-shell',
@@ -76,10 +73,10 @@ export default function NativePluginsPrefetcher() {
           try {
             const response = await fetch(shell)
             if (response.ok) {
-              console.log(`[NativePluginsPrefetcher] Shell cacheado: ${shell}`)
+              console.log('[NativePluginsPrefetcher] Shell cacheado: ' + shell)
             }
           } catch (err) {
-            console.warn(`[NativePluginsPrefetcher] Shell no cacheado: ${shell}`)
+            console.warn('[NativePluginsPrefetcher] Shell no cacheado: ' + shell)
           }
         }
 
@@ -89,7 +86,6 @@ export default function NativePluginsPrefetcher() {
       }
     }
 
-    // Ejecutar después de que la app cargue (5s de delay como GlobalSyncWorker)
     const timer = setTimeout(cacheNativePlugins, 5000)
 
     return () => clearTimeout(timer)

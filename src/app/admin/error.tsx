@@ -24,18 +24,18 @@ export default function AdminError({
       if (offline && Capacitor.isNativePlatform()) {
         try {
           // Verificar si hay sesión guardada en SQLite (意味着 ya syncizó antes)
-          const { isSqliteReady, isNativePlatform } = await import('@/lib/storage')
+          const { isSqliteReady, isNativePlatform, getAuthCache } = await import('@/lib/storage')
           
           if (isNativePlatform()) {
             const nativeReady = await isSqliteReady()
             
-            if (nativeReady) {
-              // En APK con SQLite, verificar si hay auth cache
-              const sessionRes = await fetch('/api/auth/session')
-              if (sessionRes.ok) {
-                // Hay sesión activa, el usuario ya syncizó antes
+            if (nativeReady && getAuthCache) {
+              // Consultar SQLite directamente - NO usar fetch (fallará offline)
+              const cachedAuth = await getAuthCache()
+              if (cachedAuth && cachedAuth.token && cachedAuth.userId) {
+                // Hay sesión en SQLite, el usuario ya syncizó antes
                 setHasCache(true)
-                console.log('[AdminError] APK offline con cache existente — entrando directo')
+                console.log('[AdminError] APK offline con cache en SQLite — entrando directo')
               } else {
                 setHasCache(false)
               }

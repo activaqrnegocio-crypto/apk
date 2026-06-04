@@ -98,6 +98,19 @@ export async function hasSyncLog(syncId: string): Promise<boolean> {
   return false
 }
 
+export async function getAuthCache(): Promise<{ token: string; userId: string } | null> {
+  if (isNativePlatform() && await isSqliteReady()) {
+    return nativeStorage.getAuthCache()
+  }
+  return null
+}
+
+export async function saveAuthCache(session: { token: string; userId: string; expires?: string }): Promise<void> {
+  if (isNativePlatform() && await isSqliteReady()) {
+    await nativeStorage.saveAuthCache(session)
+  }
+}
+
 export async function cacheProject(project: any): Promise<void> {
   if (isNativePlatform() && await isSqliteReady()) {
     await nativeStorage.cacheProject(project)

@@ -1209,7 +1209,19 @@ export default function ProjectChatUnified({
                  <Paperclip />
               </button>
               
-              {/* APK: WhatsApp-style mic button - UN TOQUE para grabar/parar */}
+              {/* APK: Camera button */}
+              {Capacitor.isNativePlatform() && (
+                <button 
+                  onClick={() => setShowCameraTypeModal(true)}
+                  className="btn-icon" 
+                  title="Cámara (Foto/Video)"
+                  style={{ width: '44px', height: '44px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Camera size={20} />
+                </button>
+              )}
+              
+              {/* APK: Mic button - one tap to start/stop recording */}
               {Capacitor.isNativePlatform() ? (
                 <button
                   onClick={() => {
@@ -1243,28 +1255,10 @@ export default function ProjectChatUnified({
                     <Mic size={20} />
                   )}
                 </button>
-              ) : (
-                <button 
-                  onClick={async () => {
-                    const { Capacitor } = await import('@capacitor/core');
-                    
-                    if (Capacitor.isNativePlatform()) {
-                      // APK: Mostrar selector foto/video
-                      setShowCameraTypeModal(true);
-                    } else {
-                      // PWA: Mostrar modal de cámara custom
-                      setShowCamera(true);
-                    }
-                  }} 
-                  className="btn-icon" 
-                  title="Cámara (Foto/Video)"
-                >
-                   <Camera />
-                </button>
-              )}
+              ) : null}
             </div>
            
-           {/* APK: Send button - si está grabando, parar. Si no, enviar mensaje o grabar */}
+           {/* APK: Send button */}
            {Capacitor.isNativePlatform() ? (
              <button 
                className={`btn-send ${isRecordingVoice ? 'recording' : (inputValue.trim() ? 'active' : '')}`}
@@ -1273,8 +1267,6 @@ export default function ProjectChatUnified({
                    stopVoiceRecording(true);
                  } else if (inputValue.trim()) {
                    handleSend();
-                 } else {
-                   startVoiceRecording();
                  }
                }}
                disabled={isSending}
@@ -1287,7 +1279,7 @@ export default function ProjectChatUnified({
                {isRecordingVoice ? (
                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                ) : (
-                 inputValue.trim() ? <Send /> : <Mic />
+                 <Send />
                )}
              </button>
            ) : (
