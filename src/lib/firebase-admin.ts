@@ -67,7 +67,7 @@ export async function sendFCMToToken(token: string, payload: FCMPayload): Promis
       android: {
         priority: 'high',
         notification: {
-          channelId: 'aquatech_notifications',
+          channelId: 'default',  // Debe coincidir con el canal creado en push-native.ts
           priority: 'high',
           defaultSound: true,
           defaultVibrateTimings: true,

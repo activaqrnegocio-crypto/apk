@@ -7,7 +7,7 @@ const config: CapacitorConfig = {
   
   // PRODUCTION - apuntando a Vercel
   server: {
-    url: 'https://apk-ten-pi.vercel.app/',
+    url: 'https://apk-ten-pi.vercel.app',
     cleartext: false,
     appStartPath: '/admin',
   },

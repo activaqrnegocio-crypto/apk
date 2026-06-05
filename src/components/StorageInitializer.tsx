@@ -14,20 +14,8 @@ export default function StorageInitializer({ children }: { children?: React.Reac
         await initStorage()
         console.log('[StorageInitializer] Storage initialized')
         
-        // v380: Register FCM token for Android native
-        if (Capacitor.isNativePlatform()) {
-          try {
-            const { registerFCMToken } = await import('@/lib/push-native')
-            // Get userId from session - we need to wait for auth
-            const sessionRes = await fetch('/api/auth/session')
-            const session = await sessionRes.json()
-            if (session?.user?.id) {
-              await registerFCMToken(Number(session.user.id))
-            }
-          } catch (e) {
-            console.warn('[StorageInitializer] FCM registration skipped:', e)
-          }
-        }
+        // NOTA: El registro FCM ahora solo se hace en NotificationPrompt.tsx
+        // para evitar registros duplicados que causaban conflictos
         
         setInitialized(true)
       } catch (err) {
