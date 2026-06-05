@@ -490,8 +490,12 @@ export default memo(function Sidebar() {
 
   const handleLogout = async () => {
     try {
+      // v410: Enviar mensaje LOGOUT al Service Worker para limpiar authShadow
       if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.ready
+        // Enviar mensaje LOGOUT al SW
+        reg.active?.postMessage('LOGOUT')
+        
         const sub = await reg.pushManager.getSubscription()
         if (sub) await sub.unsubscribe()
       }

@@ -1355,6 +1355,44 @@ self.addEventListener('message', (event) => {
     });
   }
 
+  // v410: Handle logout - clear authShadow from IndexedDB
+  if (event.data === 'LOGOUT') {
+    console.log('[SW]收到LOGOUT消息，清理认证数据');
+    Promise.all([
+      // Clear IndexedDB authShadow
+      new Promise((resolve) => {
+        const request = indexedDB.open('AquatechOfflineDB');
+        request.onerror = () => resolve(null);
+        request.onsuccess = () => {
+          const db = request.result;
+          try {
+            const tx = db.transaction('authShadow', 'readwrite');
+            const store = tx.objectStore('authShadow');
+            store.delete('current');
+            tx.oncomplete = () => {
+              console.log('[SW] authShadow deleted');
+              resolve(null);
+            };
+            tx.onerror = () => resolve(null);
+          } catch (e) {
+            resolve(null);
+          }
+        };
+      }),
+      // Clear all caches
+      caches.keys().then(keys => 
+        Promise.all(keys.filter(k => k.startsWith('aquatech-')).map(k => {
+          console.log('[SW] Deleting cache:', k);
+          return caches.delete(k);
+        }))
+      )
+    ]).then(() => {
+      console.log('[SW] Logout cleanup complete');
+      event.source?.postMessage({ type: 'LOGOUT_COMPLETE' });
+    });
+    return;
+  }
+
   // v335: Call the REAL processOutboxSync (not a shadow/local no-op!)
   if (event.data && (event.data.type === 'TRIGGER_SYNC' || event.data.type === 'FORCE_SYNC_OUTBOX')) {
     const isForced = event.data.type === 'FORCE_SYNC_OUTBOX';
