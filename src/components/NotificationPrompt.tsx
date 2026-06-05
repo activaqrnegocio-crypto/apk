@@ -44,88 +44,41 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
   const handleAccept = async () => {
     setLoading(true)
     try {
-      // Verificar estado actual del permiso
-      const checkResult = await PushNotifications.checkPermissions()
-      console.log('[NotificationPrompt] Estado actual del permiso:', checkResult)
+      // v408: Usar registerFCMToken que ya tiene toda la lógica de permisos + registro + listeners
+      const sessionRes = await fetch('/api/auth/session')
+      const session = await sessionRes.json()
+      if (!session?.user?.id) {
+        console.error('[NotificationPrompt] No user session found');
+        setLoading(false)
+        return
+      }
+
+      await import('@/lib/push-native').then(({ registerFCMToken }) => 
+        registerFCMToken(Number(session.user.id))
+      )
       
-      // Solicitar permiso
-      const permission = await PushNotifications.requestPermissions()
-      console.log('[NotificationPrompt] Resultado de requestPermissions:', permission)
-      
-      if (permission.receive === 'granted') {
-        // Registrar
-        await PushNotifications.register()
-        console.log('[NotificationPrompt] Permiso concedido y registrado')
-        
-        // Mostrar éxito y cerrar
-        setVisible(false)
-        
-        // Guardar que el usuario aceptó para no mostrar de nuevo
-        localStorage.setItem('push_accepted', 'true')
-        
-        // vXXX: Enviar token FCM al backend INMEDIATAMENTE después de registrar
-        try {
-          const sessionRes = await fetch('/api/auth/session')
-          const session = await sessionRes.json()
-          if (session?.user?.id) {
-            // Importar y llamar registerFCMToken directly
-            const { registerFCMToken } = await import('@/lib/push-native')
-            await registerFCMToken(Number(session.user.id))
-            console.log('[NotificationPrompt] Token FCM enviado al backend')
-          }
-        } catch (tokenErr) {
-          console.warn('[NotificationPrompt] Error enviando token FCM:', tokenErr)
-          // No blocking error - notifications still work
-        }
-        
-        // v408: Mostrar notificación local de confirmación (como PWA)
-        setTimeout(() => {
-          if ('Notification' in window && Notification.permission === 'granted') {
-            try {
-              new Notification('✅ Notificaciones activadas', {
-                body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
-                icon: '/icon-192.png',
-                badge: '/icon-192.png',
-                tag: 'confirmacion'
-              });
-            } catch (e) {
-              console.warn('[NotificationPrompt] No se pudo mostrar Notification:', e);
-              alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
-            }
-          } else {
+      console.log('[NotificationPrompt] FCM registration complete')
+      setVisible(false)
+      localStorage.setItem('push_accepted', 'true')
+
+      // v408: Mostrar notificación local de confirmación (como PWA)
+      setTimeout(() => {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification('✅ Notificaciones activadas', {
+              body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
+              icon: '/icon-192.png',
+              badge: '/icon-192.png',
+              tag: 'confirmacion'
+            });
+          } catch (e) {
+            console.warn('[NotificationPrompt] No se pudo mostrar Notification:', e);
             alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
           }
-        }, 500)
-      } else if (permission.receive === 'denied') {
-        console.log('[NotificationPrompt] Permiso denegado')
-        alert('Para recibir notificaciones, activa el permiso en Configuración > Aplicaciones > Aquatech > Notificaciones')
-      } else {
-        console.log('[NotificationPrompt] Permiso en estado:', permission.receive)
-        // El permiso puede estar en "default" o "prompt" - intentar registrar de todas formas
-        try {
-          await PushNotifications.register()
-          localStorage.setItem('push_accepted', 'true')
-          setVisible(false)
-          setTimeout(() => {
-            if ('Notification' in window && Notification.permission === 'granted') {
-              try {
-                new Notification('✅ Notificaciones activadas', {
-                  body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
-                  icon: '/icon-192.png',
-                  badge: '/icon-192.png',
-                  tag: 'confirmacion'
-                });
-              } catch (e) {
-                alert('¡Notificaciones activadas!');
-              }
-            } else {
-              alert('¡Notificaciones activadas!');
-            }
-          }, 500)
-        } catch (regErr) {
-          console.error('[NotificationPrompt] Error en registro:', regErr)
+        } else {
+          alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
         }
-      }
+      }, 500)
     } catch (err) {
       console.error('[NotificationPrompt] Error:', err)
       alert('Error al activar notificaciones. Verifica tu conexión a internet.')

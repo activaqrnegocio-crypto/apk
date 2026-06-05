@@ -253,14 +253,49 @@ export default function ProjectChatUnified({
       const result = await CapacitorAudioRecorder.stopRecording();
       console.log('[APK] stopRecording result:', JSON.stringify(result));
       
-      // v408: Plugin returns {blob, duration} - NOT uri
+      // v408: Plugin puede devolver {blob} (web) o {uri} (native Android)
+      let blob: Blob | null = null;
+      
       if (result.blob && result.blob.size > 0) {
-        const mimeType = result.blob.type || 'audio/webm';
+        // Web/platform con blob directo
+        blob = result.blob;
+      } else if (result.uri) {
+        // Native Android: cargar desde URI
+        console.log('[APK] Loading audio from URI:', result.uri);
+        try {
+          const fetchResp = await fetch(result.uri);
+          if (fetchResp.ok) {
+            blob = await fetchResp.blob();
+            console.log('[APK] Audio loaded via fetch, size:', blob.size);
+          }
+        } catch (fetchErr) {
+          console.warn('[APK] fetch failed, trying XHR:', fetchErr);
+          // XHR fallback
+          const xhr = new XMLHttpRequest();
+          xhr.open('GET', result.uri, true);
+          xhr.responseType = 'blob';
+          const loaded = await new Promise<boolean>((resolve) => {
+            xhr.onload = () => {
+              if (xhr.status === 200) {
+                blob = xhr.response;
+                console.log('[APK] Audio loaded via XHR, size:', blob?.size);
+                resolve(true);
+              } else resolve(false);
+            };
+            xhr.onerror = () => resolve(false);
+            xhr.send();
+          });
+          if (!loaded) blob = null;
+        }
+      }
+      
+      if (blob && blob.size > 0) {
+        const mimeType = blob.type || 'audio/webm';
         const ext = mimeType.includes('mpeg') ? 'mp3' : 
                     mimeType.includes('ogg') ? 'ogg' : 
                     mimeType.includes('mp4') ? 'm4a' : 'webm';
-        const mediaFile = new File([result.blob], `voice_${Date.now()}.${ext}`, { type: mimeType });
-        console.log('[APK] Sending voice message, file:', mediaFile.name, 'size:', mediaFile.size, 'duration:', result.duration);
+        const mediaFile = new File([blob], `voice_${Date.now()}.${ext}`, { type: mimeType });
+        console.log('[APK] Sending voice message, file:', mediaFile.name, 'size:', mediaFile.size);
         onSendMessage(`🎤 Nota de voz (${voiceRecordingTimer}s)`, 'AUDIO', { file: mediaFile });
       } else {
         console.error('[APK] Blob vacío o no existe, result:', JSON.stringify(result));

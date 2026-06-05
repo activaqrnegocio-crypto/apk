@@ -1,4 +1,4 @@
-﻿const SW_VERSION = 'v378-offline-fix';
+﻿const SW_VERSION = 'v409-offline-fix';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -792,29 +792,35 @@ async function navigationHandler(request) {
         ? '/admin/operador/proyecto/offline-shell'
         : '/admin/proyectos/offline-shell';
       
+      // v408: Try offline-shell first (may exist in newer builds)
       const shellMatch = await caches.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
       if (isValidHTMLResponse(shellMatch)) {
         return shellMatch;
       }
       
-      // If no shell, try dashboard
-      const dashboardUrl = url.pathname.includes('/operador') 
-        ? '/admin/operador'
-        : '/admin';
-      const dashboardMatch = await caches.match(dashboardUrl, { ignoreVary: true, ignoreSearch: true });
-      if (isValidHTMLResponse(dashboardMatch)) {
-        return dashboardMatch;
+      // v408: If no offline-shell, serve the BASE page directly
+      // This works because base pages were precached before going offline
+      const basePage = url.pathname.includes('/operador') ? '/admin/operador' : '/admin';
+      const baseMatch = await caches.match(basePage, { ignoreVary: true, ignoreSearch: true });
+      if (isValidHTMLResponse(baseMatch)) {
+        console.log('[SW v408] Serving base page offline:', basePage);
+        return baseMatch;
       }
       
-      // Last resort: try the offline-shell regardless of path
-      const fallbackShell = await caches.match('/admin/proyectos/offline-shell', { ignoreVary: true, ignoreSearch: true });
-      if (isValidHTMLResponse(fallbackShell)) {
-        return fallbackShell;
+      // Try ALL caches for the base page
+      const allCaches = await caches.keys();
+      for (const cName of allCaches) {
+        const c = await caches.open(cName);
+        const match = await c.match(basePage, { ignoreVary: true, ignoreSearch: true });
+        if (isValidHTMLResponse(match)) {
+          console.log('[SW v408] Base page found in cache:', cName, basePage);
+          return match;
+        }
       }
       
-      // If nothing cached, return a minimal HTML that redirects
-      const redirectUrl = url.pathname.includes('/operador') ? '/admin/operador' : '/admin';
-      return Response.redirect(redirectUrl, 302);
+      // Last resort: try operador as default
+      const fallbackMatch = await caches.match('/admin/operador', { ignoreVary: true, ignoreSearch: true });
+      if (fallbackMatch) return fallbackMatch;
     }
     
     // ── STEP 5: PWA Offline fallback ───────────────────────
