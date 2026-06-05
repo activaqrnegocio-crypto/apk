@@ -251,36 +251,60 @@ export default function ProjectChatUnified({
     try {
       const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
       const result = await CapacitorAudioRecorder.stopRecording();
+      console.log('[APK] stopRecording result:', JSON.stringify(result));
       if (result.uri) {
+        console.log('[APK] Audio URI:', result.uri);
         // Use XMLHttpRequest for file:// URIs (native paths)
         const uri = result.uri;
-        return new Promise((resolve, reject) => {
+        
+        // vXXX: Try fetch() first (works with content:// on Android 10+)
+        let blob: Blob | null = null;
+        try {
+          const fetchResponse = await fetch(uri);
+          if (fetchResponse.ok) {
+            blob = await fetchResponse.blob();
+            console.log('[APK] Audio fetched via fetch(), size:', blob.size);
+          }
+        } catch (fetchErr) {
+          console.warn('[APK] fetch() failed, trying XHR:', fetchErr);
+          // Fallback to XHR for file:// URIs on older Android
           const xhr = new XMLHttpRequest();
           xhr.open('GET', uri, true);
           xhr.responseType = 'blob';
-          xhr.onload = () => {
-            if (xhr.status === 200) {
-              const blob = xhr.response;
-              const ext = blob.type.includes('mpeg') ? 'mp3' : blob.type.includes('ogg') ? 'ogg' : 'webm';
-              const mediaFile = new File([blob], `voice_${Date.now()}.${ext}`, { type: blob.type });
-              onSendMessage(`🎤 Nota de voz (${voiceRecordingTimer}s)`, 'AUDIO', { file: mediaFile });
-              resolve(null);
-            } else {
-              console.error('[APK] Error XHR:', xhr.status);
-              reject(new Error('Failed to load audio'));
-            }
-          };
-          xhr.onerror = () => {
-            console.error('[APK] XHR error');
-            reject(new Error('Network error'));
-          };
-          xhr.send();
-        });
+          await new Promise<void>((resolve, reject) => {
+            xhr.onload = () => {
+              if (xhr.status === 200) {
+                blob = xhr.response;
+                console.log('[APK] Audio loaded via XHR, size:', blob?.size);
+                resolve();
+              } else {
+                reject(new Error('XHR failed: ' + xhr.status));
+              }
+            };
+            xhr.onerror = () => reject(new Error('XHR error'));
+            xhr.send();
+          });
+        }
+        
+        if (blob) {
+          // Determine proper MIME type from result or blob
+          const mimeType = (result as any).mimeType || blob.type || 'audio/mp4';
+          const ext = mimeType.includes('mpeg') ? 'mp3' : 
+                      mimeType.includes('ogg') ? 'ogg' : 
+                      mimeType.includes('webm') ? 'webm' : 'm4a';
+          const mediaFile = new File([blob], `voice_${Date.now()}.${ext}`, { type: mimeType });
+          console.log('[APK] Sending voice message, file:', mediaFile.name, 'size:', mediaFile.size);
+          onSendMessage(`🎤 Nota de voz (${voiceRecordingTimer}s)`, 'AUDIO', { file: mediaFile });
+        } else {
+          console.error('[APK] Could not load audio blob');
+          alert('Error: No se pudo cargar el audio');
+        }
       } else {
         console.warn('[APK] Grabación voz - URI vacío');
       }
     } catch (err) {
       console.error('[APK] Error stop voz:', err);
+      alert('Error al procesar audio: ' + err);
     }
   };
 
