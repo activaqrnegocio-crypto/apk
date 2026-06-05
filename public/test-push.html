@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Push FCM</title>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #1a1a2e; color: #eee; }
+    h1 { color: #00d4ff; }
+    pre { background: #16213e; padding: 15px; border-radius: 8px; overflow-x: auto; }
+    .success { color: #00ff88; }
+    .error { color: #ff6b6b; }
+    button { 
+      background: #00d4ff; 
+      color: #000; 
+      border: none; 
+      padding: 12px 24px; 
+      font-size: 16px; 
+      border-radius: 6px; 
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover { background: #00b8d4; }
+    #log { margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>🔔 Test Push FCM</h1>
+  <p>Enviando notificación de prueba al usuario ID 61...</p>
+  
+  <button onclick="sendTest()">Reenviar Test</button>
+  
+  <div id="result"></div>
+  <div id="log"></div>
+
+  <script>
+    function log(msg) {
+      const div = document.getElementById('log');
+      div.innerHTML = '<pre>' + msg + '</pre>' + div.innerHTML;
+    }
+
+    async function sendTest() {
+      document.getElementById('result').innerHTML = '<p>Enviando...</p>';
+      
+      try {
+        log('Fetching /api/push/test-send?userId=61...');
+        
+        const res = await fetch('/api/push/test-send?userId=61');
+        const text = await res.text();
+        
+        log('Response status: ' + res.status);
+        log('Response body: ' + text);
+        
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { raw: text };
+        }
+        
+        if (res.ok) {
+          document.getElementById('result').innerHTML = '<p class="success">✅ Éxito</p><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+        } else {
+          document.getElementById('result').innerHTML = '<p class="error">❌ Error ' + res.status + '</p><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+        }
+      } catch (err) {
+        document.getElementById('result').innerHTML = '<p class="error">❌ Error de red: ' + err.message + '</p>';
+        log('Network error: ' + err.message);
+      }
+    }
+
+    // Auto-run on load
+    sendTest();
+  </script>
+</body>
+</html>
