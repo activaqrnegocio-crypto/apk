@@ -1,12 +1,18 @@
+// filepath: src/app/api/push/test-send/route.ts
 // Test endpoint to send a push notification to a specific user
 // Usage: GET /api/push/test-send?userId=61
 // NOTE: This endpoint is PUBLIC (no auth) for testing purposes
-import { prisma } from '@/lib/prisma'
-import { sendFCMToToken, type FCMPayload } from '@/lib/firebase-admin'
-import { NextResponse } from 'next/server'
+
+import { prisma } from '@/lib/prisma';
+import { sendFCMToToken, type FCMPayload } from '@/lib/firebase-admin';
+import { NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 export async function GET(request: Request) {
-  try {
+  console.log('[TestSend] Request received from:', request.headers.get('origin') || 'unknown');
+  console.log('[TestSend] URL:', request.url);
     // Check if Firebase Admin is initialized
     const { getFirebaseAdmin } = await import('@/lib/firebase-admin')
     const app = getFirebaseAdmin()
