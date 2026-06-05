@@ -254,11 +254,12 @@ export default function ProjectChatUnified({
       console.log('[APK] stopRecording result:', JSON.stringify(result));
       if (result.uri) {
         console.log('[APK] Audio URI:', result.uri);
-        // Use XMLHttpRequest for file:// URIs (native paths)
         const uri = result.uri;
         
         // vXXX: Try fetch() first (works with content:// on Android 10+)
         let blob: Blob | null = null;
+        let loadError = null;
+        
         try {
           const fetchResponse = await fetch(uri);
           if (fetchResponse.ok) {
@@ -267,26 +268,42 @@ export default function ProjectChatUnified({
           }
         } catch (fetchErr) {
           console.warn('[APK] fetch() failed, trying XHR:', fetchErr);
+          loadError = fetchErr;
+          
           // Fallback to XHR for file:// URIs on older Android
+          // IMPORTANT: Don't let XHR errors propagate - handle them locally
           const xhr = new XMLHttpRequest();
           xhr.open('GET', uri, true);
           xhr.responseType = 'blob';
-          await new Promise<void>((resolve, reject) => {
+          
+          const xhrLoaded = await new Promise<boolean>((resolve) => {
             xhr.onload = () => {
               if (xhr.status === 200) {
                 blob = xhr.response;
                 console.log('[APK] Audio loaded via XHR, size:', blob?.size);
-                resolve();
+                resolve(true);
               } else {
-                reject(new Error('XHR failed: ' + xhr.status));
+                console.warn('[APK] XHR status:', xhr.status);
+                resolve(false);
               }
             };
-            xhr.onerror = () => reject(new Error('XHR error'));
+            xhr.onerror = () => {
+              console.warn('[APK] XHR onerror');
+              resolve(false);
+            };
+            xhr.ontimeout = () => {
+              console.warn('[APK] XHR timeout');
+              resolve(false);
+            };
             xhr.send();
           });
+          
+          if (!xhrLoaded) {
+            loadError = new Error('XHR failed to load audio');
+          }
         }
         
-        if (blob) {
+        if (blob && blob.size > 0) {
           // Determine proper MIME type from result or blob
           const mimeType = (result as any).mimeType || blob.type || 'audio/mp4';
           const ext = mimeType.includes('mpeg') ? 'mp3' : 
@@ -296,7 +313,8 @@ export default function ProjectChatUnified({
           console.log('[APK] Sending voice message, file:', mediaFile.name, 'size:', mediaFile.size);
           onSendMessage(`🎤 Nota de voz (${voiceRecordingTimer}s)`, 'AUDIO', { file: mediaFile });
         } else {
-          console.error('[APK] Could not load audio blob');
+          const errMsg = loadError instanceof Error ? loadError.message : String(loadError || 'unknown');
+          console.error('[APK] Could not load audio blob, loadError:', errMsg);
           alert('Error: No se pudo cargar el audio');
         }
       } else {

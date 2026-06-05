@@ -31,21 +31,40 @@ export async function POST(req: Request) {
           where: { id: existing.id },
           data: {
             fcmToken,
+            type: 'fcm',  // Ensure type is set
             deviceName: deviceName || null,
           }
         })
         console.log(`[PUSH] FCM subscription updated for user ${userId}`)
         return NextResponse.json({ success: true, id: existing.id })
       } else {
-        const pushSub = await prisma.pushSubscription.create({
-          data: {
-            userId,
-            fcmToken,
-            deviceName: deviceName || null,
+        // Check if type column exists first
+        try {
+          const pushSub = await prisma.pushSubscription.create({
+            data: {
+              userId,
+              fcmToken,
+              type: 'fcm',  // Explicitly set type for FCM
+              deviceName: deviceName || null,
+            }
+          })
+          console.log(`[PUSH] FCM subscription registered for user ${userId}`)
+          return NextResponse.json({ success: true, id: pushSub.id })
+        } catch (schemaErr: any) {
+          // If type column doesn't exist, create without it
+          if (schemaErr?.code === 'P2029' || schemaErr?.message?.includes('type')) {
+            const pushSub = await prisma.pushSubscription.create({
+              data: {
+                userId,
+                fcmToken,
+                deviceName: deviceName || null,
+              }
+            })
+            console.log(`[PUSH] FCM subscription registered (legacy, no type column)`)
+            return NextResponse.json({ success: true, id: pushSub.id })
           }
-        })
-        console.log(`[PUSH] FCM subscription registered for user ${userId}`)
-        return NextResponse.json({ success: true, id: pushSub.id })
+          throw schemaErr;
+        }
       }
     }
 

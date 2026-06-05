@@ -64,22 +64,45 @@ export default function NativeCameraCapture({ onPhotoCapture, onVideoCapture, on
         setRecording(false)
         clearInterval(timerInterval)
         const result = await CapacitorAudioRecorder.stopRecording()
+        console.log('[NativeCamera] Audio result:', JSON.stringify(result));
         if (result.uri) {
-          // Use XMLHttpRequest for file:// URIs (native paths)
           const uri = result.uri;
-          const xhr = new XMLHttpRequest();
-          xhr.open('GET', uri, true);
-          xhr.responseType = 'blob';
-          xhr.onload = () => {
-            if (xhr.status === 200) {
-              const blob = xhr.response;
-              const url = URL.createObjectURL(blob);
-              onAudioCapture(blob, url);
-              onClose();
+          let blob: Blob | null = null;
+          
+          // Try fetch first (Android 10+)
+          try {
+            const fetchResp = await fetch(uri);
+            if (fetchResp.ok) {
+              blob = await fetchResp.blob();
+              console.log('[NativeCamera] Audio via fetch, size:', blob.size);
             }
-          };
-          xhr.onerror = () => console.error('Error loading audio');
-          xhr.send();
+          } catch (e) {
+            console.warn('[NativeCamera] fetch failed, trying XHR');
+            // XHR fallback
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', uri, true);
+            xhr.responseType = 'blob';
+            const loaded = await new Promise<boolean>((resolve) => {
+              xhr.onload = () => {
+                if (xhr.status === 200) {
+                  blob = xhr.response;
+                  console.log('[NativeCamera] Audio via XHR, size:', blob?.size);
+                  resolve(true);
+                } else resolve(false);
+              };
+              xhr.onerror = () => resolve(false);
+              xhr.send();
+            });
+            if (!loaded) blob = null;
+          }
+          
+          if (blob && blob.size > 0) {
+            const url = URL.createObjectURL(blob);
+            onAudioCapture(blob, url);
+            onClose();
+          } else {
+            console.error('[NativeCamera] Failed to load audio');
+          }
         }
       } catch (err) { console.error('Error stopping audio:', err) }
       return

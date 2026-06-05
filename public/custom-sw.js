@@ -114,9 +114,14 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(STATIC_CACHE)
       .then(async (cache) => {
+        // vXXX: CRITICAL_URLS must include BOTH offline-shells AND base pages
+        // Because APK fallback tries to serve base pages directly, not offline-shells
         const CRITICAL_URLS = [
           '/admin/proyectos/offline-shell',
           '/admin/operador/proyecto/offline-shell',
+          // vXXX: These are the BASE pages that APK fallback tries to serve
+          '/admin',
+          '/admin/operador',
           '/offline.html',
           '/favicon.ico',
           '/logo.jpg'
@@ -461,28 +466,44 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       navigationHandler(request).catch(async (err) => {
         console.error('[SW] Navigation handler crashed:', err);
-        // v386: APK should NEVER show offline.html — always serve app shell
+        // v386 + vXXX: APK should NEVER show offline.html — serve offline-shell directly
         if (isAndroidNative) {
           const url = new URL(request.url);
           const isOperador = url.pathname.includes('/operador') || url.pathname.startsWith('/operador');
           
-          // v386: Serve the cached app shell directly (no JS redirect)
-          // For operador: /admin/operador (cached in PRE_CACHE)
-          // For admin: /admin/proyectos (cached in PRE_CACHE)
-          const shellPath = isOperador ? '/admin/operador' : '/admin/proyectos';
+          // vXXX: Serve the OFFLINE-SHELL directly (not the base page)
+          // offline-shell has full app UI that works without network
+          const shellPath = isOperador 
+            ? '/admin/operador/proyecto/offline-shell' 
+            : '/admin/proyectos/offline-shell';
+          
+          // Try offline-shell first
           const shellMatch = await caches.match(shellPath, { ignoreVary: true, ignoreSearch: true });
           if (shellMatch) return shellMatch;
           
-          // Fallback: try operador as default for APK
+          // Try ALL caches for the shell (might be in different versioned cache)
+          const allCaches = await caches.keys();
+          for (const cName of allCaches) {
+            const c = await caches.open(cName);
+            const match = await c.match(shellPath, { ignoreVary: true, ignoreSearch: true });
+            if (match) return match;
+          }
+          
+          // Fallback 1: Try BASE pages (admin or admin/operador)
+          const basePath = isOperador ? '/admin/operador' : '/admin';
+          const baseMatch = await caches.match(basePath, { ignoreVary: true, ignoreSearch: true });
+          if (baseMatch) return baseMatch;
+          
+          // Fallback 2: Try operador as default
           const fallbackMatch = await caches.match('/admin/operador', { ignoreVary: true, ignoreSearch: true });
           if (fallbackMatch) return fallbackMatch;
           
-          // Last resort: try admin dashboard
+          // Fallback 3: admin dashboard
           const dashMatch = await caches.match('/admin', { ignoreVary: true, ignoreSearch: true });
           if (dashMatch) return dashMatch;
           
-          // If nothing cached, redirect using 302 (no JS needed)
-          const redirectUrl = isOperador ? '/admin/operador' : '/admin/proyectos';
+          // LAST RESORT: redirect using 302 (no JS needed)
+          const redirectUrl = isOperador ? '/admin/operador' : '/admin';
           return Response.redirect(redirectUrl, 302);
         }
         // PWA fallback
@@ -791,7 +812,10 @@ async function navigationHandler(request) {
         return fallbackShell;
       }
       
-      // If nothing cached, return a minimal HTML that loads the app
+      // If nothing cached, return a minimal HTML that redirects
+      const redirectUrl = url.pathname.includes('/operador') ? '/admin/operador' : '/admin';
+      return Response.redirect(redirectUrl, 302);
+    }
       return new Response(
         '<!DOCTYPE html><html><head>' +
         '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
