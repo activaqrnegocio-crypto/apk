@@ -285,32 +285,44 @@ export default function ProjectChatUnified({
           console.error('[APK] Error reading file:', fileErr);
         }
       }
-      // Caso 3: URI antiguo
+      // Caso 3: URI (file://) - usar Filesystem para leer
       else if (result.uri) {
-        console.log('[APK] Loading audio from URI:', result.uri);
-        try {
-          const fetchResp = await fetch(result.uri);
-          if (fetchResp.ok) {
-            blob = await fetchResp.blob();
-            console.log('[APK] Audio loaded via fetch, size:', blob.size);
+        const uri = result.uri;
+        console.log('[APK] Loading audio from URI:', uri);
+        
+        // Si es file://, usar Filesystem plugin
+        if (uri.startsWith('file://')) {
+          try {
+            const { Filesystem } = await import('@capacitor/filesystem');
+            // Extraer el path del file://
+            const filePath = uri.replace('file://', '');
+            console.log('[APK] Reading file via Filesystem, path:', filePath);
+            
+            const readResult = await Filesystem.readFile({ path: filePath });
+            if (readResult.data) {
+              const base64Data = readResult.data as string;
+              const binaryString = atob(base64Data);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              blob = new Blob([bytes], { type: 'audio/m4a' });
+              console.log('[APK] Audio loaded from file:// via Filesystem, size:', blob.size);
+            }
+          } catch (fileErr) {
+            console.error('[APK] Error reading file via Filesystem:', fileErr);
           }
-        } catch (fetchErr) {
-          console.warn('[APK] fetch failed, trying XHR:', fetchErr);
-          const xhr = new XMLHttpRequest();
-          xhr.open('GET', result.uri, true);
-          xhr.responseType = 'blob';
-          const loaded = await new Promise<boolean>((resolve) => {
-            xhr.onload = () => {
-              if (xhr.status === 200) {
-                blob = xhr.response;
-                console.log('[APK] Audio loaded via XHR, size:', blob?.size);
-                resolve(true);
-              } else resolve(false);
-            };
-            xhr.onerror = () => resolve(false);
-            xhr.send();
-          });
-          if (!loaded) blob = null;
+        } else {
+          // Para http:// o https:// URIs
+          try {
+            const fetchResp = await fetch(uri);
+            if (fetchResp.ok) {
+              blob = await fetchResp.blob();
+              console.log('[APK] Audio loaded via fetch, size:', blob.size);
+            }
+          } catch (fetchErr) {
+            console.warn('[APK] fetch failed:', fetchErr);
+          }
         }
       } else {
         console.error('[APK] No blob, path ni URI en result:', result);
