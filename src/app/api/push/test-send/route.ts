@@ -1,11 +1,23 @@
 // Test endpoint to send a push notification to a specific user
 // Usage: GET /api/push/test-send?userId=61
+// NOTE: This endpoint is PUBLIC (no auth) for testing purposes
 import { prisma } from '@/lib/prisma'
 import { sendFCMToToken, type FCMPayload } from '@/lib/firebase-admin'
 import { NextResponse } from 'next/server'
 
 export async function GET(request: Request) {
   try {
+    // Check if Firebase Admin is initialized
+    const { getFirebaseAdmin } = await import('@/lib/firebase-admin')
+    const app = getFirebaseAdmin()
+    if (!app) {
+      return NextResponse.json({ 
+        error: 'Firebase Admin not initialized',
+        cause: 'Missing FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, or FIREBASE_PRIVATE_KEY in environment variables',
+        suggestion: 'Add these variables to Vercel → Settings → Environment Variables'
+      }, { status: 500 })
+    }
+
     const { searchParams } = new URL(request.url)
     const userId = parseInt(searchParams.get('userId') || '0', 10)
     
