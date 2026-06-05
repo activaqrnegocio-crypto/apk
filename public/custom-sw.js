@@ -1192,7 +1192,7 @@ async function networkFirst(request, cacheName, timeout = 10000) {
     if (isNextChunk) {
       console.warn('[SW] Critical chunk missing offline:', url.pathname);
       return new Response(
-        'console.error("Aquatech: Chunk load failed offline. Please reconnect.");',
+        '// Chunk load failed offline - graceful degradation\nexport default null;',
         { status: 200, headers: { 'Content-Type': 'application/javascript' } }
       );
     }
@@ -1284,7 +1284,7 @@ async function staleWhileRevalidate(request, cacheName) {
   // that React error boundaries can catch, instead of a fatal page crash.
   // NOTE: status 200 with empty body, NOT 204 — 204 disallows body and throws.
   if (isNextChunk) {
-    return new Response('/* chunk unavailable offline */', { status: 200, headers: { 'Content-Type': 'application/javascript' } });
+    return new Response('// Chunk unavailable offline\nexport default null;', { status: 200, headers: { 'Content-Type': 'application/javascript' } });
   }
   return Response.error();
 }

@@ -38,7 +38,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
 
     // 3. LISTENERS PRIMERO - antes de register()
     PushNotifications.addListener('registration', async (token) => {
-      console.log('[PushNative] Token FCM recibido:', token.value);
+      console.log('[PushNative] Token FCM recibido:', token.value, 'userId:', userId);
 
       // 4. Enviar token al backend
       try {
@@ -51,11 +51,14 @@ export async function registerFCMToken(userId: number): Promise<void> {
             userId,
           }),
         });
+        console.log('[PushNative] Request body:', JSON.stringify({ type: 'fcm', token: token.value, userId }));
 
         if (response.ok) {
-          console.log('[PushNative] Token FCM guardado en backend');
+          const data = await response.json().catch(() => ({}));
+          console.log('[PushNative] Token FCM guardado en backend:', JSON.stringify(data));
         } else {
-          console.error('[PushNative] Error guardando token:', response.status);
+          const text = await response.text().catch(() => 'unknown error');
+          console.error('[PushNative] Error guardando token:', response.status, text);
         }
       } catch (err) {
         console.error('[PushNative] Error enviando token al backend:', err);
