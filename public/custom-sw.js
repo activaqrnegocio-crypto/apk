@@ -461,30 +461,29 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       navigationHandler(request).catch(async (err) => {
         console.error('[SW] Navigation handler crashed:', err);
-        // v385: APK should NEVER show offline.html — always serve app shell
+        // v386: APK should NEVER show offline.html — always serve app shell
         if (isAndroidNative) {
-          // Try app shell first (admin or operador based on URL)
           const url = new URL(request.url);
-          const shellUrl = url.pathname.includes('/operador') 
-            ? '/admin/operador/proyecto/offline-shell'
-            : '/admin/proyectos/offline-shell';
-          const shellMatch = await caches.match(shellUrl, { ignoreVary: true, ignoreSearch: true });
+          const isOperador = url.pathname.includes('/operador') || url.pathname.startsWith('/operador');
+          
+          // v386: Serve the cached app shell directly (no JS redirect)
+          // For operador: /admin/operador (cached in PRE_CACHE)
+          // For admin: /admin/proyectos (cached in PRE_CACHE)
+          const shellPath = isOperador ? '/admin/operador' : '/admin/proyectos';
+          const shellMatch = await caches.match(shellPath, { ignoreVary: true, ignoreSearch: true });
           if (shellMatch) return shellMatch;
-          // Fallback to dashboard
-          const dashboardUrl = url.pathname.includes('/operador') ? '/admin/operador' : '/admin';
-          const dashMatch = await caches.match(dashboardUrl, { ignoreVary: true, ignoreSearch: true });
+          
+          // Fallback: try operador as default for APK
+          const fallbackMatch = await caches.match('/admin/operador', { ignoreVary: true, ignoreSearch: true });
+          if (fallbackMatch) return fallbackMatch;
+          
+          // Last resort: try admin dashboard
+          const dashMatch = await caches.match('/admin', { ignoreVary: true, ignoreSearch: true });
           if (dashMatch) return dashMatch;
-          // Last resort: redirect to dashboard
-          return new Response(
-            '<!DOCTYPE html><html><head>' +
-            '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-            '<title>Aquatech CRM</title>' +
-            '<script>window.location.href="/admin/proyectos/offline-shell";</script>' +
-            '</head><body style="background:#0a0f1e;color:white;font-family:system-ui;">' +
-            '<p style="text-align:center;margin-top:50px;">Cargando app...</p>' +
-            '</body></html>',
-            { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-          );
+          
+          // If nothing cached, redirect using 302 (no JS needed)
+          const redirectUrl = isOperador ? '/admin/operador' : '/admin/proyectos';
+          return Response.redirect(redirectUrl, 302);
         }
         // PWA fallback
         const offlinePage = await caches.match('/offline.html');

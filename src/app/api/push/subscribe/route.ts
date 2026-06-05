@@ -14,17 +14,23 @@ export async function POST(req: Request) {
     const { subscription, deviceName, type } = body
 
     // v380: Handle FCM tokens (Android native)
-    if (type === 'fcm' && subscription?.token) {
+    if (type === 'fcm') {
+      // APK sends token directly, not wrapped in subscription object
+      const fcmToken = subscription?.token || body.token;
+      if (!fcmToken) {
+        return NextResponse.json({ error: 'Missing FCM token' }, { status: 400 })
+      }
+      
       // Check if record exists first to handle case where type column doesn't exist
       const existing = await prisma.pushSubscription.findFirst({
-        where: { userId, fcmToken: subscription.token }
+        where: { userId, fcmToken }
       })
       
       if (existing) {
         await prisma.pushSubscription.update({
           where: { id: existing.id },
           data: {
-            fcmToken: subscription.token,
+            fcmToken,
             deviceName: deviceName || null,
           }
         })
@@ -34,7 +40,7 @@ export async function POST(req: Request) {
         const pushSub = await prisma.pushSubscription.create({
           data: {
             userId,
-            fcmToken: subscription.token,
+            fcmToken,
             deviceName: deviceName || null,
           }
         })
@@ -44,14 +50,42 @@ export async function POST(req: Request) {
     }
 
     // v380: Handle VAPID subscriptions (PWA/iOS)
+    // v445: Check for required fields BEFORE database query to avoid 500 errors
     if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
       return NextResponse.json({ error: 'Invalid subscription data' }, { status: 400 })
     }
 
-    // Check if record exists first to handle case where type column doesn't exist
-    const existing = await prisma.pushSubscription.findFirst({
-      where: { userId, endpoint: subscription.endpoint }
-    })
+    // v445: Check if type column exists by catching schema errors
+    // If the database doesn't have 'type' column yet, fall back to old behavior
+    let existing;
+    try {
+      existing = await prisma.pushSubscription.findFirst({
+        where: { userId, endpoint: subscription.endpoint }
+      })
+    } catch (schemaErr: any) {
+      // Column 'type' doesn't exist in database yet - use legacy insert without type
+      if (schemaErr?.message?.includes('type') || schemaErr?.code === 'P2029') {
+        console.warn('[PUSH] Database schema outdated (missing type column), using legacy insert');
+        try {
+          const pushSub = await prisma.pushSubscription.create({
+            data: {
+              userId,
+              endpoint: subscription.endpoint,
+              p256dh: subscription.keys.p256dh,
+              auth: subscription.keys.auth,
+              deviceName: deviceName || null,
+            }
+          })
+          console.log(`[PUSH] VAPID subscription registered (legacy, no type column)`);
+          return NextResponse.json({ success: true, id: pushSub.id })
+        } catch (legacyErr) {
+          console.error('[PUSH] Legacy insert also failed:', legacyErr);
+          return NextResponse.json({ error: 'Error registering subscription (legacy)' }, { status: 500 })
+        }
+      }
+      // Other schema error - rethrow
+      throw schemaErr;
+    }
     
     if (existing) {
       await prisma.pushSubscription.update({
