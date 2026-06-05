@@ -1,4 +1,4 @@
-﻿const SW_VERSION = 'v377-bunny-storage-reorg';
+﻿const SW_VERSION = 'v378-offline-fix';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -815,17 +815,6 @@ async function navigationHandler(request) {
       // If nothing cached, return a minimal HTML that redirects
       const redirectUrl = url.pathname.includes('/operador') ? '/admin/operador' : '/admin';
       return Response.redirect(redirectUrl, 302);
-    }
-      return new Response(
-        '<!DOCTYPE html><html><head>' +
-        '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-        '<title>Aquatech CRM</title>' +
-        '<script>window.location.href="/admin/proyectos/offline-shell";</script>' +
-        '</head><body style="background:#0a0f1e;color:white;font-family:system-ui;">' +
-        '<p style="text-align:center;margin-top:50px;">Cargando app...</p>' +
-        '</body></html>',
-        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
-      );
     }
     
     // ── STEP 5: PWA Offline fallback ───────────────────────

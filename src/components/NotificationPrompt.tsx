@@ -63,9 +63,38 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
         // Guardar que el usuario aceptó para no mostrar de nuevo
         localStorage.setItem('push_accepted', 'true')
         
-        // Alertar al usuario que las notificaciones están activas
+        // vXXX: Enviar token FCM al backend INMEDIATAMENTE después de registrar
+        try {
+          const sessionRes = await fetch('/api/auth/session')
+          const session = await sessionRes.json()
+          if (session?.user?.id) {
+            // Importar y llamar registerFCMToken directly
+            const { registerFCMToken } = await import('@/lib/push-native')
+            await registerFCMToken(Number(session.user.id))
+            console.log('[NotificationPrompt] Token FCM enviado al backend')
+          }
+        } catch (tokenErr) {
+          console.warn('[NotificationPrompt] Error enviando token FCM:', tokenErr)
+          // No blocking error - notifications still work
+        }
+        
+        // v408: Mostrar notificación local de confirmación (como PWA)
         setTimeout(() => {
-          alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.')
+          if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+              new Notification('✅ Notificaciones activadas', {
+                body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
+                icon: '/icon-192.png',
+                badge: '/icon-192.png',
+                tag: 'confirmacion'
+              });
+            } catch (e) {
+              console.warn('[NotificationPrompt] No se pudo mostrar Notification:', e);
+              alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
+            }
+          } else {
+            alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
+          }
         }, 500)
       } else if (permission.receive === 'denied') {
         console.log('[NotificationPrompt] Permiso denegado')
@@ -78,7 +107,20 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
           localStorage.setItem('push_accepted', 'true')
           setVisible(false)
           setTimeout(() => {
-            alert('¡Notificaciones activadas!')
+            if ('Notification' in window && Notification.permission === 'granted') {
+              try {
+                new Notification('✅ Notificaciones activadas', {
+                  body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
+                  icon: '/icon-192.png',
+                  badge: '/icon-192.png',
+                  tag: 'confirmacion'
+                });
+              } catch (e) {
+                alert('¡Notificaciones activadas!');
+              }
+            } else {
+              alert('¡Notificaciones activadas!');
+            }
           }, 500)
         } catch (regErr) {
           console.error('[NotificationPrompt] Error en registro:', regErr)
