@@ -23,8 +23,14 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
       return;
     }
 
+    // Verificar si ya aceptó notificaciones antes
+    const alreadyAccepted = localStorage.getItem('push_accepted') === 'true'
+    if (alreadyAccepted) {
+      console.log('[NotificationPrompt] Ya aceptado antes, omitiendo');
+      return
+    }
+
     // En APK siempre mostrar el prompt después de 3 segundos
-    // No dependemos de checkPermissions - simplemente preguntamos
     const timer = setTimeout(() => {
       console.log('[NotificationPrompt] Mostrando prompt de notificaciones');
       setVisible(true);
@@ -38,19 +44,49 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
   const handleAccept = async () => {
     setLoading(true)
     try {
+      // Verificar estado actual del permiso
+      const checkResult = await PushNotifications.checkPermissions()
+      console.log('[NotificationPrompt] Estado actual del permiso:', checkResult)
+      
       // Solicitar permiso
       const permission = await PushNotifications.requestPermissions()
+      console.log('[NotificationPrompt] Resultado de requestPermissions:', permission)
+      
       if (permission.receive === 'granted') {
         // Registrar
         await PushNotifications.register()
         console.log('[NotificationPrompt] Permiso concedido y registrado')
+        
+        // Mostrar éxito y cerrar
         setVisible(false)
-      } else {
+        
+        // Guardar que el usuario aceptó para no mostrar de nuevo
+        localStorage.setItem('push_accepted', 'true')
+        
+        // Alertar al usuario que las notificaciones están activas
+        setTimeout(() => {
+          alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.')
+        }, 500)
+      } else if (permission.receive === 'denied') {
         console.log('[NotificationPrompt] Permiso denegado')
-        alert('Para recibir notificaciones, activa el permiso en Configuración')
+        alert('Para recibir notificaciones, activa el permiso en Configuración > Aplicaciones > Aquatech > Notificaciones')
+      } else {
+        console.log('[NotificationPrompt] Permiso en estado:', permission.receive)
+        // El permiso puede estar en "default" o "prompt" - intentar registrar de todas formas
+        try {
+          await PushNotifications.register()
+          localStorage.setItem('push_accepted', 'true')
+          setVisible(false)
+          setTimeout(() => {
+            alert('¡Notificaciones activadas!')
+          }, 500)
+        } catch (regErr) {
+          console.error('[NotificationPrompt] Error en registro:', regErr)
+        }
       }
     } catch (err) {
       console.error('[NotificationPrompt] Error:', err)
+      alert('Error al activar notificaciones. Verifica tu conexión a internet.')
     } finally {
       setLoading(false)
     }

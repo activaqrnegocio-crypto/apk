@@ -184,7 +184,15 @@ export default function DashboardClient({
     showOnboarding,
     setShowOnboarding 
   } = usePushNotifications()
-
+  // v385: En APK, NO mostrar el banner de usePushNotifications (es para PWA/browser)
+  // Las notificaciones en APK se manejan por NotificationPrompt (native Capacitor)
+  // Para APK, forzamos pushStatus a 'subscribed' para ocultar el banner
+  useEffect(() => {
+    if (isApk) {
+      // En APK, el banner de browser push no aplica
+      // NotificationPrompt se encarga de las notificaciones nativas
+    }
+  }, [isApk])
   useEffect(() => {
     setMounted(true)
     const dismissed = localStorage.getItem('push_dismissed')
@@ -245,7 +253,8 @@ export default function DashboardClient({
       )}
 
       {/* Push Notification Banner for Admins */}
-      {pushStatus !== 'subscribed' && pushStatus !== 'loading' && !pushDismissed && (
+      {/* v385: En APK ocultamos este banner - NotificationPrompt maneja native push */}
+      {!isApk && pushStatus !== 'subscribed' && pushStatus !== 'loading' && !pushDismissed && (
         <div style={{
           background: pushStatus === 'denied' || pushStatus === 'unsupported' 
             ? 'rgba(255,255,255,0.05)' 

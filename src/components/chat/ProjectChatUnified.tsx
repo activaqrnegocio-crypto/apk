@@ -1232,9 +1232,16 @@ export default function ProjectChatUnified({
               {/* APK: Mic button - one tap to start/stop recording */}
               {Capacitor.isNativePlatform() ? (
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (isRecordingVoice) {
-                      stopVoiceRecording(true);
+                      // STOP and SEND voice message
+                      const sendButton = document.querySelector('.btn-send') as HTMLButtonElement;
+                      if (sendButton) sendButton.disabled = true;
+                      try {
+                        await stopVoiceRecording(true);
+                      } finally {
+                        if (sendButton) sendButton.disabled = false;
+                      }
                     } else {
                       startVoiceRecording();
                     }

@@ -8,6 +8,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import Link from 'next/link'
 import { usePushNotifications } from '@/hooks/usePushNotifications'
 import { hasModuleAccess } from '@/lib/rbac'
+import { Capacitor } from '@capacitor/core'
 import dynamic from 'next/dynamic'
 
 // Fase 3: Dynamic imports — these components are NOT needed for first paint
@@ -879,6 +880,9 @@ export default function OperatorDashboardClient({
     setShowOnboarding 
   } = usePushNotifications()
 
+  // v385: En APK, el banner de browser push no aplica - NotificationPrompt maneja native push
+  const isApk = typeof window !== 'undefined' && Capacitor.isNativePlatform()
+
   // Show push banner if not subscribed and not recently dismissed
   useEffect(() => {
     const dismissed = localStorage.getItem('push_dismissed')
@@ -1001,7 +1005,8 @@ export default function OperatorDashboardClient({
         <NotificationOnboarding onDone={() => setShowOnboarding(false)} />
       )}
 
-      {hydrated && pushStatus !== 'subscribed' && pushStatus !== 'loading' && !pushDismissed && (
+      {/* v385: En APK ocultamos este banner - NotificationPrompt maneja native push */}
+      {!isApk && hydrated && pushStatus !== 'subscribed' && pushStatus !== 'loading' && !pushDismissed && (
         <div style={{
           background: pushStatus === 'denied' || pushStatus === 'unsupported' 
             ? 'rgba(255,255,255,0.05)' 

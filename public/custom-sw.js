@@ -6,13 +6,22 @@ const ASSETS_CACHE = `aquatech-assets-${SW_VERSION}`;
 const FONTS_CACHE  = `aquatech-fonts-${SW_VERSION}`;
 const RSC_CACHE    = `aquatech-rsc-${SW_VERSION}`;
 
-// ─── v380: NATIVE PLATFORM DETECTION ────────────────────────
+// ─── v385: NATIVE PLATFORM DETECTION ────────────────────────
 // Detecta si estamos en APK (Capacitor) vs PWA (browser)
+// Usa self.Capacitor (SW context) y fallback a navigator.userAgent (page context)
 // Esto permite hacer routing entre SQLite nativo (APK) e IndexedDB (PWA)
 var isAndroidNative = false;
 try {
-  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform) {
-    isAndroidNative = window.Capacitor.isNativePlatform();
+  // En SW context: usar self.Capacitor
+  if (typeof self !== 'undefined' && self.Capacitor && self.Capacitor.isNativePlatform) {
+    isAndroidNative = self.Capacitor.isNativePlatform();
+  }
+  // Fallback: detectar por User-Agent (funciona en cualquier contexto)
+  if (!isAndroidNative && typeof navigator !== 'undefined' && navigator.userAgent) {
+    // Android APK con Capacitor generalmente tiene estos indicadores
+    isAndroidNative = /Android.*Capacitor/i.test(navigator.userAgent) || 
+                      /; wv\)/i.test(navigator.userAgent) ||  // WebView
+                      /Version\/[0-9]+.*Chrome\/[0-9]+/i.test(navigator.userAgent); // Chrome en Android
   }
 } catch (e) {
   // Capacitor no disponible - somos PWA
