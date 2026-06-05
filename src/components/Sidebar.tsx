@@ -491,31 +491,64 @@ export default memo(function Sidebar() {
   const handleLogout = async () => {
     try {
       // v410: Enviar mensaje LOGOUT al Service Worker para limpiar authShadow
+      // Y esperar confirmación antes de continuar
       if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.ready
-        // Enviar mensaje LOGOUT al SW
-        reg.active?.postMessage('LOGOUT')
+        // Enviar mensaje LOGOUT al SW y esperar confirmación
+        if (reg.active) {
+          reg.active.postMessage('LOGOUT')
+          // Esperar a que el SW confirme que limpió todo
+          await new Promise((resolve) => {
+            const timeout = setTimeout(resolve, 1000) // Max 1 segundo de espera
+            navigator.serviceWorker.addEventListener('message', function handler(e) {
+              if (e.data?.type === 'LOGOUT_COMPLETE') {
+                clearTimeout(timeout)
+                navigator.serviceWorker.removeEventListener('message', handler)
+                resolve(null)
+              }
+            })
+          })
+        }
         
         const sub = await reg.pushManager.getSubscription()
         if (sub) await sub.unsubscribe()
       }
+      
+      // Limpiar IndexedDB
       import('dexie').then((m) => {
         const Dexie = m.default;
         Dexie.delete('AquatechOfflineDB').catch(() => {})
       }).catch(() => {})
+      
+      // Limpiar storages
       localStorage.clear()
       sessionStorage.clear()
+      
+      // Limpiar TODAS las caches
       if (typeof window !== 'undefined' && 'caches' in window) {
         const names = await caches.keys()
         for (const name of names) {
-          if (name !== 'aquatech-static' && name !== 'aquatech-fonts') await caches.delete(name)
+          await caches.delete(name)
         }
       }
+      
+      // v410: Limpiar cookies de NextAuth explícitamente
+      // Obtener todas las cookies y borrarlas
+      if (typeof document !== 'undefined') {
+        document.cookie.split(';').forEach(function(c) { 
+          document.cookie = c.replace(/^ +/, '').replace(/=.*/, '=;expires=' + new Date().toUTCString() + ';path=/'); 
+        })
+      }
+      
+      // Llamar signOut de NextAuth
       await signOut({ redirect: false })
+      
     } catch (e) {
       console.warn('Offline logout fallback', e)
     }
-    window.location.href = '/admin/login'
+    
+    // Redirigir a login - usar replace en vez de href para evitar historial
+    window.location.replace('/admin/login?forceLogout=1')
   }
 
   const isActive = (href: string) => {
