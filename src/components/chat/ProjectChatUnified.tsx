@@ -73,6 +73,7 @@ export default function ProjectChatUnified({
   const [inputValue, setInputValue] = useState('')
   const [showAttachments, setShowAttachments] = useState(false)
   const [showMediaCapture, setShowMediaCapture] = useState<'audio' | 'video' | 'photo' | undefined>(undefined)
+  const [showPwaCamera, setShowPwaCamera] = useState(false)
   // Voice recording state for WhatsApp-style in APK
   const [isRecordingVoice, setIsRecordingVoice] = useState(false)
   const [voiceRecordingTimer, setVoiceRecordingTimer] = useState(0)
@@ -252,18 +253,40 @@ export default function ProjectChatUnified({
       const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
       const result = await CapacitorAudioRecorder.stopRecording();
       console.log('[APK] stopRecording result:', JSON.stringify(result));
-      console.log('[APK] blob type:', typeof result.blob, 'duration:', result.duration);
       
-      // v410: Plugin v8.2.1 devuelve {blob, duration} - verificar blob y duration
+      // v410 FIX: El plugin puede devolver {blob}, {path}, {uri} o {blob, path}
       let blob: Blob | null = null;
-      const hasValidBlob = result.blob && (result.blob.size > 0 || (result.duration && result.duration > 0));
       
-      if (hasValidBlob) {
-        // Blob directo del plugin (v8.2.1 native)
-        blob = result.blob ?? null;
-        console.log('[APK] Using blob directly, size:', blob?.size, 'duration:', result.duration);
-      } else if (result.uri) {
-        // URI fallback para versiones antiguas
+      // Caso 1: blob directo (v8.2.1 native)
+      if (result.blob && result.blob.size > 0) {
+        blob = result.blob;
+        console.log('[APK] Using blob directly, size:', blob.size);
+      }
+      // Caso 2: path de archivo en Android
+      else if ((result as any).path) {
+        const filePath = (result as any).path;
+        console.log('[APK] Loading audio from path:', filePath);
+        try {
+          // Usar Filesystem plugin para leer el archivo
+          const { Filesystem } = await import('@capacitor/filesystem');
+          const readResult = await Filesystem.readFile({ path: filePath });
+          if (readResult.data) {
+            // Convertir base64 a blob
+            const base64Data = readResult.data as string;
+            const binaryString = atob(base64Data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            blob = new Blob([bytes], { type: 'audio/webm' });
+            console.log('[APK] Audio loaded from path, size:', blob.size);
+          }
+        } catch (fileErr) {
+          console.error('[APK] Error reading file:', fileErr);
+        }
+      }
+      // Caso 3: URI antiguo
+      else if (result.uri) {
         console.log('[APK] Loading audio from URI:', result.uri);
         try {
           const fetchResp = await fetch(result.uri);
@@ -290,7 +313,7 @@ export default function ProjectChatUnified({
           if (!loaded) blob = null;
         }
       } else {
-        console.error('[APK] No blob ni URI en result:', result);
+        console.error('[APK] No blob, path ni URI en result:', result);
       }
       
       if (blob && blob.size > 0) {
@@ -1228,6 +1251,47 @@ export default function ProjectChatUnified({
         </div>
       )}
 
+      {/* --- PWA: Camera modal (photo/video) --- */}
+      {showPwaCamera && !Capacitor.isNativePlatform() && (
+        <div className="media-modal-overlay">
+          <div className="media-modal-content" style={{ position: 'relative' }}>
+            <button 
+              onClick={() => setShowPwaCamera(false)}
+              style={{
+                position: 'absolute',
+                top: '-40px',
+                right: '0',
+                background: 'none',
+                border: 'none',
+                color: 'white',
+                fontSize: '1.5rem',
+                cursor: 'pointer',
+                zIndex: 10
+              }}
+            >
+              ✕
+            </button>
+            <MediaCapture
+              onCapture={(blob, type, transcription) => {
+                console.log('[PWA Camera] Captured:', type, 'size:', blob.size, 'transcription:', transcription);
+                if (type === 'photo') {
+                  const ext = blob.type.includes('jpeg') || blob.type.includes('jpg') ? 'jpg' : 'webp';
+                  const mediaFile = new File([blob], `photo_${Date.now()}.${ext}`, { type: blob.type });
+                  onSendMessage(`📷 Foto`, 'IMAGE', { file: mediaFile });
+                } else if (type === 'video') {
+                  const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+                  const mediaFile = new File([blob], `video_${Date.now()}.${ext}`, { type: blob.type });
+                  onSendMessage(`🎥 Video (${Math.floor(blob.size / 1024)}KB)`, 'VIDEO', { file: mediaFile });
+                }
+                setShowPwaCamera(false);
+              }}
+              mode="video"
+              placeholder="Capturando..."
+            />
+          </div>
+        </div>
+      )}
+
       {/* --- APK CAMERA TYPE MODAL --- */}
       <footer className="chat-footer">
         <div className="input-row">
@@ -1248,6 +1312,18 @@ export default function ProjectChatUnified({
               {Capacitor.isNativePlatform() && (
                 <button 
                   onClick={() => setShowCameraTypeModal(true)}
+                  className="btn-icon" 
+                  title="Cámara (Foto/Video)"
+                  style={{ width: '44px', height: '44px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Camera size={20} />
+                </button>
+              )}
+
+              {/* PWA: Camera button (photo/video) */}
+              {!Capacitor.isNativePlatform() && (
+                <button 
+                  onClick={() => setShowPwaCamera(true)}
                   className="btn-icon" 
                   title="Cámara (Foto/Video)"
                   style={{ width: '44px', height: '44px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
