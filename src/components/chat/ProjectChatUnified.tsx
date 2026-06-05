@@ -252,15 +252,18 @@ export default function ProjectChatUnified({
       const { CapacitorAudioRecorder } = await import('@capgo/capacitor-audio-recorder');
       const result = await CapacitorAudioRecorder.stopRecording();
       console.log('[APK] stopRecording result:', JSON.stringify(result));
+      console.log('[APK] blob type:', typeof result.blob, 'duration:', result.duration);
       
-      // v408: Plugin puede devolver {blob} (web) o {uri} (native Android)
+      // v410: Plugin v8.2.1 devuelve {blob, duration} - verificar blob y duration
       let blob: Blob | null = null;
+      const hasValidBlob = result.blob && (result.blob.size > 0 || (result.duration && result.duration > 0));
       
-      if (result.blob && result.blob.size > 0) {
-        // Web/platform con blob directo
-        blob = result.blob;
+      if (hasValidBlob) {
+        // Blob directo del plugin (v8.2.1 native)
+        blob = result.blob ?? null;
+        console.log('[APK] Using blob directly, size:', blob?.size, 'duration:', result.duration);
       } else if (result.uri) {
-        // Native Android: cargar desde URI
+        // URI fallback para versiones antiguas
         console.log('[APK] Loading audio from URI:', result.uri);
         try {
           const fetchResp = await fetch(result.uri);
@@ -270,7 +273,6 @@ export default function ProjectChatUnified({
           }
         } catch (fetchErr) {
           console.warn('[APK] fetch failed, trying XHR:', fetchErr);
-          // XHR fallback
           const xhr = new XMLHttpRequest();
           xhr.open('GET', result.uri, true);
           xhr.responseType = 'blob';
@@ -287,6 +289,8 @@ export default function ProjectChatUnified({
           });
           if (!loaded) blob = null;
         }
+      } else {
+        console.error('[APK] No blob ni URI en result:', result);
       }
       
       if (blob && blob.size > 0) {

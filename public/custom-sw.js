@@ -1,4 +1,4 @@
-﻿const SW_VERSION = 'v409-offline-fix';
+﻿const SW_VERSION = 'v410-offline-fix';
 const VERSION = SW_VERSION;
 const STATIC_CACHE = `aquatech-static-${SW_VERSION}`;
 const PAGES_CACHE  = `aquatech-pages-${SW_VERSION}`;
@@ -691,6 +691,7 @@ async function navigationHandler(request) {
     }
 
     // v340: ROBUST STRATEGY — Cache-first for offline, network-first for online
+    // v410: For APK cold-start offline, ALWAYS check cache FIRST
     
     // v372: Specific detection for project details vs lists
     const isOpDetail = url.pathname.match(/\/admin\/operador\/proyecto\/\d+/) || 
@@ -698,7 +699,76 @@ async function navigationHandler(request) {
                        url.pathname.includes('/operador/proyecto/');
     const isAdminDetail = url.pathname.match(/\/admin\/proyectos\/\d+/) && !url.pathname.endsWith('/nuevo');
     
-    // ── STEP 2: NETWORK FIRST for navigation when online ──
+    // ── APK COLD START FIX: Check cache FIRST for Android ──
+    // v410: This is the key fix - when app opens offline, SW must respond with cache immediately
+    if (isAndroidNative) {
+      // Try exact URL match in cache first
+      let cached = await caches.match(request.url, { ignoreVary: true, ignoreSearch: true });
+      if (isValidHTMLResponse(cached)) {
+        console.log('[SW v410] APK cold-start: serving from cache:', request.url);
+        return cleanResponse(cached);
+      }
+      
+      // For operador routes, try the base operador page
+      if (url.pathname.includes('/operador')) {
+        const opCached = await caches.match('/admin/operador', { ignoreVary: true, ignoreSearch: true });
+        if (isValidHTMLResponse(opCached)) {
+          console.log('[SW v410] APK cold-start: serving /admin/operador from cache');
+          return cleanResponse(opCached);
+        }
+      }
+      
+      // For admin routes, try the base admin page
+      if (url.pathname.startsWith('/admin') && !url.pathname.includes('/operador')) {
+        const adminCached = await caches.match('/admin', { ignoreVary: true, ignoreSearch: true });
+        if (isValidHTMLResponse(adminCached)) {
+          console.log('[SW v410] APK cold-start: serving /admin from cache');
+          return cleanResponse(adminCached);
+        }
+      }
+      
+      // Try offline-shell as last resort for APK
+      const shellPath = url.pathname.includes('/operador') 
+        ? '/admin/operador/proyecto/offline-shell' 
+        : '/admin/proyectos/offline-shell';
+      const shellCached = await caches.match(shellPath, { ignoreVary: true, ignoreSearch: true });
+      if (isValidHTMLResponse(shellCached)) {
+        console.log('[SW v410] APK cold-start: serving shell from cache');
+        return cleanResponse(shellCached);
+      }
+      
+      // All caches for shell
+      const allCaches = await caches.keys();
+      for (const cName of allCaches) {
+        const c = await caches.open(cName);
+        const match = await c.match(shellPath, { ignoreVary: true, ignoreSearch: true });
+        if (isValidHTMLResponse(match)) {
+          console.log('[SW v410] APK cold-start: shell found in cache:', cName);
+          return cleanResponse(match);
+        }
+      }
+      
+      // If we're online, try network as last resort
+      if (navigator.onLine) {
+        try {
+          const networkResponse = await fetchWithTimeout(request.clone(), 15000);
+          if (isValidHTMLResponse(networkResponse)) {
+            const cache = await caches.open(PAGES_CACHE);
+            cache.put(request, networkResponse.clone());
+            return cleanResponse(networkResponse);
+          }
+        } catch (e) {
+          console.warn('[SW v410] APK cold-start network failed, no cache available');
+        }
+      }
+      
+      // Final fallback for APK - redirect to base URL
+      console.warn('[SW v410] APK cold-start: no cache, no network - redirecting to base');
+      const redirectUrl = url.pathname.includes('/operador') ? '/admin/operador' : '/admin';
+      return Response.redirect(redirectUrl, 302);
+    }
+    
+    // ── PWA: NETWORK FIRST for navigation when online ──
     const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
     if (isOnline) {
       try {

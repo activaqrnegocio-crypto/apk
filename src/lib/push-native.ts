@@ -25,11 +25,18 @@ export async function registerFCMToken(userId: number): Promise<void> {
       return;
     }
 
-    // 2. Registrar el dispositivo
-    await PushNotifications.register();
-    console.log('[PushNative] Dispositivo registrado para notificaciones');
+    // 2. Crear canal para Android 8+ (OBLIGATORIO)
+    await PushNotifications.createChannel({
+      id: 'default',
+      name: 'Notificaciones Aquatech',
+      importance: 5,
+      visibility: 1,
+      sound: 'default',
+      vibration: true,
+    });
+    console.log('[PushNative] Canal de notificaciones creado');
 
-    // 3. Escuchar cuando llega el token FCM
+    // 3. LISTENERS PRIMERO - antes de register()
     PushNotifications.addListener('registration', async (token) => {
       console.log('[PushNative] Token FCM recibido:', token.value);
 
@@ -80,6 +87,10 @@ export async function registerFCMToken(userId: number): Promise<void> {
     PushNotifications.addListener('registrationError', (error) => {
       console.error('[PushNative] Error de registro FCM:', error);
     });
+
+    // 8. REGISTER AL FINAL - después de tener los listeners
+    await PushNotifications.register();
+    console.log('[PushNative] Dispositivo registrado para notificaciones');
 
   } catch (err) {
     console.error('[PushNative] Error inicializando FCM:', err);
