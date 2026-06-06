@@ -56,6 +56,33 @@ export async function registerFCMToken(userId: number): Promise<void> {
         if (response.ok) {
           const data = await response.json().catch(() => ({}));
           console.log('[PushNative] Token FCM guardado en backend:', JSON.stringify(data));
+          
+          // v410: Mostrar notificación local de confirmación (como PWA)
+          try {
+            if ('Notification' in window && Notification.permission === 'granted') {
+              new Notification('✅ Notificaciones activadas', {
+                body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
+                icon: '/icon-192.png',
+                badge: '/icon-192.png',
+                tag: 'confirmacion'
+              });
+            } else {
+              // Fallback: mostrar alert si Notification API no está disponible
+              console.log('[PushNative] Notification API no disponible, usando alert');
+              alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
+            }
+          } catch (e) {
+            console.warn('[PushNative] Error mostrando notificación local:', e);
+            alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
+          }
+          
+          // v410: Enviar notificación de prueba desde el servidor para confirmar
+          try {
+            await fetch('/api/push/test', { method: 'POST' });
+            console.log('[PushNative] Notificación de prueba enviada');
+          } catch (e) {
+            console.warn('[PushNative] Error enviando notificación de prueba:', e);
+          }
         } else {
           const text = await response.text().catch(() => 'unknown error');
           console.error('[PushNative] Error guardando token:', response.status, text);
