@@ -12,7 +12,6 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
   const [visible, setVisible] = useState(false)
   const [loading, setLoading] = useState(false)
   const [dismissed, setDismissed] = useState(false)
-  const [success, setSuccess] = useState(false)
 
   useEffect(() => {
     // Solo mostrar en APK (no en PWA)
@@ -62,9 +61,6 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
       setVisible(false)
       localStorage.setItem("push_accepted", "true")
       
-      // v410: Mostrar confirmacion inline en UI (no depender de alert o Notification API)
-      setSuccess(true)
-      
     } catch (err) {
       console.error("[NotificationPrompt] Error:", err)
     } finally {
@@ -82,41 +78,6 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
   // No renderizar si no es APK o ya fue descartado
   if (!Capacitor.isNativePlatform() || dismissed) {
     return null
-  }
-
-  // v410: Mostrar mensaje de exito si las notificaciones fueron activadas
-  if (success) {
-    return (
-      <div style={{
-        position: "fixed",
-        top: "20px",
-        left: "50%",
-        transform: "translateX(-50%)",
-        background: "linear-gradient(135deg, #28a745 0%, #20c997 100%)",
-        color: "white",
-        padding: "15px 25px",
-        borderRadius: "12px",
-        boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-        zIndex: 9999,
-        animation: "slideDown 0.3s ease-out",
-        maxWidth: "90%",
-        textAlign: "center",
-      }}>
-        <style>{`
-          @keyframes slideDown {
-            from { transform: translateX(-50%) translateY(-100%); opacity: 0; }
-            to { transform: translateX(-50%) translateY(0); opacity: 1; }
-          }
-        `}</style>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", justifyContent: "center" }}>
-          <span style={{ fontSize: "20px" }}>[ON]</span>
-          <div>
-            <div style={{ fontWeight: "600", fontSize: "14px" }}>Notificaciones Activadas!</div>
-            <div style={{ fontSize: "12px", opacity: 0.9, marginTop: "2px" }}>Recibiras alertas de proyectos y mensajes.</div>
-          </div>
-        </div>
-      </div>
-    )
   }
 
   // No mostrar si no debe ser visible

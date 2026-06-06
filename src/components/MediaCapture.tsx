@@ -1,8 +1,10 @@
 'use client'
 
 import React, { useState, useRef, useEffect } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { CapacitorAudioRecorder } from '@capgo/capacitor-audio-recorder'
 
-// Inline SVG icons to avoid lucide-react webpack bundling issues
+// Inline SVG icons
 const svgProps = (size: number) => ({
   width: size, height: size, viewBox: '0 0 24 24', fill: 'none',
   stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const,
@@ -116,6 +118,21 @@ export default function MediaCapture({
       if (previewUrl) URL.revokeObjectURL(previewUrl)
       setPreviewUrl(null)
 
+      // APK: Usar CapacitorAudioRecorder nativo
+      if (Capacitor.isNativePlatform()) {
+        try {
+          await CapacitorAudioRecorder.startRecording()
+          setIsRecording(true)
+          startTimer()
+          return
+        } catch (err) {
+          console.error('Error inicio grabacion nativa:', err)
+          setDeviceError('Error al iniciar grabacion en APK')
+          return
+        }
+      }
+
+      // PWA: Usar MediaRecorder web
       const stream = await initStream()
       if (!stream) return
 
@@ -193,7 +210,40 @@ export default function MediaCapture({
     }
   }
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
+    // APK: Usar CapacitorAudioRecorder nativo
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const result = await CapacitorAudioRecorder.stopRecording()
+        setIsRecording(false)
+        stopTimer()
+        
+        // El resultado puede ser string directamente o {value: string}
+        const filePath = typeof result === 'string' ? result : (result as any).value
+        if (filePath) {
+          // El resultado es un path de archivo, necesitamos crear un Blob
+          const response = await fetch(filePath)
+          const blob = await response.blob()
+          
+          setMediaBlob(blob)
+          setPreviewUrl(URL.createObjectURL(blob))
+          setRecordedDuration(timer)
+          
+          if (skipTranscription || !navigator.onLine) {
+            onCapture(blob, 'audio', '')
+          } else {
+            await handleTranscription(blob, blob)
+          }
+        }
+        return
+      } catch (err) {
+        console.error('Error fin grabacion nativa:', err)
+        setDeviceError('Error al terminar grabacion en APK')
+        return
+      }
+    }
+
+    // PWA: Usar MediaRecorder web
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       if (audioRecorderRef.current && audioRecorderRef.current.state !== 'inactive') {
         audioRecorderRef.current.stop()

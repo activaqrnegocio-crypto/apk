@@ -18,14 +18,38 @@ export async function registerFCMToken(userId: number): Promise<void> {
   }
 
   try {
-    // 1. Solicitar permiso al usuario
+    // v410: Añadir listeners PRIMERO, antes de cualquier operación
+    // 1. Manejar notificaciones cuando la app está en primer plano
+    PushNotifications.addListener('pushNotificationReceived', (notification) => {
+      console.log('[PushNative] Notificación recibida (foreground):', notification);
+    });
+
+    // 2. Manejar tap en notificación (app en background o cerrada)
+    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+      console.log('[PushNative] Tap en notificación:', action);
+      const data = action.notification.data;
+      if (data?.projectId) {
+        window.location.href = `/admin/proyectos/${data.projectId}`;
+      } else if (data?.type === 'appointment') {
+        window.location.href = '/admin/calendario';
+      } else if (data?.type === 'chat') {
+        window.location.href = '/admin/proyectos';
+      }
+    });
+
+    // 3. Manejar errores de registro
+    PushNotifications.addListener('registrationError', (error) => {
+      console.error('[PushNative] Error de registro FCM:', error);
+    });
+
+    // 4. Solicitar permiso al usuario
     const permission = await PushNotifications.requestPermissions();
     if (permission.receive !== 'granted') {
       console.log('[PushNative] Permiso de notificaciones denegado');
       return;
     }
 
-    // 2. Crear canal para Android 8+ (OBLIGATORIO)
+    // 5. Crear canal para Android 8+ (OBLIGATORIO)
     await PushNotifications.createChannel({
       id: 'default',
       name: 'Notificaciones Aquatech',
@@ -36,7 +60,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
     });
     console.log('[PushNative] Canal de notificaciones creado');
 
-    // 3. LISTENERS PRIMERO - antes de register()
+    // 6. LISTENER DE REGISTRATION - después de los otros listeners
     PushNotifications.addListener('registration', async (token) => {
       console.log('[PushNative] Token FCM recibido:', token.value, 'userId:', userId);
 
@@ -92,33 +116,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
       }
     });
 
-    // 5. Manejar notificaciones cuando la app está en primer plano
-    PushNotifications.addListener('pushNotificationReceived', (notification) => {
-      console.log('[PushNative] Notificación recibida (foreground):', notification);
-      // Aquí puedes mostrar un toast/in-app notification si lo deseas
-    });
-
-    // 6. Manejar tap en notificación (app en background o cerrada)
-    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-      console.log('[PushNative] Tap en notificación:', action);
-      const data = action.notification.data;
-
-      // Navegar según el tipo de notificación
-      if (data?.projectId) {
-        window.location.href = `/admin/proyectos/${data.projectId}`;
-      } else if (data?.type === 'appointment') {
-        window.location.href = '/admin/calendario';
-      } else if (data?.type === 'chat') {
-        window.location.href = '/admin/proyectos';
-      }
-    });
-
-    // 7. Manejar errores de registro
-    PushNotifications.addListener('registrationError', (error) => {
-      console.error('[PushNative] Error de registro FCM:', error);
-    });
-
-    // 8. REGISTER AL FINAL - después de tener los listeners
+    // 7. REGISTER AL FINAL - después de tener los listeners
     await PushNotifications.register();
     console.log('[PushNative] Dispositivo registrado para notificaciones');
 
