@@ -58,6 +58,19 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
       )
       
       console.log("[NotificationPrompt] FCM registration complete")
+      
+      // v411: Inicializar Firebase JS SDK para capturar notificaciones foreground
+      // Esto permite que las notificaciones aparezcan incluso cuando la APK está abierta
+      try {
+        const { initFirebaseForegroundMessaging } = await import("@/lib/firebase-client")
+        await initFirebaseForegroundMessaging((notification) => {
+          console.log('[NotificationPrompt] Notificación foreground recibida:', notification)
+          // Aquí puedes mostrar un toast, actualizar estado, etc.
+        })
+      } catch (e) {
+        console.warn('[NotificationPrompt] Error inicializando Firebase foreground:', e)
+      }
+      
       setVisible(false)
       localStorage.setItem("push_accepted", "true")
       
@@ -117,7 +130,7 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
           justifyContent: "center",
           fontSize: "24px",
         }}>
-          [NOTIF]
+          🔔
         </div>
         
         <div style={{ flex: 1 }}>

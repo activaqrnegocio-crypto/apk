@@ -4,11 +4,20 @@
 
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
+import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 
 export interface PushPayload {
   title: string;
   body: string;
   data?: Record<string, string>;
+}
+
+// v411: Handler para notificaciones foreground
+// Este handler se invoca desde pushNotificationReceived cuando llega una notificación
+let foregroundMessageHandler: ((notification: any) => void) | null = null;
+
+export function setForegroundMessageHandler(handler: (notification: any) => void) {
+  foregroundMessageHandler = handler;
 }
 
 export async function registerFCMToken(userId: number): Promise<void> {
@@ -18,10 +27,17 @@ export async function registerFCMToken(userId: number): Promise<void> {
   }
 
   try {
-    // v410: Añadir listeners PRIMERO, antes de cualquier operación
+    // v411: Añadir listeners PRIMERO, antes de cualquier operación
     // 1. Manejar notificaciones cuando la app está en primer plano
+    // IMPORTANTE: pushNotificationReceived puede no dispararse para notificaciones
+    // foreground en Android con @capacitor-firebase/messaging
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
       console.log('[PushNative] Notificación recibida (foreground):', notification);
+      
+      // También invocar el handler de foreground si está configurado
+      if (foregroundMessageHandler) {
+        foregroundMessageHandler(notification);
+      }
     });
 
     // 2. Manejar tap en notificación (app en background o cerrada)
