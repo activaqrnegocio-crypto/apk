@@ -4,7 +4,6 @@
 
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export interface PushPayload {
@@ -57,7 +56,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
   }
 
   try {
-    // v414: PushNotifications para foreground y tap handling
+    // v415: PushNotifications para foreground y tap handling
     // 1. Manejar notificaciones cuando la app está en primer plano
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
       console.log('[PushNative] pushNotificationReceived (foreground):', JSON.stringify(notification));
@@ -86,27 +85,33 @@ export async function registerFCMToken(userId: number): Promise<void> {
       console.log('[PushNative] URL de navegación:', url);
       console.log('[PushNative] Data completa:', JSON.stringify(data));
       
-      // v413: Parsear URLs especiales de la PWA para navegación correcta
       if (url.startsWith('URL_PROJECT_CHAT:')) {
         // Chat de proyecto: URL_PROJECT_CHAT:123 → /admin/proyectos/123
         const projectId = url.replace('URL_PROJECT_CHAT:', '');
+        console.log('[PushNative] Navegando a chat proyecto:', projectId);
         window.location.href = `/admin/proyectos/${projectId}`;
       } else if (url.startsWith('URL_TASK:')) {
         // Tarea: URL_TASK:projectId:appointmentId → /admin/calendario?task=X&project=Y
         const parts = url.replace('URL_TASK:', '').split(':');
         const projectId = parts[0];
         const appointmentId = parts[1];
+        console.log('[PushNative] Navegando a tarea:', appointmentId, 'proyecto:', projectId);
         window.location.href = `/admin/calendario?task=${appointmentId}&project=${projectId}`;
       } else if (data.projectId) {
+        console.log('[PushNative] Navegando a proyecto (data.projectId):', data.projectId);
         window.location.href = `/admin/proyectos/${data.projectId}`;
       } else if (data.type === 'appointment') {
+        console.log('[PushNative] Navegando a calendario');
         window.location.href = '/admin/calendario';
       } else if (data.type === 'chat') {
+        console.log('[PushNative] Navegando a proyectos (chat)');
         window.location.href = '/admin/proyectos';
       } else if (data.type === 'new-project') {
+        console.log('[PushNative] Navegando a proyectos (new-project)');
         window.location.href = '/admin/proyectos';
       } else {
         // Default: ir a dashboard
+        console.log('[PushNative] Navegando a dashboard (default)');
         window.location.href = '/admin';
       }
     });
@@ -204,22 +209,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
     // 7. REGISTER AL FINAL - después de tener los listeners
     await PushNotifications.register();
     console.log('[PushNative] Dispositivo registrado para notificaciones');
-
   } catch (err) {
-    console.error('[PushNative] Error inicializando FCM:', err);
-  }
-}
-
-// ============================================
-// DESREGISTRAR (logout)
-// ============================================
-export async function unregisterFCMToken(): Promise<void> {
-  if (!Capacitor.isNativePlatform()) return;
-
-  try {
-    await PushNotifications.unregister();
-    console.log('[PushNative] Token FCM desregistrado');
-  } catch (err) {
-    console.error('[PushNative] Error desregistrando:', err);
+    console.error('[PushNative] Error en registro FCM:', err);
   }
 }
