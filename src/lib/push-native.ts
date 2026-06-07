@@ -190,7 +190,18 @@ export async function registerFCMToken(userId: number): Promise<void> {
       }
     });
 
-    // 7. REGISTER AL FINAL - después de tener los listeners
+    // 7. FirebaseMessaging para recibir mensajes en foreground
+    // @ts-ignore - Tipos del plugin no incluyen messageReceived pero funciona en runtime
+    FirebaseMessaging.addListener('messageReceived' as any, async (event: any) => {
+      console.log('[FirebaseMessaging] messageReceived foreground:', JSON.stringify(event));
+      
+      const title = event.notification?.title || event.data?.title || 'Aquatech';
+      const body = event.notification?.body || event.data?.body || '';
+      
+      await showNativeNotification(title, body, event.data);
+    });
+
+    // 8. REGISTER AL FINAL - después de tener los listeners
     await PushNotifications.register();
     console.log('[PushNative] Dispositivo registrado para notificaciones');
 
