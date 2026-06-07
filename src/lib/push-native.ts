@@ -118,7 +118,10 @@ export async function registerFCMToken(userId: number): Promise<void> {
           
           // v410: Enviar notificación de prueba desde el servidor para confirmar
           try {
-            await fetch('/api/push/test', { method: 'POST' });
+            await fetch('/api/push/test', { 
+              method: 'POST',
+              credentials: 'include'  // Incluir cookies de sesión
+            });
             console.log('[PushNative] Notificación de prueba enviada');
           } catch (e) {
             console.warn('[PushNative] Error enviando notificación de prueba:', e);
