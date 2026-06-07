@@ -78,13 +78,41 @@ export async function registerFCMToken(userId: number): Promise<void> {
     // 2. Manejar tap en notificación (app en background o cerrada)
     PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
       console.log('[PushNative] Tap en notificación:', action);
-      const data = action.notification.data;
-      if (data?.projectId) {
+      const data = action.notification.data || {};
+      const url = data.url || '';
+      
+      // v413: Parsear URLs especiales de la PWA
+      // URL_PROJECT_CHAT:123 → /admin/proyectos/123
+      if (url.startsWith('URL_PROJECT_CHAT:')) {
+        const projectId = url.replace('URL_PROJECT_CHAT:', '');
+        window.location.href = `/admin/proyectos/${projectId}`;
+      }
+      // URL_TASK:123:456 → /admin/calendario?task=456&project=123
+      else if (url.startsWith('URL_TASK:')) {
+        const parts = url.replace('URL_TASK:', '').split(':');
+        const projectId = parts[0];
+        const taskId = parts[1];
+        window.location.href = `/admin/calendario?task=${taskId}&project=${projectId}`;
+      }
+      // new-project-123 → /admin/proyectos/123
+      else if (url.startsWith('/admin/proyectos/')) {
+        window.location.href = url;
+      }
+      // Fallback: data.projectId directo
+      else if (data.projectId) {
         window.location.href = `/admin/proyectos/${data.projectId}`;
-      } else if (data?.type === 'appointment') {
+      }
+      // type=appointment → calendario
+      else if (data.type === 'appointment') {
         window.location.href = '/admin/calendario';
-      } else if (data?.type === 'chat') {
+      }
+      // type=chat → proyectos
+      else if (data.type === 'chat') {
         window.location.href = '/admin/proyectos';
+      }
+      // Default: dashboard
+      else {
+        window.location.href = '/admin';
       }
     });
 
