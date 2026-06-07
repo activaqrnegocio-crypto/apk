@@ -1,6 +1,6 @@
 import webpush from 'web-push'
 import { prisma } from './prisma'
-import { sendFCMToToken, type FCMPayload } from './firebase-admin'
+import { sendFCMDataToToken } from './firebase-admin'
 
 // Configure VAPID details only if keys are present
 // v301: Robust VAPID key loading with server-side fallback
@@ -67,7 +67,9 @@ export async function sendPushToUser(userId: number, payload: PushPayload) {
     for (const sub of fcmSubs) {
       if (sub.fcmToken) {
         try {
-          const fcmPayload: FCMPayload = {
+          // Usar sendFCMDataToToken que envía solo data messages (sin notification object)
+          // Esto hace que Android entregue el mensaje al handler de JavaScript en foreground
+          const result = await sendFCMDataToToken(sub.fcmToken, {
             title: payload.title,
             body: payload.body,
             data: {
@@ -75,8 +77,7 @@ export async function sendPushToUser(userId: number, payload: PushPayload) {
               tag: payload.tag || 'general',
               icon: payload.icon || '/icon-192.png',
             }
-          }
-          const result = await sendFCMToToken(sub.fcmToken, fcmPayload)
+          })
           if (result === 'INVALID_TOKEN') {
             // Delete invalid FCM token
             await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {})

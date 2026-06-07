@@ -4,7 +4,6 @@
 
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export interface PushPayload {
@@ -90,7 +89,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
       if (url.startsWith('URL_PROJECT_CHAT:')) {
         // Chat de proyecto: URL_PROJECT_CHAT:123 → /admin/proyectos/123
         const projectId = url.replace('URL_PROJECT_CHAT:', '');
-        window.location.href = `/admin/proyectos/${projectId}`;
+        window.location.href = `/admin/proyectos/${projectId}?view=chat`;
       } else if (url.startsWith('URL_TASK:')) {
         // Tarea: URL_TASK:projectId:appointmentId → /admin/calendario?task=X&project=Y
         const parts = url.replace('URL_TASK:', '').split(':');
