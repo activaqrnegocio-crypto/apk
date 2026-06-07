@@ -61,9 +61,9 @@ export async function initFirebaseForegroundMessaging(
     FirebaseMessaging.addListener('notificationReceived', async (notification: any) => {
       console.log('[FirebaseClient] Notificacion foreground recibida (native):', notification);
       
-      const notif = notification.notification;
-      const title = notif?.title || 'Aquatech';
-      const body = notif?.body || '';
+      // The Capacitor Firebase plugin delivers title/body directly on the notification object
+      const title = notification.title || 'Aquatech';
+      const body = notification.body || '';
       const data = notification.data || {};
       
       // Si hay un handler personalizado, invocarlo

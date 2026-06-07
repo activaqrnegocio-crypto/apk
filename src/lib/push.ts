@@ -1,6 +1,6 @@
 import webpush from 'web-push'
 import { prisma } from './prisma'
-import { sendFCMDataToToken, type FCMPayload } from './firebase-admin'
+import { sendFCMToToken, type FCMPayload } from './firebase-admin'
 
 // Configure VAPID details only if keys are present
 // v301: Robust VAPID key loading with server-side fallback
@@ -76,7 +76,7 @@ export async function sendPushToUser(userId: number, payload: PushPayload) {
               icon: payload.icon || '/icon-192.png',
             }
           }
-          const result = await sendFCMDataToToken(sub.fcmToken, fcmPayload)
+          const result = await sendFCMToToken(sub.fcmToken, fcmPayload)
           if (result === 'INVALID_TOKEN') {
             // Delete invalid FCM token
             await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {})
