@@ -1,6 +1,6 @@
-// src/lib/firebase-client.ts
+﻿// src/lib/firebase-client.ts
 // Firebase JS SDK para capturar notificaciones foreground en Android APK
-// onMessage handler intercepta mensajes FCM mientras la app está abierta
+// onMessage handler intercepta mensajes FCM mientras la app esta abierta
 
 import { Capacitor } from '@capacitor/core';
 
@@ -24,7 +24,7 @@ export async function initFirebaseForegroundMessaging(
   onMessageHandler = handler;
 
   try {
-    // Importar firebase/app y firebase/messaging dinámicamente (solo cliente)
+    // Importar firebase/app y firebase/messaging dinamicamente (solo cliente)
     const { initializeApp, getApps } = await import('firebase/app');
     const { getMessaging, onMessage, isSupported } = await import('firebase/messaging');
 
@@ -41,11 +41,11 @@ export async function initFirebaseForegroundMessaging(
       return;
     }
 
-    // Inicializar Firebase (evitar doble inicialización)
+    // Inicializar Firebase (evitar doble inicializacion)
     const apps = getApps();
     const app = apps.length > 0 ? apps[0] : initializeApp(firebaseConfig);
     
-    // Verificar si messaging está soportado
+    // Verificar si messaging esta soportado
     const supported = await isSupported();
     if (!supported) {
       console.log('[FirebaseClient] Firebase Messaging no soportado en este dispositivo');
@@ -55,9 +55,9 @@ export async function initFirebaseForegroundMessaging(
     messagingInstance = getMessaging(app);
 
     // Configurar onMessage para capturar notificaciones foreground
-    // ESTE es el handler que intercepta mensajes mientras la app está abierta
-    onMessage(messagingInstance, (payload) => {
-      console.log('[FirebaseClient] Notificación foreground recibida:', payload);
+    // ESTE es el handler que intercepta mensajes mientras la app esta abierta
+    onMessage(messagingInstance, async (payload) => {
+      console.log('[FirebaseClient] Notificacion foreground recibida:', payload);
       
       const notification = payload.notification;
       const data = payload.data || {};
@@ -65,29 +65,35 @@ export async function initFirebaseForegroundMessaging(
       // Si hay un handler personalizado, invocarlo
       if (onMessageHandler) {
         onMessageHandler({
-          title: notification?.title || data.title || 'Notificación',
+          title: notification?.title || data.title || 'Notificacion',
           body: notification?.body || data.body || '',
           data: data,
         });
       }
       
-      // También mostrar notificación del sistema si tenemos permiso
-      if (typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission === 'granted') {
-          // Solo mostrar si no es la notificación de prueba (que ya se muestra desde el server)
-          if (data.type !== 'test') {
-            try {
-              new Notification(notification?.title || 'Aquatech', {
-                body: notification?.body || data.body || '',
-                icon: '/icon-192.png',
-                badge: '/icon-192.png',
-                tag: data.tag || 'foreground',
-                data: data,
-              });
-            } catch (e) {
-              console.warn('[FirebaseClient] Error mostrando Notification:', e);
-            }
-          }
+      // v412: Mostrar notificacion nativa del sistema (funciona en foreground)
+      // Solo mostrar si no es la notificacion de prueba (que ya se muestra desde el server)
+      if (data.type !== 'test' && Capacitor.isNativePlatform()) {
+        try {
+          const { LocalNotifications } = await import('@capacitor/local-notifications');
+          await LocalNotifications.createChannel({
+            id: 'foreground',
+            name: 'Notificaciones Aquatech',
+            importance: 5,
+            visibility: 1,
+            sound: 'default',
+            vibration: true,
+          });
+          await LocalNotifications.schedule({
+            notifications: [{
+              id: Date.now(),
+              title: notification?.title || 'Aquatech',
+              body: notification?.body || data.body || '',
+              channelId: 'foreground',
+            }]
+          });
+        } catch (e) {
+          console.warn('[FirebaseClient] Error mostrando notificacion native:', e);
         }
       }
     });
@@ -100,7 +106,7 @@ export async function initFirebaseForegroundMessaging(
 
 /**
  * Obtiene el token FCM usando el Firebase JS SDK
- * Útil si necesitamos el token para algo específico
+ * Util si necesitamos el token para algo especifico
  */
 export async function getFCMToken(): Promise<string | null> {
   if (!messagingInstance) {

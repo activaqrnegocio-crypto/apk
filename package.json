@@ -19,6 +19,7 @@
     "@capacitor/core": "^8.4.0",
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/local-notifications": "^8.2.0",
     "@capacitor/push-notifications": "^8.1.1",
     "@capgo/capacitor-audio-recorder": "^8.2.1",
     "@ducanh2912/next-pwa": "^10.2.9",

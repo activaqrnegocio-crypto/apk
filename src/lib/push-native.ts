@@ -5,6 +5,7 @@
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { FirebaseMessaging } from '@capacitor-firebase/messaging';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 export interface PushPayload {
   title: string;
@@ -12,12 +13,41 @@ export interface PushPayload {
   data?: Record<string, string>;
 }
 
-// v411: Handler para notificaciones foreground
+// v412: Handler para notificaciones foreground
 // Este handler se invoca desde pushNotificationReceived cuando llega una notificación
 let foregroundMessageHandler: ((notification: any) => void) | null = null;
 
 export function setForegroundMessageHandler(handler: (notification: any) => void) {
   foregroundMessageHandler = handler;
+}
+
+// v412: Mostrar notificación nativa del sistema
+async function showNativeNotification(title: string, body: string, data?: Record<string, string>) {
+  if (!Capacitor.isNativePlatform()) return;
+  
+  try {
+    // Crear canal si no existe
+    await LocalNotifications.createChannel({
+      id: 'foreground',
+      name: 'Notificaciones Aquatech',
+      importance: 5,
+      visibility: 1,
+      sound: 'default',
+      vibration: true,
+    });
+    
+    await LocalNotifications.schedule({
+      notifications: [{
+        id: Date.now(),
+        title,
+        body,
+        channelId: 'foreground',
+      }]
+    });
+    console.log('[PushNative] Notificación native mostrada:', title);
+  } catch (e) {
+    console.warn('[PushNative] Error mostrando notificación native:', e);
+  }
 }
 
 export async function registerFCMToken(userId: number): Promise<void> {
@@ -27,12 +57,17 @@ export async function registerFCMToken(userId: number): Promise<void> {
   }
 
   try {
-    // v411: Añadir listeners PRIMERO, antes de cualquier operación
+    // v412: Añadir listeners PRIMERO, antes de cualquier operación
     // 1. Manejar notificaciones cuando la app está en primer plano
-    // IMPORTANTE: pushNotificationReceived puede no dispararse para notificaciones
-    // foreground en Android con @capacitor-firebase/messaging
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
       console.log('[PushNative] Notificación recibida (foreground):', notification);
+      
+      // v412: Mostrar notificación nativa del sistema (funciona en foreground)
+      showNativeNotification(
+        notification.title || 'Aquatech',
+        notification.body || '',
+        notification.data
+      );
       
       // También invocar el handler de foreground si está configurado
       if (foregroundMessageHandler) {
@@ -97,20 +132,28 @@ export async function registerFCMToken(userId: number): Promise<void> {
           const data = await response.json().catch(() => ({}));
           console.log('[PushNative] Token FCM guardado en backend:', JSON.stringify(data));
           
-          // v410: Mostrar notificación local de confirmación (como PWA)
+          // v412: Mostrar notificación local usando LocalNotifications (funciona en foreground)
           try {
-            if ('Notification' in window && Notification.permission === 'granted') {
-              new Notification('✅ Notificaciones activadas', {
+            // Primero crear el canal si no existe
+            await LocalNotifications.createChannel({
+              id: 'confirmacion',
+              name: 'Confirmación Aquatech',
+              importance: 4,
+              visibility: 1,
+              sound: 'default',
+              vibration: true,
+            });
+            
+            // Mostrar notificación local
+            await LocalNotifications.schedule({
+              notifications: [{
+                id: Date.now(),
+                title: '✅ Notificaciones activadas',
                 body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
-                icon: '/icon-192.png',
-                badge: '/icon-192.png',
-                tag: 'confirmacion'
-              });
-            } else {
-              // Fallback: mostrar alert si Notification API no está disponible
-              console.log('[PushNative] Notification API no disponible, usando alert');
-              alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
-            }
+                channelId: 'confirmacion',
+              }]
+            });
+            console.log('[PushNative] Notificación local mostrada');
           } catch (e) {
             console.warn('[PushNative] Error mostrando notificación local:', e);
             alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
