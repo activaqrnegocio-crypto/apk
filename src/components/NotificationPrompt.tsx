@@ -23,10 +23,28 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
       return
     }
 
-    // Verificar si ya acepto notificaciones antes
+    // v412: SIEMPRE inicializar Firebase foreground messaging al arrancar la APK
+    // Esto es necesario para capturar notificaciones cuando la app está ABIERTA
+    // No depende de si el usuario ya aceptó o no - necesita ejecutarse siempre
+    const initializeForegroundMessaging = async () => {
+      try {
+        const { initFirebaseForegroundMessaging } = await import("@/lib/firebase-client")
+        await initFirebaseForegroundMessaging((notification) => {
+          console.log('[NotificationPrompt] Notificación foreground recibida:', notification)
+          // Aquí puedes mostrar un toast, actualizar estado, etc.
+        })
+        console.log('[NotificationPrompt] Firebase foreground messaging inicializado')
+      } catch (e) {
+        console.warn('[NotificationPrompt] Error inicializando Firebase foreground:', e)
+      }
+    }
+    
+    initializeForegroundMessaging()
+
+    // Verificar si ya acepto notificaciones antes para mostrar/ocultar prompt
     const alreadyAccepted = localStorage.getItem("push_accepted") === "true"
     if (alreadyAccepted) {
-      console.log("[NotificationPrompt] Ya aceptado antes, omitiendo")
+      console.log("[NotificationPrompt] Ya aceptado antes, omitiendo prompt")
       return
     }
 
@@ -58,18 +76,6 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
       )
       
       console.log("[NotificationPrompt] FCM registration complete")
-      
-      // v411: Inicializar Firebase JS SDK para capturar notificaciones foreground
-      // Esto permite que las notificaciones aparezcan incluso cuando la APK está abierta
-      try {
-        const { initFirebaseForegroundMessaging } = await import("@/lib/firebase-client")
-        await initFirebaseForegroundMessaging((notification) => {
-          console.log('[NotificationPrompt] Notificación foreground recibida:', notification)
-          // Aquí puedes mostrar un toast, actualizar estado, etc.
-        })
-      } catch (e) {
-        console.warn('[NotificationPrompt] Error inicializando Firebase foreground:', e)
-      }
       
       setVisible(false)
       localStorage.setItem("push_accepted", "true")
