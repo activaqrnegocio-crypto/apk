@@ -57,35 +57,12 @@ export async function registerFCMToken(userId: number): Promise<void> {
   }
 
   try {
-    // v414: FirebaseMessaging para foreground (funciona mejor que PushNotifications)
-    // PushNotifications.pushNotificationReceived puede no funcionar en foreground Android
-    try {
-      FirebaseMessaging.addListener('messageReceived', async (message) => {
-        console.log('[PushNative] FirebaseMessaging messageReceived (foreground):', message);
-        
-        const title = message.title || 'Aquatech';
-        const body = message.body || '';
-        const data = message.data || {};
-        
-        // Mostrar notificación nativa
-        showNativeNotification(title, body, data);
-        
-        // Invocar handler si existe
-        if (foregroundMessageHandler) {
-          foregroundMessageHandler({ title, body, data });
-        }
-      });
-      console.log('[PushNative] FirebaseMessaging foreground listener added');
-    } catch (e) {
-      console.warn('[PushNative] FirebaseMessaging not available:', e);
-    }
-
-    // v412: PushNotifications para background/closed y tap handling
-    // 1. Manejar notificaciones cuando la app está en primer plano (fallback)
+    // v414: PushNotifications para foreground y tap handling
+    // 1. Manejar notificaciones cuando la app está en primer plano
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
-      console.log('[PushNative] Notificación recibida (PushNotifications foreground):', notification);
+      console.log('[PushNative] Notificación recibida (foreground):', notification);
       
-      // Solo mostrar si FirebaseMessaging no está activo
+      // Mostrar notificación nativa del sistema
       showNativeNotification(
         notification.title || 'Aquatech',
         notification.body || '',
