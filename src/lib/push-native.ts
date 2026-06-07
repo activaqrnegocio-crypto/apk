@@ -4,6 +4,7 @@
 
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
+import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export interface PushPayload {
@@ -22,7 +23,12 @@ export function setForegroundMessageHandler(handler: (notification: any) => void
 
 // v412: Mostrar notificación nativa del sistema
 async function showNativeNotification(title: string, body: string, data?: Record<string, string>) {
-  if (!Capacitor.isNativePlatform()) return;
+  console.log('[PushNative] showNativeNotification start. title:', title, 'body:', body);
+  
+  if (!Capacitor.isNativePlatform()) {
+    console.log('[PushNative] showNativeNotification: not native platform, skipping');
+    return;
+  }
   
   try {
     // Crear canal si no existe
@@ -35,21 +41,29 @@ async function showNativeNotification(title: string, body: string, data?: Record
       vibration: true,
     });
     
+    const notifId = Date.now() % 100000;
+    console.log('[PushNative] showNativeNotification. Generated ID:', notifId);
+    
+    const checkPerms = await LocalNotifications.checkPermissions();
+    console.log('[PushNative] showNativeNotification. checkPermissions result:', JSON.stringify(checkPerms));
+    
     await LocalNotifications.schedule({
       notifications: [{
-        id: Date.now() % 100000,
+        id: notifId,
         title,
         body,
         channelId: 'foreground',
       }]
     });
-    console.log('[PushNative] Notificación native mostrada:', title);
+    console.log('[PushNative] Notificación native mostrada:', title, 'ID:', notifId);
   } catch (e) {
-    console.warn('[PushNative] Error mostrando notificación native:', e);
+    console.error('[PushNative] Error mostrando notificación native. error:', JSON.stringify(e));
   }
 }
 
 export async function registerFCMToken(userId: number): Promise<void> {
+  console.log('[PushNative] registerFCMToken start. userId:', userId, 'isNativePlatform:', Capacitor.isNativePlatform());
+  
   if (!Capacitor.isNativePlatform()) {
     console.log('[PushNative] No es plataforma nativa, omitiendo registro FCM');
     return;
@@ -59,7 +73,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
     // v414: PushNotifications para foreground y tap handling
     // 1. Manejar notificaciones cuando la app está en primer plano
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
-      console.log('[PushNative] pushNotificationReceived (foreground):', JSON.stringify(notification));
+      console.log('[PushNative] pushNotificationReceived (foreground). notification:', JSON.stringify(notification));
       
       // Mostrar notificación nativa del sistema
       showNativeNotification(
@@ -112,7 +126,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
 
     // 3. Manejar errores de registro
     PushNotifications.addListener('registrationError', (error) => {
-      console.error('[PushNative] Error de registro FCM:', error);
+      console.error('[PushNative] registrationError. error:', JSON.stringify(error));
     });
 
     // 4. Solicitar permiso al usuario
@@ -154,32 +168,8 @@ export async function registerFCMToken(userId: number): Promise<void> {
           const data = await response.json().catch(() => ({}));
           console.log('[PushNative] Token FCM guardado en backend:', JSON.stringify(data));
           
-          // v412: Mostrar notificación local usando LocalNotifications (funciona en foreground)
-          try {
-            // Primero crear el canal si no existe
-            await LocalNotifications.createChannel({
-              id: 'confirmacion',
-              name: 'Confirmación Aquatech',
-              importance: 4,
-              visibility: 1,
-              sound: 'default',
-              vibration: true,
-            });
-            
-            // Mostrar notificación local
-            await LocalNotifications.schedule({
-              notifications: [{
-                id: Date.now() % 100000,
-                title: '✅ Notificaciones activadas',
-                body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
-                channelId: 'confirmacion',
-              }]
-            });
-            console.log('[PushNative] Notificación local mostrada');
-          } catch (e) {
-            console.warn('[PushNative] Error mostrando notificación local:', e);
-            alert('¡Notificaciones activadas! Recibirás alertas de proyectos y mensajes.');
-          }
+          // Eliminada notificación falsa de confirmación
+          // Las notificaciones ahora vienen del servidor via FCM data-only
           
           // v410: Enviar notificación de prueba desde el servidor para confirmar
           try {

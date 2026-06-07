@@ -116,43 +116,32 @@ export async function sendFCMToToken(token: string, payload: FCMPayload): Promis
   }
 
   try {
+    // Mensaje de SOLO DATA - El plugin pushNotificationReceived lo recibe en todos los estados
+    // Y la app muestra la notificación usando LocalNotifications
     const message: admin.messaging.Message = {
       token,
-      notification: {
+      data: {
         title: payload.title,
         body: payload.body,
+        ...(payload.data || {}),
       },
-      data: payload.data || {},
       android: {
         priority: 'high',
-        notification: {
-          channelId: 'default',  // Debe coincidir con el canal creado en push-native.ts
-          priority: 'high',
-          defaultSound: true,
-          defaultVibrateTimings: true,
-        },
-      },
-      apns: {
-        payload: {
-          aps: {
-            badge: 1,
-            sound: 'default',
-          },
-        },
       },
     };
 
+    console.log('[FCM] Sending message. Token:', token.substring(0, 20) + '...', 'Message:', JSON.stringify(message));
     const response = await admin.messaging(app).send(message);
-    console.log(`[FCM] Message sent successfully: ${response}`);
+    console.log('[FCM] Message sent successfully. Response:', response);
     return true;
   } catch (err: any) {
+    console.error('[FCM] Error sending message. code:', err.code, 'message:', err.message, 'full:', JSON.stringify(err));
     // Handle invalid token errors
     if (err.code === 'messaging/registration-token-not-registered' ||
         err.code === 'messaging/invalid-argument') {
       console.warn('[FCM] Invalid or unregistered token, should be deleted:', token.substring(0, 20) + '...');
       return 'INVALID_TOKEN' as any;
     }
-    console.error('[FCM] Error sending message:', err);
     return false;
   }
 }
