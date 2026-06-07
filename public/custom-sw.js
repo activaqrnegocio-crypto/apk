@@ -3213,6 +3213,14 @@ self.addEventListener('push', (event) => {
     return; // No mostrar notificación
   }
 
+  // v411: En Android APK (Capacitor), el plugin @capacitor-firebase/messaging
+  // maneja las notificaciones nativas. El SW solo hace sync, no muestra notificaciones.
+  // self.registration.showNotification() NO está disponible en Android WebView
+  if (isAndroidNative) {
+    console.log('[SW] APK detectada — delegando notificación a plugin nativo, solo sync.');
+    return;
+  }
+
   const options = {
     body: data.body || 'Nueva actualización en tu proyecto',
     icon: data.icon || '/icon-192.png',
@@ -3243,6 +3251,13 @@ self.addEventListener('push', (event) => {
 });
 
 self.addEventListener('notificationclick', (event) => {
+  // v411: En Android APK, las notificaciones las maneja el plugin nativo
+  // así que este listener puede no tener event.notification
+  if (isAndroidNative) {
+    console.log('[SW] notificationclick en APK — delegando a plugin nativo');
+    return;
+  }
+
   event.notification.close();
 
   if (event.action === 'close') return;
