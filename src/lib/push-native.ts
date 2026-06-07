@@ -147,7 +147,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
             // Mostrar notificación local
             await LocalNotifications.schedule({
               notifications: [{
-                id: Date.now(),
+                id: Date.now() % 100000,
                 title: '✅ Notificaciones activadas',
                 body: '¡Perfecto! A partir de ahora recibirás alertas de Aquatech.',
                 channelId: 'confirmacion',
