@@ -1,16 +1,19 @@
 ﻿// src/lib/firebase-client.ts
-// Firebase JS SDK para capturar notificaciones foreground en Android APK
-// onMessage handler intercepta mensajes FCM mientras la app esta abierta
+// Firebase Messaging para notificaciones foreground en Android APK
+// Usa @capacitor-firebase/messaging directamente (no firebase/messaging web SDK)
 
 import { Capacitor } from '@capacitor/core';
+import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 
-// Solo importar firebase/messaging en cliente (no server-side)
+// Solo importar firebase/messaging en cliente para getToken (no para onMessage)
 let messagingInstance: any = null;
 let onMessageHandler: ((payload: any) => void) | null = null;
+let listenersInitialized = false;
 
 /**
  * Inicializa Firebase Messaging para capturar notifications foreground
- * Debe llamarse SOLO en el cliente (useEffect, event handlers)
+ * Usa FirebaseMessaging.addListener en lugar de firebase/messaging.onMessage
+ * para evitar el problema de isSupported() retornando false
  */
 export async function initFirebaseForegroundMessaging(
   handler: (payload: any) => void
@@ -23,10 +26,16 @@ export async function initFirebaseForegroundMessaging(
 
   onMessageHandler = handler;
 
+  // Si ya inicializamos los listeners, no repetir
+  if (listenersInitialized) {
+    console.log('[FirebaseClient] Listeners ya inicializados, omitiendo');
+    return;
+  }
+
   try {
-    // Importar firebase/app y firebase/messaging dinamicamente (solo cliente)
+    // Importar firebase/messaging solo para getToken (necesitamos vapidKey)
     const { initializeApp, getApps } = await import('firebase/app');
-    const { getMessaging, onMessage, isSupported } = await import('firebase/messaging');
+    const { getMessaging, getToken } = await import('firebase/messaging');
 
     const firebaseConfig = {
       apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -44,30 +53,25 @@ export async function initFirebaseForegroundMessaging(
     // Inicializar Firebase (evitar doble inicializacion)
     const apps = getApps();
     const app = apps.length > 0 ? apps[0] : initializeApp(firebaseConfig);
-    
-    // Verificar si messaging esta soportado
-    const supported = await isSupported();
-    if (!supported) {
-      console.log('[FirebaseClient] Firebase Messaging no soportado en este dispositivo');
-      return;
-    }
-
     messagingInstance = getMessaging(app);
 
-    // Configurar onMessage para capturar notificaciones foreground
-    // ESTE es el handler que intercepta mensajes mientras la app esta abierta
-    onMessage(messagingInstance, async (payload) => {
-      console.log('[FirebaseClient] Notificacion foreground recibida:', payload);
+    // Configurar listener para notificaciones foreground usando Capacitor plugin
+    // ESTE es el fix: usar FirebaseMessaging.addListener en lugar de onMessage
+    // que evita el problema de isSupported() retornando false
+    FirebaseMessaging.addListener('notificationReceived', async (notification: any) => {
+      console.log('[FirebaseClient] Notificacion foreground recibida (native):', notification);
       
-      const notification = payload.notification;
-      const data = payload.data || {};
+      const notif = notification.notification;
+      const title = notif?.title || 'Aquatech';
+      const body = notif?.body || '';
+      const data = notification.data || {};
       
       // Si hay un handler personalizado, invocarlo
       if (onMessageHandler) {
         onMessageHandler({
-          title: notification?.title || data.title || 'Notificacion',
-          body: notification?.body || data.body || '',
-          data: data,
+          title,
+          body,
+          data,
         });
       }
       
@@ -87,8 +91,8 @@ export async function initFirebaseForegroundMessaging(
           await LocalNotifications.schedule({
             notifications: [{
               id: Date.now(),
-              title: notification?.title || 'Aquatech',
-              body: notification?.body || data.body || '',
+              title,
+              body,
               channelId: 'foreground',
             }]
           });
@@ -98,6 +102,7 @@ export async function initFirebaseForegroundMessaging(
       }
     });
 
+    listenersInitialized = true;
     console.log('[FirebaseClient] Firebase foreground messaging inicializado correctamente');
   } catch (err) {
     console.error('[FirebaseClient] Error inicializando Firebase foreground messaging:', err);
