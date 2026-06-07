@@ -1,85 +1,54 @@
 ﻿// src/lib/firebase-client.ts
 // Firebase Messaging para notificaciones foreground en Android APK
-// Usa @capacitor-firebase/messaging directamente (no firebase/messaging web SDK)
+// Usa @capacitor/push-notifications (no @capacitor-firebase/messaging que requiere Firebase JS SDK)
+
+// v412: NO usar FirebaseMessaging.addListener - usa Firebase JS SDK que falla en WebView
+// En su lugar, usar PushNotifications que funciona con FCM nativo
 
 import { Capacitor } from '@capacitor/core';
-import { FirebaseMessaging } from '@capacitor-firebase/messaging';
+import { PushNotifications, type PushNotification } from '@capacitor/push-notifications';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
-// Solo importar firebase/messaging en cliente para getToken (no para onMessage)
-let messagingInstance: any = null;
-let onMessageHandler: ((payload: any) => void) | null = null;
 let listenersInitialized = false;
+let foregroundHandler: ((notification: { title: string; body: string; data: Record<string, any> }) => void) | null = null;
 
 /**
- * Inicializa Firebase Messaging para capturar notifications foreground
- * Usa FirebaseMessaging.addListener en lugar de firebase/messaging.onMessage
- * para evitar el problema de isSupported() retornando false
+ * Inicializa el manejo de notificaciones foreground usando PushNotifications
+ * (no FirebaseMessaging que usa JS SDK y falla en WebView)
  */
 export async function initFirebaseForegroundMessaging(
-  handler: (payload: any) => void
+  handler: (payload: { title: string; body: string; data: Record<string, any> }) => void
 ): Promise<void> {
-  // Solo en plataforma nativa (APK)
   if (!Capacitor.isNativePlatform()) {
-    console.log('[FirebaseClient] No es APK, omitiendo Firebase foreground messaging');
+    console.log('[FirebaseClient] No es APK, omitiendo foreground messaging');
     return;
   }
 
-  onMessageHandler = handler;
+  foregroundHandler = handler;
 
-  // Si ya inicializamos los listeners, no repetir
   if (listenersInitialized) {
-    console.log('[FirebaseClient] Listeners ya inicializados, omitiendo');
+    console.log('[FirebaseClient] Listeners ya inicializados');
     return;
   }
 
   try {
-    // Importar firebase/messaging solo para getToken (necesitamos vapidKey)
-    const { initializeApp, getApps } = await import('firebase/app');
-    const { getMessaging, getToken } = await import('firebase/messaging');
-
-    const firebaseConfig = {
-      apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-      projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-      messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-      appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-    };
-
-    // Verificar que tenemos config
-    if (!firebaseConfig.apiKey || !firebaseConfig.projectId || !firebaseConfig.messagingSenderId) {
-      console.warn('[FirebaseClient] Firebase config incompleta, omitiendo foreground messaging');
-      return;
-    }
-
-    // Inicializar Firebase (evitar doble inicializacion)
-    const apps = getApps();
-    const app = apps.length > 0 ? apps[0] : initializeApp(firebaseConfig);
-    messagingInstance = getMessaging(app);
-
-    // Configurar listener para notificaciones foreground usando Capacitor plugin
-    // ESTE es el fix: usar FirebaseMessaging.addListener en lugar de onMessage
-    // que evita el problema de isSupported() retornando false
-    FirebaseMessaging.addListener('notificationReceived', async (notification: any) => {
-      console.log('[FirebaseClient] Notificacion foreground recibida (native):', notification);
+    // Configurar listener para notificaciones foreground usando PushNotifications
+    // ESTE es el fix: usar PushNotifications en lugar de FirebaseMessaging
+    // PushNotifications funciona con FCM nativo sin necesitar Firebase JS SDK
+    PushNotifications.addListener('pushNotificationReceived', async (notification: PushNotification) => {
+      console.log('[FirebaseClient] Notificación foreground recibida (PushNotifications):', notification);
       
-      // The Capacitor Firebase plugin delivers title/body directly on the notification object
       const title = notification.title || 'Aquatech';
       const body = notification.body || '';
       const data = notification.data || {};
       
-      // Si hay un handler personalizado, invocarlo
-      if (onMessageHandler) {
-        onMessageHandler({
-          title,
-          body,
-          data,
-        });
+      if (foregroundHandler) {
+        foregroundHandler({ title, body, data });
       }
       
-      // v412: Mostrar notificacion nativa del sistema (funciona en foreground)
-      // Solo mostrar si no es la notificacion de prueba (que ya se muestra desde el server)
+      // Mostrar notificación nativa solo si no es tipo test
       if (data.type !== 'test' && Capacitor.isNativePlatform()) {
         try {
-          const { LocalNotifications } = await import('@capacitor/local-notifications');
           await LocalNotifications.createChannel({
             id: 'foreground',
             name: 'Notificaciones Aquatech',
@@ -97,36 +66,25 @@ export async function initFirebaseForegroundMessaging(
             }]
           });
         } catch (e) {
-          console.warn('[FirebaseClient] Error mostrando notificacion native:', e);
+          console.warn('[FirebaseClient] Error mostrando notificación native:', e);
         }
       }
     });
 
     listenersInitialized = true;
-    console.log('[FirebaseClient] Firebase foreground messaging inicializado correctamente');
+    console.log('[FirebaseClient] PushNotifications foreground messaging inicializado correctamente');
   } catch (err) {
-    console.error('[FirebaseClient] Error inicializando Firebase foreground messaging:', err);
+    console.error('[FirebaseClient] Error inicializando PushNotifications foreground messaging:', err);
   }
 }
 
 /**
- * Obtiene el token FCM usando el Firebase JS SDK
- * Util si necesitamos el token para algo especifico
+ * El token FCM se obtiene del evento 'registration' de PushNotifications
+ * No hay método getToken() directo - se captura via listener
  */
 export async function getFCMToken(): Promise<string | null> {
-  if (!messagingInstance) {
-    console.warn('[FirebaseClient] Firebase messaging no inicializado');
-    return null;
-  }
-
-  try {
-    const { getToken } = await import('firebase/messaging');
-    const token = await getToken(messagingInstance, {
-      vapidKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
-    });
-    return token;
-  } catch (err) {
-    console.error('[FirebaseClient] Error obteniendo FCM token:', err);
-    return null;
-  }
+  // El token se captura via PushNotifications.addListener('registration', ...)
+  // Esta función retorna null ya que el token llega via evento
+  console.warn('[FirebaseClient] getFCMToken: usar evento registration para obtener token');
+  return null;
 }
