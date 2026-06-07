@@ -49,6 +49,65 @@ export interface FCMPayload {
   data?: Record<string, string>;
 }
 
+/**
+ * Envía una notificación FCM con mensaje de solo DATOS (sin notification object)
+ * Esto hace que Android NO muestre automáticamente la notificación cuando la app está abierta
+ * En su lugar, el plugin @capacitor-firebase/messaging entrega el mensaje al handler JavaScript
+ * que luego muestra la notificación usando LocalNotifications.schedule()
+ */
+export async function sendFCMDataToToken(token: string, payload: FCMPayload): Promise<boolean | 'INVALID_TOKEN'> {
+  const app = getFirebaseAdmin();
+  if (!app) {
+    console.warn('[FCM] Firebase not initialized, skipping');
+    return false;
+  }
+
+  try {
+    // Mensaje de SOLO DATOS - Android no lo muestra automáticamente en foreground
+    // El plugin @capacitor-firebase/messaging lo entrega a notificationReceived handler
+    const message: admin.messaging.Message = {
+      token,
+      // NO hay notification object - esto es clave para que funcione en foreground
+      data: {
+        title: payload.title,
+        body: payload.body,
+        url: payload.data?.url || '/admin/operador',
+        tag: payload.data?.tag || 'default',
+        icon: payload.data?.icon || '/icon-192.png',
+        ...payload.data,
+      },
+      android: {
+        priority: 'high',
+        // Enable data-only messages to be received by the app
+        directBootOk: true,
+      },
+      apns: {
+        payload: {
+          aps: {
+            'content-available': 1, // This tells iOS to deliver to the app directly
+          },
+        },
+        headers: {
+          'apns-push-type': 'background',
+          'apns-priority': '5',
+        },
+      },
+    };
+
+    const response = await admin.messaging(app).send(message);
+    console.log(`[FCM] Data message sent successfully: ${response}`);
+    return true;
+  } catch (err: any) {
+    if (err.code === 'messaging/registration-token-not-registered' ||
+        err.code === 'messaging/invalid-argument') {
+      console.warn('[FCM] Invalid or unregistered token:', token.substring(0, 20) + '...');
+      return 'INVALID_TOKEN' as any;
+    }
+    console.error('[FCM] Error sending data message:', err);
+    return false;
+  }
+}
+
 export async function sendFCMToToken(token: string, payload: FCMPayload): Promise<boolean | 'INVALID_TOKEN'> {
   const app = getFirebaseAdmin();
   if (!app) {

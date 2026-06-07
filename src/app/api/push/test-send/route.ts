@@ -4,7 +4,7 @@
 // NOTE: This endpoint is PUBLIC (no auth) for testing purposes
 
 import { prisma } from '@/lib/prisma';
-import { sendFCMToToken, type FCMPayload } from '@/lib/firebase-admin';
+import { sendFCMDataToToken, type FCMPayload } from '@/lib/firebase-admin';
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
@@ -62,7 +62,10 @@ export async function GET(request: Request) {
       }
     };
 
-    const result = await sendFCMToToken(subscription.fcmToken, fcmPayload);
+    // Send data-only notification (no notification object)
+    // This makes Android deliver the message to our JavaScript handler
+    // instead of showing it automatically in the system tray
+    const result = await sendFCMDataToToken(subscription.fcmToken, fcmPayload);
 
     if (result === true) {
       console.log('[TestSend] Notification sent successfully!');
