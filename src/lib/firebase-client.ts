@@ -35,41 +35,9 @@ export async function initFirebaseForegroundMessaging(
     // Configurar listener para notificaciones foreground usando PushNotifications
     // ESTE es el fix: usar PushNotifications en lugar de FirebaseMessaging
     // PushNotifications funciona con FCM nativo sin necesitar Firebase JS SDK
-    PushNotifications.addListener('pushNotificationReceived', async (notification: PushNotification) => {
-      console.log('[FirebaseClient] Notificación foreground recibida (PushNotifications):', notification);
-      
-      const title = notification.title || 'Aquatech';
-      const body = notification.body || '';
-      const data = notification.data || {};
-      
-      if (foregroundHandler) {
-        foregroundHandler({ title, body, data });
-      }
-      
-      // Mostrar notificación nativa solo si no es tipo test
-      if (data.type !== 'test' && Capacitor.isNativePlatform()) {
-        try {
-          await LocalNotifications.createChannel({
-            id: 'foreground',
-            name: 'Notificaciones Aquatech',
-            importance: 5,
-            visibility: 1,
-            sound: 'default',
-            vibration: true,
-          });
-          await LocalNotifications.schedule({
-            notifications: [{
-              id: Math.floor(Math.random() * 1000000),
-              title,
-              body,
-              channelId: 'foreground',
-            }]
-          });
-        } catch (e) {
-          console.warn('[FirebaseClient] Error mostrando notificación native:', e);
-        }
-      }
-    });
+    // NOTA: pushNotificationReceived se maneja en push-native.ts
+    // Este módulo solo usa foregroundHandler para callbacks personalizados
+    // La notificación nativa se muestra desde push-native.ts
 
     listenersInitialized = true;
     console.log('[FirebaseClient] PushNotifications foreground messaging inicializado correctamente');

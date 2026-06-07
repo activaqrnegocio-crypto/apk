@@ -38,7 +38,7 @@ async function showNativeNotification(title: string, body: string, data?: Record
     
     await LocalNotifications.schedule({
       notifications: [{
-        id: Math.floor(Math.random() * 1000000),
+        id: Date.now() % 100000,
         title,
         body,
         channelId: 'foreground',
