@@ -81,37 +81,27 @@ export async function registerFCMToken(userId: number): Promise<void> {
       const data = action.notification.data || {};
       const url = data.url || '';
       
-      // v413: Parsear URLs especiales de la PWA
-      // URL_PROJECT_CHAT:123 → /admin/proyectos/123
+      // v413: Parsear URLs especiales de la PWA para navegación correcta
       if (url.startsWith('URL_PROJECT_CHAT:')) {
+        // Chat de proyecto: URL_PROJECT_CHAT:123 → /admin/proyectos/123
         const projectId = url.replace('URL_PROJECT_CHAT:', '');
         window.location.href = `/admin/proyectos/${projectId}`;
-      }
-      // URL_TASK:123:456 → /admin/calendario?task=456&project=123
-      else if (url.startsWith('URL_TASK:')) {
+      } else if (url.startsWith('URL_TASK:')) {
+        // Tarea: URL_TASK:projectId:appointmentId → /admin/calendario?task=X&project=Y
         const parts = url.replace('URL_TASK:', '').split(':');
         const projectId = parts[0];
-        const taskId = parts[1];
-        window.location.href = `/admin/calendario?task=${taskId}&project=${projectId}`;
-      }
-      // new-project-123 → /admin/proyectos/123
-      else if (url.startsWith('/admin/proyectos/')) {
-        window.location.href = url;
-      }
-      // Fallback: data.projectId directo
-      else if (data.projectId) {
+        const appointmentId = parts[1];
+        window.location.href = `/admin/calendario?task=${appointmentId}&project=${projectId}`;
+      } else if (data.projectId) {
         window.location.href = `/admin/proyectos/${data.projectId}`;
-      }
-      // type=appointment → calendario
-      else if (data.type === 'appointment') {
+      } else if (data.type === 'appointment') {
         window.location.href = '/admin/calendario';
-      }
-      // type=chat → proyectos
-      else if (data.type === 'chat') {
+      } else if (data.type === 'chat') {
         window.location.href = '/admin/proyectos';
-      }
-      // Default: dashboard
-      else {
+      } else if (data.type === 'new-project') {
+        window.location.href = '/admin/proyectos';
+      } else {
+        // Default: ir a dashboard
         window.location.href = '/admin';
       }
     });
