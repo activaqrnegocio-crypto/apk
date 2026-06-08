@@ -149,16 +149,14 @@ export async function sendFCMToToken(token: string, payload: FCMPayload): Promis
   }
 
   try {
-    // Mensaje con NOTIFICATION PAYLOAD - Android muestra automáticamente la notificación
-    // en todos los estados (foreground, background, closed)
+    // v416: Usar DATA-ONLY message + LocalNotifications para display manual
+    // Esto evita el problema de Android blocking notifications incluso cuando el usuario acepta
     const message: admin.messaging.Message = {
       token,
-      // notification object = Android muestra automáticamente la notificación del sistema
-      notification: {
+      // NO notification object - solo data para evitar bloqueo del sistema
+      data: {
         title: payload.title,
         body: payload.body,
-      },
-      data: {
         custom_title: payload.title,
         custom_body: payload.body,
         url: payload.data?.url || '/admin/operador',
@@ -167,12 +165,7 @@ export async function sendFCMToToken(token: string, payload: FCMPayload): Promis
       },
       android: {
         priority: 'high',
-        notification: {
-          channelId: 'default',
-          icon: '/icon-192.png',
-          sound: 'default',
-          clickAction: 'android.intent.action.MAIN',
-        },
+        // Sin notification object - la app muestra la notificación via LocalNotifications
       },
     };
 
