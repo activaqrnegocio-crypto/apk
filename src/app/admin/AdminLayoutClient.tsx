@@ -20,11 +20,26 @@ const GlobalSyncWorker = dynamic(() => import('@/components/GlobalSyncWorker'), 
 const OfflinePrefetcher = dynamic(() => import('@/components/OfflinePrefetcher'), { ssr: false })
 const SyncToast = dynamic(() => import('@/components/SyncToast'), { ssr: false })
 import { useState, useEffect } from 'react'
+import { getAndClearPendingNav, parseProjectChatUrl } from '@/lib/pending-nav'
 
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
   const pathname = usePathname()
   const [isNavigating, setIsNavigating] = useState(false)
+
+  // v418: Manejar navegación desde notificación push
+  useEffect(() => {
+    async function handlePendingNav() {
+      const pending = await getAndClearPendingNav();
+      if (pending?.url) {
+        console.log('[PendingNav] Navegando a:', pending.url);
+        const navigateUrl = parseProjectChatUrl(pending.url);
+        console.log('[PendingNav] URL final:', navigateUrl);
+        window.location.href = navigateUrl;
+      }
+    }
+    handlePendingNav();
+  }, []);
 
   useEffect(() => {
     // Show progress bar on path change
