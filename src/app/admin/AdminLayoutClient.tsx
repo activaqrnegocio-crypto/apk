@@ -28,35 +28,58 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const [isNavigating, setIsNavigating] = useState(false)
 
   // v420: Manejar navegación desde notificación push (respetando rol de usuario)
-  // v421: Ejecutar INMEDIATAMENTE al montar, sin esperar session
+  // v422: Esperar a que la sesión esté disponible antes de navegar
+  const [pendingNavProcessed, setPendingNavProcessed] = useState(false);
+  
   useEffect(() => {
-    console.log('[AdminLayout] Componente montado, verificando pending nav...');
+    // Solo procesar una vez
+    if (pendingNavProcessed) return;
+    
+    console.log('[AdminLayout] Verificando pending nav, session:', session?.user ? 'sí' : 'no');
     
     async function handlePendingNav() {
       console.log('[PendingNav] handlePendingNav iniciado');
       const pending = await getAndClearPendingNav();
-      console.log('[PendingNav] pending obtenido:', pending);
-      if (pending?.url) {
-        console.log('[PendingNav] URL recibida:', pending.url);
-        
-        // Obtener el rol del usuario de la sesión (si está disponible)
-        const userRole = (session?.user as any)?.role;
-        console.log('[PendingNav] User role:', userRole);
-        
-        // Generar URL de navegación basada en el rol
-        const navigateUrl = parseProjectChatUrl(pending.url, userRole);
-        console.log('[PendingNav] Navegando a:', navigateUrl);
-        
-        // Navegar inmediatamente
-        window.location.href = navigateUrl;
-      } else {
-        console.log('[PendingNav] No hay pending navigation para procesar');
+      
+      if (!pending?.url) {
+        console.log('[PendingNav] No hay pending navigation');
+        setPendingNavProcessed(true);
+        return;
       }
+      
+      console.log('[PendingNav] URL recibida:', pending.url);
+      
+      // Esperar hasta que la sesión esté disponible (max 5 segundos)
+      let userRole = (session?.user as any)?.role;
+      let attempts = 0;
+      while (!userRole && attempts < 10) {
+        console.log('[PendingNav] Esperando sesión... intento', attempts + 1);
+        await new Promise(r => setTimeout(r, 500));
+        try {
+          const res = await fetch('/api/auth/session');
+          const data = await res.json();
+          userRole = data?.user?.role;
+        } catch (e) {}
+        attempts++;
+      }
+      
+      console.log('[PendingNav] User role final:', userRole);
+      
+      // Si sigue sin rol, usar operador por defecto (asumir que está logueado)
+      if (!userRole) {
+        userRole = 'OPERADOR';
+      }
+      
+      // Generar URL de navegación basada en el rol
+      const navigateUrl = parseProjectChatUrl(pending.url, userRole);
+      console.log('[PendingNav] Navegando a:', navigateUrl);
+      
+      setPendingNavProcessed(true);
+      window.location.href = navigateUrl;
     }
     
-    // Ejecutar inmediatamente al montar el componente
     handlePendingNav();
-  }, []); // Dependencia vacía = ejecutar solo una vez al montar
+  }, [session, pendingNavProcessed]);
 
   useEffect(() => {
     // Show progress bar on path change
