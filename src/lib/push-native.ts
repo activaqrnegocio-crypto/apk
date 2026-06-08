@@ -174,7 +174,16 @@ export async function registerFCMToken(userId: number): Promise<void> {
           // Las notificaciones ahora vienen del servidor via FCM data-only
           
           // v410: Enviar notificación de prueba desde el servidor para confirmar
+          // También mostrar notificación local directamente para asegurar que funcione
           try {
+            // Primero mostrar notificación local directamente (backup)
+            await showNativeNotification(
+              '🔔 ¡Notificaciones Activadas!',
+              'Hola Cesar Prueba, recibirás alertas de proyectos, mensajes y más.',
+              { url: '/admin/operador', tag: 'test' }
+            );
+            
+            // Luego enviar al servidor para historial
             await fetch('/api/push/test', { 
               method: 'POST',
               credentials: 'include'  // Incluir cookies de sesión
