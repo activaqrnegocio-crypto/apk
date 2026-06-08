@@ -60,12 +60,12 @@ async function showNativeNotification(title: string, body: string, data?: Record
   }
 }
 
-export async function registerFCMToken(userId: number): Promise<void> {
+export async function registerFCMToken(userId: number): Promise<boolean | false> {
   console.log('[PushNative] registerFCMToken start. userId:', userId, 'isNativePlatform:', Capacitor.isNativePlatform());
   
   if (!Capacitor.isNativePlatform()) {
     console.log('[PushNative] No es plataforma nativa, omitiendo registro FCM');
-    return;
+    return false;
   }
 
   try {
@@ -132,9 +132,22 @@ export async function registerFCMToken(userId: number): Promise<void> {
 
     // 4. Solicitar permiso al usuario
     const permission = await PushNotifications.requestPermissions();
+    console.log('[PushNative] Permission result:', JSON.stringify(permission));
+    
     if (permission.receive !== 'granted') {
-      console.log('[PushNative] Permiso de notificaciones denegado');
-      return;
+      console.log('[PushNative] Permiso de notificaciones DENEGADO');
+      
+      // v416: Informar al usuario que necesita habilitar notificaciones manualmente
+      // Android 13+ requiere permiso del usuario - no se puede solicitar programáticamente después de negar
+      alert(
+        '🔕 Notificaciones bloqueadas\n\n' +
+        'Para recibir notificaciones de Aquatech CRM:\n\n' +
+        '1. Ve a Configuración > Apps > Aquatech CRM\n' +
+        '2. Toca "Notificaciones"\n' +
+        '3. Activa todas las opciones de notificación\n\n' +
+        'Luego cierra y abre la app para intentar de nuevo.'
+      );
+      return false;  // v416: Indicar que el registro falló
     }
 
     // 5. Crear canal para Android 8+ (OBLIGATORIO)
@@ -195,9 +208,12 @@ export async function registerFCMToken(userId: number): Promise<void> {
     // 7. REGISTER AL FINAL - después de tener los listeners
     await PushNotifications.register();
     console.log('[PushNative] Dispositivo registrado para notificaciones');
+    
+    return true;  // v416: Registro exitoso
 
   } catch (err) {
     console.error('[PushNative] Error inicializando FCM:', err);
+    return false;  // v416: Registro fallido
   }
 }
 

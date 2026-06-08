@@ -71,11 +71,20 @@ export default function NotificationPrompt({ onDismiss }: NotificationPromptProp
         return
       }
 
-      await import("@/lib/push-native").then(({ registerFCMToken }) => 
-        registerFCMToken(Number(session.user.id))
-      )
+      // v416: Importar y llamar registerFCMToken
+      // Si el permiso es denegado, registerFCMToken muestra alert y retorna false
+      const { registerFCMToken } = await import("@/lib/push-native")
+      const result = await registerFCMToken(Number(session.user.id))
       
-      console.log("[NotificationPrompt] FCM registration complete")
+      console.log("[NotificationPrompt] FCM registration complete, result:", result)
+      
+      // v416: Solo marcar como aceptado si el registro fue exitoso
+      // registerFCMToken retorna false si el permiso fue denegado
+      if (result === false) {
+        console.log("[NotificationPrompt] Registro cancelado por permiso denegado")
+        setLoading(false)
+        return
+      }
       
       setVisible(false)
       localStorage.setItem("push_accepted", "true")
