@@ -27,6 +27,10 @@ const config: CapacitorConfig = {
       androidSplashResourceName: 'splash',
       showSpinner: false,
     },
+    // v418: Plugin nativo para deep linking desde notificaciones
+    PendingNavPlugin: {
+      // No necesita configuración - se registra en MainActivity
+    },
   },
 };
 

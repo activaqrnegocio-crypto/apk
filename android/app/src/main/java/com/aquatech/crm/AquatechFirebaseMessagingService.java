@@ -10,7 +10,6 @@ import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 
-import com.getcapacitor.BridgeActivity;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
@@ -88,14 +87,15 @@ public class AquatechFirebaseMessagingService extends FirebaseMessagingService {
         
         Log.d(TAG, "Mostrando notificación - Title: " + title + ", Body: " + body);
         
-        // Crear intent para cuando el usuario toque la notificación
-        Intent intent = new Intent(this, BridgeActivity.class);
+        // v418: Crear intent que apunte a MainActivity (no BridgeActivity)
+        // MainActivity tiene handleNotificationIntent() que lee los extras
+        Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("push_url", url);
         intent.putExtra("push_tag", tag);
         
-        // PendingIntent para mantener el intent pendiente
-        int requestCode = (int) System.currentTimeMillis();
+        // v418: PendingIntent con requestCode único basado en la URL
+        int requestCode = url.hashCode();
         PendingIntent pendingIntent = PendingIntent.getActivity(
             this,
             requestCode,
