@@ -69,8 +69,8 @@ export async function sendFCMDataToToken(token: string, payload: FCMPayload): Pr
       token,
       // NO hay notification object - esto es clave para que funcione en foreground
       data: {
-        title: payload.title,
-        body: payload.body,
+        custom_title: payload.title,
+        custom_body: payload.body,
         url: payload.data?.url || '/admin/operador',
         tag: payload.data?.tag || 'default',
         icon: payload.data?.icon || '/icon-192.png',
@@ -121,8 +121,8 @@ export async function sendFCMToToken(token: string, payload: FCMPayload): Promis
     const message: admin.messaging.Message = {
       token,
       data: {
-        title: payload.title,
-        body: payload.body,
+        custom_title: payload.title,
+        custom_body: payload.body,
         ...(payload.data || {}),
       },
       android: {

@@ -76,9 +76,11 @@ export async function registerFCMToken(userId: number): Promise<void> {
       console.log('[PushNative] pushNotificationReceived (foreground). notification:', JSON.stringify(notification));
       
       // Mostrar notificación nativa del sistema
+      // v412: Ahora lee custom_title/custom_body para evitar duplicación con Android
+      const notif = notification as any;
       showNativeNotification(
-        notification.title || 'Aquatech',
-        notification.body || '',
+        notif.custom_title || notification.title || 'Aquatech',
+        notif.custom_body || notification.body || '',
         notification.data
       );
       
@@ -190,15 +192,19 @@ export async function registerFCMToken(userId: number): Promise<void> {
       }
     });
 
-    // 7. FirebaseMessaging para recibir mensajes en foreground
+    // 7. FirebaseMessaging para recibir mensajes en foreground (data-only)
     // @ts-ignore - Tipos del plugin no incluyen messageReceived pero funciona en runtime
     FirebaseMessaging.addListener('messageReceived' as any, async (event: any) => {
       console.log('[FirebaseMessaging] messageReceived foreground:', JSON.stringify(event));
       
-      const title = event.notification?.title || event.data?.title || 'Aquatech';
-      const body = event.notification?.body || event.data?.body || '';
+      // Los mensajes de data-only llegan en event.data
+      // El backend envía: { title, body, url, tag } en el data payload
+      const data = event.data || {};
+      const title = data.title || 'Aquatech';
+      const body = data.body || '';
       
-      await showNativeNotification(title, body, event.data);
+      console.log('[FirebaseMessaging] Mostrando notificación foreground. title:', title, 'body:', body);
+      await showNativeNotification(title, body, data);
     });
 
     // 8. REGISTER AL FINAL - después de tener los listeners
