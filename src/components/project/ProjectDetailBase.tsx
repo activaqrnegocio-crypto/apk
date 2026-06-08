@@ -88,10 +88,20 @@ export default function ProjectDetailBase({
     }
   }
 
+  // v421: Deep link - scroll to chat when opened from push notification
   useEffect(() => {
     const view = searchParams.get('view')?.toUpperCase()
     if (view === 'CHAT' || view === 'GALLERY' || view === 'EVIDENCE' || view === 'EXPENSES') {
       setActiveTab(view === 'EXPENSES' ? 'EVIDENCE' : view as any)
+      // Auto-scroll al chat cuando se abre desde notificación push
+      if (view === 'CHAT') {
+        setTimeout(() => {
+          const container = chatContainerRef.current
+          if (container) {
+            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+          }
+        }, 500)
+      }
     }
   }, [searchParams])
 

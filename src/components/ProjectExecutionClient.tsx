@@ -253,10 +253,20 @@ export default function ProjectExecutionClient({
     };
     window.addEventListener('focus', handleWindowFocus);
     
-    // Deep Link
+    // Deep Link - v421: Auto-scroll to chat when opened from push notification
     const view = searchParams?.get('view')
-    if (view === 'chat') setActiveTab('chat')
-    else if (view === 'gallery' || view === 'team' || view === 'expenses' || view === 'records') setActiveTab('records')
+    if (view === 'chat') {
+      setActiveTab('chat')
+      // Scroll al chat después de un pequeño delay para que renderice
+      setTimeout(() => {
+        const container = chatContainerRef.current
+        if (container) {
+          container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+        }
+      }, 500)
+    } else if (view === 'gallery' || view === 'team' || view === 'expenses' || view === 'records') {
+      setActiveTab('records')
+    }
 
     return () => {
       window.removeEventListener('resize', checkSize)

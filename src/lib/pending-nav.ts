@@ -108,23 +108,18 @@ export function parseProjectChatUrl(url: string, userRole?: string): string {
     const messageId = parts[1] || '';
     
     // Generar URL según el rol del usuario
+    // NOTA: usar view=chat (minúsculas) porque ProjectExecutionClient verifica así
     if (isUserAdmin(userRole)) {
-      // Admin: /admin/proyectos/{id}?view=CHAT&message={messageId}
+      // Admin: /admin/proyectos/{id}?view=chat&message={messageId}
       if (messageId) {
-        return `/admin/proyectos/${projectId}?view=CHAT&message=${messageId}`;
+        return `/admin/proyectos/${projectId}?view=chat&message=${messageId}`;
       }
-      return `/admin/proyectos/${projectId}?view=CHAT`;
+      return `/admin/proyectos/${projectId}?view=chat`;
     } else if (userRole === 'SUBCONTRATISTA' || userRole?.toUpperCase() === 'SUBCONTRATISTA') {
-      // Subcontratista: /admin/subcontratista/proyecto/{id}?view=chat (solo con messageId)
-      if (messageId) {
-        return `/admin/subcontratista/proyecto/${projectId}?view=chat&message=${messageId}`;
-      }
+      // Subcontratista: /admin/subcontratista/proyecto/{id}
       return `/admin/subcontratista/proyecto/${projectId}`;
     } else {
-      // Operador: /admin/operador/proyecto/{id}?view=chat (solo con messageId)
-      if (messageId) {
-        return `/admin/operador/proyecto/${projectId}?view=chat&message=${messageId}`;
-      }
+      // Operador: /admin/operador/proyecto/{id}
       return `/admin/operador/proyecto/${projectId}`;
     }
   }
@@ -134,7 +129,7 @@ export function parseProjectChatUrl(url: string, userRole?: string): string {
     const projectId = url.replace('URL_PROJECT:', '');
     
     if (isUserAdmin(userRole)) {
-      return `/admin/proyectos/${projectId}?view=CHAT`;
+      return `/admin/proyectos/${projectId}`;
     } else if (userRole === 'SUBCONTRATISTA' || userRole?.toUpperCase() === 'SUBCONTRATISTA') {
       return `/admin/subcontratista/proyecto/${projectId}`;
     } else {
