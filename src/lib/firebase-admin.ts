@@ -108,6 +108,11 @@ export async function sendFCMDataToToken(token: string, payload: FCMPayload): Pr
   }
 }
 
+/**
+ * Envía una notificación FCM con mensaje de NOTIFICACIÓN (contiene notification object)
+ * Esto hace que Android muestre automáticamente la notificación cuando la app está abierta,
+ * minimizada o cerrada. El tap navega a la app.
+ */
 export async function sendFCMToToken(token: string, payload: FCMPayload): Promise<boolean | 'INVALID_TOKEN'> {
   const app = getFirebaseAdmin();
   if (!app) {
@@ -116,21 +121,34 @@ export async function sendFCMToToken(token: string, payload: FCMPayload): Promis
   }
 
   try {
-    // Mensaje de SOLO DATA - El plugin pushNotificationReceived lo recibe en todos los estados
-    // Y la app muestra la notificación usando LocalNotifications
+    // Mensaje con NOTIFICATION PAYLOAD - Android muestra automáticamente la notificación
+    // en todos los estados (foreground, background, closed)
     const message: admin.messaging.Message = {
       token,
+      // notification object = Android muestra automáticamente la notificación del sistema
+      notification: {
+        title: payload.title,
+        body: payload.body,
+      },
       data: {
         custom_title: payload.title,
         custom_body: payload.body,
-        ...(payload.data || {}),
+        url: payload.data?.url || '/admin/operador',
+        tag: payload.data?.tag || 'default',
+        ...payload.data,
       },
       android: {
         priority: 'high',
+        notification: {
+          channelId: 'default',
+          icon: '/icon-192.png',
+          sound: 'default',
+          clickAction: 'android.intent.action.MAIN',
+        },
       },
     };
 
-    console.log('[FCM] Sending message. Token:', token.substring(0, 20) + '...', 'Message:', JSON.stringify(message));
+    console.log('[FCM] Sending notification message. Token:', token.substring(0, 20) + '...', 'Message:', JSON.stringify(message));
     const response = await admin.messaging(app).send(message);
     console.log('[FCM] Message sent successfully. Response:', response);
     return true;
