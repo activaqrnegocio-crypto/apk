@@ -69,21 +69,14 @@ export async function registerFCMToken(userId: number): Promise<boolean | false>
   }
 
   try {
-    // v414: PushNotifications para foreground y tap handling
-    // 1. Manejar notificaciones cuando la app está en primer plano
+    // v417: NO mostrar notificaciones aquí - el servicio nativo AquatechFirebaseMessagingService
+    // es la ÚNICA fuente de notificaciones. Esto evita duplicados en foreground.
+    // El listener solo registra el evento y pasa datos al handler si existe
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
-      console.log('[PushNative] pushNotificationReceived (foreground). notification:', JSON.stringify(notification));
+      console.log('[PushNative] pushNotificationReceived (solo log, sin mostrar). notification:', JSON.stringify(notification));
       
-      // Mostrar notificación nativa del sistema
-      // v412: Ahora lee custom_title/custom_body para evitar duplicación con Android
-      const notif = notification as any;
-      showNativeNotification(
-        notif.custom_title || notification.title || 'Aquatech',
-        notif.custom_body || notification.body || '',
-        notification.data
-      );
-      
-      // También invocar el handler de foreground si está configurado
+      // NO llamar a showNativeNotification() - el servicio nativo Android muestra todo
+      // Solo invocar el handler de foreground si está configurado para lógica interna
       if (foregroundMessageHandler) {
         foregroundMessageHandler(notification);
       }

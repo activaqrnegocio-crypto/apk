@@ -103,13 +103,14 @@ public class AquatechFirebaseMessagingService extends FirebaseMessagingService {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         
-        // Construir la notificación
+        // Construir la notificación con mejoras v417
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(getApplicationInfo().icon) // Icono de la app
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE) // Aparece como notificación real
+            .setAutoCancel(true) // Se dismiss al tocar
             .setContentIntent(pendingIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
         
@@ -147,13 +148,14 @@ public class AquatechFirebaseMessagingService extends FirebaseMessagingService {
             channel.setDescription("Notificaciones de Aquatech CRM");
             channel.enableVibration(true);
             channel.setShowBadge(true);
+            channel.enableLights(true); // Luz LED al recibir
             
             NotificationManager notificationManager = 
                 (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             
             if (notificationManager != null) {
                 notificationManager.createNotificationChannel(channel);
-                Log.d(TAG, "Canal de notificación creado");
+                Log.d(TAG, "Canal de notificación IMPORTANCE_HIGH creado");
             }
         }
     }
