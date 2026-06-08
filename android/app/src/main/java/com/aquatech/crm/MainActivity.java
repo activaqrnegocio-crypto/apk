@@ -1,17 +1,20 @@
 package com.aquatech.crm;
 
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Log;
+import android.os.Environment;
 
 import com.getcapacitor.BridgeActivity;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.FileReader;
+import java.io.IOException;
 
 public class MainActivity extends BridgeActivity {
     
     private static final String TAG = "AquatechFCM";
-    // v418: Usar SharedPreferences que Capacitor Preferences puede leer
-    private static final String PREFS_NAME = "AquatechPush";
+    private static final String PENDING_NAV_FILE = "pending_nav.json";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -30,7 +33,7 @@ public class MainActivity extends BridgeActivity {
 
     /**
      * Maneja el Intent cuando la notificación es tocada.
-     * v418: Guardar en SharedPreferences para que el frontend lo lea.
+     * v419: Guardar en archivo JSON (compatible con Capacitor Filesystem)
      */
     private void handleNotificationIntent(Intent intent) {
         if (intent == null) return;
@@ -48,15 +51,48 @@ public class MainActivity extends BridgeActivity {
         if (pushUrl != null && !pushUrl.isEmpty()) {
             Log.d(TAG, "Notificación tocada - URL: " + pushUrl + ", Tag: " + pushTag);
             
-            // Guardar en SharedPreferences (compatible con Capacitor Preferences)
-            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-            prefs.edit()
-                .putString("pending_url", pushUrl)
-                .putString("pending_tag", pushTag)
-                .putBoolean("has_pending", true)
-                .apply();
+            // Guardar en archivo JSON (que Capacitor Filesystem puede leer)
+            savePendingNavToFile(pushUrl, pushTag);
             
-            Log.d(TAG, "Pending nav guardado en SharedPreferences");
+            Log.d(TAG, "Pending nav guardado en archivo JSON");
         }
+    }
+    
+    /**
+     * Guarda el pending navigation en un archivo JSON.
+     * Este archivo puede ser leído por el frontend usando Capacitor Filesystem.
+     */
+    private void savePendingNavToFile(String url, String tag) {
+        try {
+            // Usar el directorio de archivos internos de la app
+            File file = new File(getFilesDir(), PENDING_NAV_FILE);
+            
+            // Crear contenido JSON
+            String json = "{\n" +
+                "  \"url\": \"" + escapeJson(url) + "\",\n" +
+                "  \"tag\": \"" + escapeJson(tag) + "\",\n" +
+                "  \"has_pending\": true\n" +
+                "}";
+            
+            FileWriter writer = new FileWriter(file);
+            writer.write(json);
+            writer.close();
+            
+            Log.d(TAG, "Archivo JSON creado: " + file.getAbsolutePath());
+        } catch (IOException e) {
+            Log.e(TAG, "Error guardando pending nav: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Escapa caracteres para JSON.
+     */
+    private String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\")
+               .replace("\"", "\\\"")
+               .replace("\n", "\\n")
+               .replace("\r", "\\r")
+               .replace("\t", "\\t");
     }
 }

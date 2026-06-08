@@ -2,9 +2,12 @@
 // Lee pending_url cuando la app se abre desde una notificación push
 
 import { Capacitor } from '@capacitor/core';
-import { Preferences } from '@capacitor/preferences';
+import { Filesystem, Directory } from '@capacitor/filesystem';
 
-const PREFS_NAME = 'AquatechPush';
+const PENDING_NAV_FILE = 'pending_nav.json';
+
+// Usar string directamente para evitar errores de tipo
+const FILES_DIR = 'FILES';
 
 export interface PendingNav {
   url: string;
@@ -13,40 +16,48 @@ export interface PendingNav {
 
 /**
  * Lee y limpia pending navigation desde Android nativo.
- * v418: Usa SharedPreferences (que MainActivity ahora escribe)
+ * v419: Lee desde archivo JSON (que MainActivity crea)
  */
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) {
     return null;
   }
 
-  // Leer desde Capacitor Preferences (que MainActivity escribe)
   try {
-    const hasPending = await Preferences.get({ key: 'has_pending' });
-    console.log('[PendingNav] has_pending:', hasPending.value);
+    // Leer el archivo JSON desde el directorio de archivos internos
+    const result = await Filesystem.readFile({
+      path: PENDING_NAV_FILE,
+      directory: FILES_DIR as any,
+    });
+
+    console.log('[PendingNav] Archivo leído:', result.data);
+
+    // Parsear el JSON
+    const data = JSON.parse(result.data as string);
     
-    if (hasPending.value === 'true') {
-      const pendingUrl = await Preferences.get({ key: 'pending_url' });
-      const pendingTag = await Preferences.get({ key: 'pending_tag' });
+    if (data.has_pending && data.url) {
+      console.log('[PendingNav] URL:', data.url);
+      console.log('[PendingNav] Tag:', data.tag);
 
-      console.log('[PendingNav] pending_url:', pendingUrl.value);
-      console.log('[PendingNav] pending_tag:', pendingTag.value);
-
-      if (pendingUrl.value) {
-        // Limpiar después de leer
-        await Preferences.remove({ key: 'has_pending' });
-        await Preferences.remove({ key: 'pending_url' });
-        await Preferences.remove({ key: 'pending_tag' });
-
-        console.log('[PendingNav] Navegando a:', pendingUrl.value);
-        return {
-          url: pendingUrl.value,
-          tag: pendingTag.value || ''
-        };
+      // Eliminar el archivo después de leer
+      try {
+        await Filesystem.deleteFile({
+          path: PENDING_NAV_FILE,
+          directory: FILES_DIR as any,
+        });
+        console.log('[PendingNav] Archivo eliminado');
+      } catch (e) {
+        console.log('[PendingNav] Error eliminando archivo (puede no existir):', e);
       }
+
+      console.log('[PendingNav] Navegando a:', data.url);
+      return {
+        url: data.url,
+        tag: data.tag || ''
+      };
     }
   } catch (e) {
-    console.error('[PendingNav] Error:', e);
+    console.log('[PendingNav] No hay pending nav o error:', e);
   }
 
   return null;
