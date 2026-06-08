@@ -237,7 +237,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       projectId, userId,
       `💬 ${projectTitle} - ${session.user.name}`,
       pushBody,
-      `URL_PROJECT_CHAT:${projectId}`,
+      `URL_PROJECT_CHAT:${projectId}:${msg.id}`,
       `chat-${projectId}`,
       mediaUrl || (media && media.url) || undefined
     )
