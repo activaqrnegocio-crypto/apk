@@ -17,20 +17,24 @@ export interface PendingNav {
 /**
  * Lee y limpia pending navigation desde Android nativo.
  * v419: Lee desde archivo JSON (que MainActivity crea)
+ * v421: Agregar logs de depuración
  */
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
+  console.log('[PendingNav] getAndClearPendingNav llamado');
   if (!Capacitor.isNativePlatform()) {
+    console.log('[PendingNav] No es plataforma nativa, retornando null');
     return null;
   }
 
   try {
+    console.log('[PendingNav] Intentando leer archivo:', PENDING_NAV_FILE);
     // Leer el archivo JSON desde el directorio de archivos internos
     const result = await Filesystem.readFile({
       path: PENDING_NAV_FILE,
       directory: FILES_DIR as any,
     });
 
-    console.log('[PendingNav] Archivo leído (base64):', result.data);
+    console.log('[PendingNav] Archivo leído, resultado:', JSON.stringify(result));
 
     // Capacitor Filesystem devuelve el contenido como base64, necesitamos decodificarlo
     let jsonContent: string;

@@ -39,6 +39,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- v421: Intent filter para manejar taps de notificaciones push -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <!-- Aceptar URLs con scheme custom -->
+                <data android:scheme="aquatech" />
+            </intent-filter>
+
         </activity>
 
         <provider

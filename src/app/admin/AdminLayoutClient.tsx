@@ -28,21 +28,35 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const [isNavigating, setIsNavigating] = useState(false)
 
   // v420: Manejar navegación desde notificación push (respetando rol de usuario)
+  // v421: Ejecutar INMEDIATAMENTE al montar, sin esperar session
   useEffect(() => {
+    console.log('[AdminLayout] Componente montado, verificando pending nav...');
+    
     async function handlePendingNav() {
+      console.log('[PendingNav] handlePendingNav iniciado');
       const pending = await getAndClearPendingNav();
+      console.log('[PendingNav] pending obtenido:', pending);
       if (pending?.url) {
-        console.log('[PendingNav] Navegando a:', pending.url);
-        // Obtener el rol del usuario de la sesión
+        console.log('[PendingNav] URL recibida:', pending.url);
+        
+        // Obtener el rol del usuario de la sesión (si está disponible)
         const userRole = (session?.user as any)?.role;
         console.log('[PendingNav] User role:', userRole);
+        
+        // Generar URL de navegación basada en el rol
         const navigateUrl = parseProjectChatUrl(pending.url, userRole);
-        console.log('[PendingNav] URL final:', navigateUrl);
+        console.log('[PendingNav] Navegando a:', navigateUrl);
+        
+        // Navegar inmediatamente
         window.location.href = navigateUrl;
+      } else {
+        console.log('[PendingNav] No hay pending navigation para procesar');
       }
     }
+    
+    // Ejecutar inmediatamente al montar el componente
     handlePendingNav();
-  }, [session]);
+  }, []); // Dependencia vacía = ejecutar solo una vez al montar
 
   useEffect(() => {
     // Show progress bar on path change

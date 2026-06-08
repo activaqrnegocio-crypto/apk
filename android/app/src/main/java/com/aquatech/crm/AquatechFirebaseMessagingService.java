@@ -85,23 +85,31 @@ public class AquatechFirebaseMessagingService extends FirebaseMessagingService {
             tag = "default";
         }
         
-        Log.d(TAG, "Mostrando notificación - Title: " + title + ", Body: " + body);
+        Log.d(TAG, "Mostrando notificación - Title: " + title + ", Body: " + body + ", URL: " + url);
         
         // v418: Crear intent que apunte a MainActivity (no BridgeActivity)
-        // MainActivity tiene handleNotificationIntent() que lee los extras
+        // v421: Agregar más logs de depuración
+        Log.d(TAG, "Creando intent para MainActivity con URL: " + url);
+        
         Intent intent = new Intent(this, MainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         intent.putExtra("push_url", url);
         intent.putExtra("push_tag", tag);
         
+        Log.d(TAG, "Intent creado, extras: push_url=" + url + ", push_tag=" + tag);
+        
         // v418: PendingIntent con requestCode único basado en la URL
         int requestCode = url.hashCode();
+        Log.d(TAG, "Creando PendingIntent con requestCode: " + requestCode);
+        
         PendingIntent pendingIntent = PendingIntent.getActivity(
             this,
             requestCode,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
+        
+        Log.d(TAG, "PendingIntent creado exitosamente");
         
         // Construir la notificación con mejoras v417
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)

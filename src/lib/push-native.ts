@@ -5,6 +5,7 @@
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { parseProjectChatUrl } from './pending-nav';
 
 export interface PushPayload {
   title: string;
@@ -83,21 +84,32 @@ export async function registerFCMToken(userId: number): Promise<boolean | false>
     });
 
     // 2. Manejar tap en notificación (app en background o cerrada)
-    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+    // v421: Usar parseProjectChatUrl para consistencia
+    PushNotifications.addListener('pushNotificationActionPerformed', async (action) => {
       console.log('[PushNative] Tap en notificación:', JSON.stringify(action));
       const notification = action.notification || {};
       const data = notification.data || {};
       const url = data.url || '';
       
-      // v415: Parsear URLs especiales de la PWA para navegación correcta
-      console.log('[PushNative] URL de navegación:', url);
+      console.log('[PushNative] URL recibida:', url);
       console.log('[PushNative] Data completa:', JSON.stringify(data));
       
-      // v413: Parsear URLs especiales de la PWA para navegación correcta
+      // v421: Obtener el rol del usuario para navegación correcta
+      let userRole = 'ADMIN'; // Default
+      try {
+        const sessionRes = await fetch('/api/auth/session');
+        const sessionData = await sessionRes.json();
+        userRole = sessionData?.user?.role || 'ADMIN';
+      } catch (e) {
+        console.log('[PushNative] Error obteniendo sesión:', e);
+      }
+      console.log('[PushNative] User role para navegación:', userRole);
+      
+      // Usar parseProjectChatUrl para consistencia
       if (url.startsWith('URL_PROJECT_CHAT:')) {
-        // Chat de proyecto: URL_PROJECT_CHAT:123 → /admin/proyectos/123
-        const projectId = url.replace('URL_PROJECT_CHAT:', '');
-        window.location.href = `/admin/proyectos/${projectId}?view=chat`;
+        const navigateUrl = parseProjectChatUrl(url, userRole);
+        console.log('[PushNative] Navegando a:', navigateUrl);
+        window.location.href = navigateUrl;
       } else if (url.startsWith('URL_TASK:')) {
         // Tarea: URL_TASK:projectId:appointmentId → /admin/calendario?task=X&project=Y
         const parts = url.replace('URL_TASK:', '').split(':');
@@ -111,10 +123,19 @@ export async function registerFCMToken(userId: number): Promise<boolean | false>
       } else if (data.type === 'chat') {
         window.location.href = '/admin/proyectos';
       } else if (data.type === 'new-project') {
-        window.location.href = '/admin/proyectos';
+        window.location.href = '/admin/proyectos/nuevo';
+      } else if (url && url.startsWith('/')) {
+        // Es una URL relativa
+        window.location.href = url;
       } else {
-        // Default: ir a dashboard
-        window.location.href = '/admin';
+        // Default: ir a dashboard según rol
+        if (userRole === 'OPERATOR' || userRole === 'OPERADOR') {
+          window.location.href = '/admin/operador';
+        } else if (userRole === 'SUBCONTRATISTA') {
+          window.location.href = '/admin/subcontratista';
+        } else {
+          window.location.href = '/admin';
+        }
       }
     });
 

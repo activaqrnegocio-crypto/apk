@@ -34,9 +34,25 @@ public class MainActivity extends BridgeActivity {
     /**
      * Maneja el Intent cuando la notificación es tocada.
      * v419: Guardar en archivo JSON (compatible con Capacitor Filesystem)
+     * v421: Agregar logs de depuración
      */
     private void handleNotificationIntent(Intent intent) {
-        if (intent == null) return;
+        Log.d(TAG, "handleNotificationIntent llamado, intent: " + (intent != null ? "no es null" : "es null"));
+        if (intent == null) {
+            Log.w(TAG, "Intent es null, saliendo");
+            return;
+        }
+        
+        // Log todos los extras para debug
+        Bundle extras = intent.getExtras();
+        if (extras != null) {
+            Log.d(TAG, "Extras size: " + extras.size());
+            for (String key : extras.keySet()) {
+                Log.d(TAG, "Extra key: " + key + " = " + extras.get(key));
+            }
+        } else {
+            Log.w(TAG, "No hay extras en el intent");
+        }
         
         // Support both "push_url" (our custom) and "url" (from server)
         String pushUrl = intent.getStringExtra("push_url");
@@ -48,6 +64,8 @@ public class MainActivity extends BridgeActivity {
             pushTag = intent.getStringExtra("tag");
         }
         
+        Log.d(TAG, "pushUrl extraído: " + (pushUrl != null ? pushUrl : "NULL"));
+        
         if (pushUrl != null && !pushUrl.isEmpty()) {
             Log.d(TAG, "Notificación tocada - URL: " + pushUrl + ", Tag: " + pushTag);
             
@@ -55,6 +73,8 @@ public class MainActivity extends BridgeActivity {
             savePendingNavToFile(pushUrl, pushTag);
             
             Log.d(TAG, "Pending nav guardado en archivo JSON");
+        } else {
+            Log.w(TAG, "NO se guardó pending nav porque pushUrl está vacío");
         }
     }
     
