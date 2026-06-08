@@ -198,10 +198,10 @@ export async function registerFCMToken(userId: number): Promise<void> {
       console.log('[FirebaseMessaging] messageReceived foreground:', JSON.stringify(event));
       
       // Los mensajes de data-only llegan en event.data
-      // El backend envía: { title, body, url, tag } en el data payload
+      // El backend envía: { custom_title, custom_body, url, tag } en el data payload
       const data = event.data || {};
-      const title = data.title || 'Aquatech';
-      const body = data.body || '';
+      const title = data.custom_title || data.title || 'Aquatech';
+      const body = data.custom_body || data.body || '';
       
       console.log('[FirebaseMessaging] Mostrando notificación foreground. title:', title, 'body:', body);
       await showNativeNotification(title, body, data);
