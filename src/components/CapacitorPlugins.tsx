@@ -35,9 +35,6 @@ export default function CapacitorPlugins({ children }: { children?: React.ReactN
           
           // Push notifications
           import('@capacitor/push-notifications').then(m => console.log('[CapacitorPlugins] PushNotifications loaded')),
-          
-          // Firebase Messaging (FCM)
-          import('@capacitor-firebase/messaging').then(m => console.log('[CapacitorPlugins] FCM loaded')),
         ])
         
         console.log('[CapacitorPlugins] All plugins pre-loaded successfully')
