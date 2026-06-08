@@ -115,17 +115,17 @@ export function parseProjectChatUrl(url: string, userRole?: string): string {
       }
       return `/admin/proyectos/${projectId}?view=CHAT`;
     } else if (userRole === 'SUBCONTRATISTA' || userRole?.toUpperCase() === 'SUBCONTRATISTA') {
-      // Subcontratista: /admin/subcontratista/proyecto/{id}?view=chat
+      // Subcontratista: /admin/subcontratista/proyecto/{id}?view=chat (solo con messageId)
       if (messageId) {
         return `/admin/subcontratista/proyecto/${projectId}?view=chat&message=${messageId}`;
       }
-      return `/admin/subcontratista/proyecto/${projectId}?view=chat`;
+      return `/admin/subcontratista/proyecto/${projectId}`;
     } else {
-      // Operador: /admin/operador/proyecto/{id}?view=chat
+      // Operador: /admin/operador/proyecto/{id}?view=chat (solo con messageId)
       if (messageId) {
         return `/admin/operador/proyecto/${projectId}?view=chat&message=${messageId}`;
       }
-      return `/admin/operador/proyecto/${projectId}?view=chat`;
+      return `/admin/operador/proyecto/${projectId}`;
     }
   }
   
@@ -134,11 +134,11 @@ export function parseProjectChatUrl(url: string, userRole?: string): string {
     const projectId = url.replace('URL_PROJECT:', '');
     
     if (isUserAdmin(userRole)) {
-      return `/admin/proyectos/${projectId}`;
+      return `/admin/proyectos/${projectId}?view=CHAT`;
     } else if (userRole === 'SUBCONTRATISTA' || userRole?.toUpperCase() === 'SUBCONTRATISTA') {
-      return `/admin/subcontratista/proyecto/${projectId}?view=chat`;
+      return `/admin/subcontratista/proyecto/${projectId}`;
     } else {
-      return `/admin/operador/proyecto/${projectId}?view=chat`;
+      return `/admin/operador/proyecto/${projectId}`;
     }
   }
   
