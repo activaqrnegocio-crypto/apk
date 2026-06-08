@@ -27,19 +27,22 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pathname = usePathname()
   const [isNavigating, setIsNavigating] = useState(false)
 
-  // v418: Manejar navegación desde notificación push
+  // v420: Manejar navegación desde notificación push (respetando rol de usuario)
   useEffect(() => {
     async function handlePendingNav() {
       const pending = await getAndClearPendingNav();
       if (pending?.url) {
         console.log('[PendingNav] Navegando a:', pending.url);
-        const navigateUrl = parseProjectChatUrl(pending.url);
+        // Obtener el rol del usuario de la sesión
+        const userRole = (session?.user as any)?.role;
+        console.log('[PendingNav] User role:', userRole);
+        const navigateUrl = parseProjectChatUrl(pending.url, userRole);
         console.log('[PendingNav] URL final:', navigateUrl);
         window.location.href = navigateUrl;
       }
     }
     handlePendingNav();
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     // Show progress bar on path change

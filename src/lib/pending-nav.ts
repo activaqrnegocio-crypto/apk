@@ -85,27 +85,55 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
 }
 
 /**
- * Parsea URL_PROJECT_CHAT:projectId:messageId y retorna la URL de navegación
- * Formato esperado: /proyectos/{id}?view=CHAT (sin /admin, view en mayúsculas)
+ * Verifica si el usuario es admin basado en su rol
  */
-export function parseProjectChatUrl(url: string): string {
+function isUserAdmin(role?: string): boolean {
+  if (!role) return false;
+  const upperRole = role.toUpperCase();
+  return ['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(upperRole);
+}
+
+/**
+ * Parsea URL_PROJECT_CHAT:projectId:messageId y retorna la URL de navegación
+ * v420: Respeta el rol del usuario para generar la URL correcta
+ * - Admin: /admin/proyectos/{id}?view=CHAT&message={messageId}
+ * - Operator: /admin/operador/proyecto/{id}
+ * - Subcontratista: /admin/subcontratista/proyecto/{id}
+ */
+export function parseProjectChatUrl(url: string, userRole?: string): string {
   // Formato: URL_PROJECT_CHAT:123:456
   if (url.startsWith('URL_PROJECT_CHAT:')) {
     const parts = url.replace('URL_PROJECT_CHAT:', '').split(':');
     const projectId = parts[0];
     const messageId = parts[1] || '';
     
-    // Formato: /proyectos/{id}?view=CHAT (sin /admin, view en mayúsculas)
-    if (messageId) {
-      return `/proyectos/${projectId}?view=CHAT&message=${messageId}`;
+    // Generar URL según el rol del usuario
+    if (isUserAdmin(userRole)) {
+      // Admin: /admin/proyectos/{id}?view=CHAT&message={messageId}
+      if (messageId) {
+        return `/admin/proyectos/${projectId}?view=CHAT&message=${messageId}`;
+      }
+      return `/admin/proyectos/${projectId}?view=CHAT`;
+    } else if (userRole === 'SUBCONTRATISTA' || userRole?.toUpperCase() === 'SUBCONTRATISTA') {
+      // Subcontratista: /admin/subcontratista/proyecto/{id}
+      return `/admin/subcontratista/proyecto/${projectId}`;
+    } else {
+      // Operador: /admin/operador/proyecto/{id}
+      return `/admin/operador/proyecto/${projectId}`;
     }
-    return `/proyectos/${projectId}?view=CHAT`;
   }
   
   // Otros formatos: URL_PROJECT:123 → /proyectos/123 (sin /admin)
   if (url.startsWith('URL_PROJECT:')) {
     const projectId = url.replace('URL_PROJECT:', '');
-    return `/proyectos/${projectId}`;
+    
+    if (isUserAdmin(userRole)) {
+      return `/admin/proyectos/${projectId}`;
+    } else if (userRole === 'SUBCONTRATISTA' || userRole?.toUpperCase() === 'SUBCONTRATISTA') {
+      return `/admin/subcontratista/proyecto/${projectId}`;
+    } else {
+      return `/admin/operador/proyecto/${projectId}`;
+    }
   }
   
   return url;
