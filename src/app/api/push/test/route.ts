@@ -2,7 +2,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { sendFCMToToken, type FCMPayload } from '@/lib/firebase-admin'
+import { sendFCMDataOnly, type FCMPayload } from '@/lib/firebase-admin'
 
 // POST: Send a test notification to the current user
 // v412: Si hay suscripcion FCM, solo usa FCM (para APK)
@@ -30,7 +30,7 @@ export async function POST() {
         data: { url: '/admin/operador', tag: 'test' }
       }
       
-      const result = await sendFCMToToken(fcmSub.fcmToken, payload);
+      const result = await sendFCMDataOnly(fcmSub.fcmToken, payload);
       
       if (result === 'INVALID_TOKEN') {
         await prisma.pushSubscription.delete({ where: { id: fcmSub.id } }).catch(() => {})

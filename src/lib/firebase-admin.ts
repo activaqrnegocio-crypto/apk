@@ -50,6 +50,34 @@ export interface FCMPayload {
 }
 
 /**
+ * Envía DATA-ONLY (sin notification object) para que llegue a pushNotificationReceived en foreground
+ */
+export async function sendFCMDataOnly(token: string, payload: FCMPayload): Promise<boolean | 'INVALID_TOKEN'> {
+  const app = getFirebaseAdmin();
+  if (!app) return false;
+  try {
+    const message: admin.messaging.Message = {
+      token,
+      data: {
+        custom_title: payload.title,
+        custom_body: payload.body,
+        title: payload.title,
+        body: payload.body,
+        url: payload.data?.url || '/admin/operador',
+        tag: payload.data?.tag || 'default',
+        ...payload.data,
+      },
+      android: { priority: 'high' },
+    };
+    await admin.messaging(app).send(message);
+    return true;
+  } catch (err: any) {
+    if (err.code === 'messaging/registration-token-not-registered') return 'INVALID_TOKEN';
+    return false;
+  }
+}
+
+/**
  * Envía una notificación FCM con mensaje de solo DATOS (sin notification object)
  * Esto hace que Android NO muestre automáticamente la notificación cuando la app está abierta
  * En su lugar, el plugin @capacitor-firebase/messaging entrega el mensaje al handler JavaScript
