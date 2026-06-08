@@ -30,10 +30,31 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
       directory: FILES_DIR as any,
     });
 
-    console.log('[PendingNav] Archivo leído:', result.data);
+    console.log('[PendingNav] Archivo leído (base64):', result.data);
+
+    // Capacitor Filesystem devuelve el contenido como base64, necesitamos decodificarlo
+    let jsonContent: string;
+    if (typeof result.data === 'string') {
+      // Si es un string que parece base64 (comienza con ewog), decodificar
+      const dataStr = result.data as string;
+      if (dataStr.startsWith('ewog') || dataStr.includes('Ilw')) {
+        try {
+          jsonContent = atob(dataStr);
+          console.log('[PendingNav] Contenido decodificado:', jsonContent);
+        } catch (decodeError) {
+          console.log('[PendingNav] Error decodificando base64, usando string original');
+          jsonContent = dataStr;
+        }
+      } else {
+        jsonContent = dataStr;
+      }
+    } else {
+      // Si es Blob u otro tipo, convertir a string
+      jsonContent = String(result.data);
+    }
 
     // Parsear el JSON
-    const data = JSON.parse(result.data as string);
+    const data = JSON.parse(jsonContent);
     
     if (data.has_pending && data.url) {
       console.log('[PendingNav] URL:', data.url);
