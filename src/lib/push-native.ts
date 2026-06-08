@@ -192,21 +192,6 @@ export async function registerFCMToken(userId: number): Promise<void> {
       }
     });
 
-    // 7. FirebaseMessaging para recibir mensajes en foreground (data-only)
-    // @ts-ignore - Tipos del plugin no incluyen notificationReceived pero funciona en runtime
-    FirebaseMessaging.addListener('notificationReceived' as any, async (event: any) => {
-      console.log('[FirebaseMessaging] notificationReceived foreground:', JSON.stringify(event));
-      
-      // Los mensajes de data-only llegan en event.data
-      // El backend envía: { custom_title, custom_body, url, tag } en el data payload
-      const data = event.data || {};
-      const title = data.custom_title || data.title || 'Aquatech';
-      const body = data.custom_body || data.body || '';
-      
-      console.log('[FirebaseMessaging] Mostrando notificación foreground. title:', title, 'body:', body);
-      await showNativeNotification(title, body, data);
-    });
-
     // 7. REGISTER AL FINAL - después de tener los listeners
     await PushNotifications.register();
     console.log('[PushNative] Dispositivo registrado para notificaciones');
