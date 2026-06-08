@@ -4,7 +4,6 @@
 
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { FirebaseMessaging } from '@capacitor-firebase/messaging';
 import { LocalNotifications } from '@capacitor/local-notifications';
 
 export interface PushPayload {
@@ -173,22 +172,14 @@ export async function registerFCMToken(userId: number): Promise<void> {
           // Eliminada notificación falsa de confirmación
           // Las notificaciones ahora vienen del servidor via FCM data-only
           
-          // v410: Enviar notificación de prueba desde el servidor para confirmar
-          // También mostrar notificación local directamente para asegurar que funcione
+          // v410: Enviar notificación de prueba desde el servidor via FCM
+          // La notificación real llegará via notificationReceived si todo funciona
           try {
-            // Primero mostrar notificación local directamente (backup)
-            await showNativeNotification(
-              '🔔 ¡Notificaciones Activadas!',
-              'Hola Cesar Prueba, recibirás alertas de proyectos, mensajes y más.',
-              { url: '/admin/operador', tag: 'test' }
-            );
-            
-            // Luego enviar al servidor para historial
             await fetch('/api/push/test', { 
               method: 'POST',
               credentials: 'include'  // Incluir cookies de sesión
             });
-            console.log('[PushNative] Notificación de prueba enviada');
+            console.log('[PushNative] Notificación de prueba enviada via FCM');
           } catch (e) {
             console.warn('[PushNative] Error enviando notificación de prueba:', e);
           }
@@ -216,7 +207,7 @@ export async function registerFCMToken(userId: number): Promise<void> {
       await showNativeNotification(title, body, data);
     });
 
-    // 8. REGISTER AL FINAL - después de tener los listeners
+    // 7. REGISTER AL FINAL - después de tener los listeners
     await PushNotifications.register();
     console.log('[PushNative] Dispositivo registrado para notificaciones');
 
