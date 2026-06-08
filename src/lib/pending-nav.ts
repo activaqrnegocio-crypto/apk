@@ -86,6 +86,7 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
 
 /**
  * Parsea URL_PROJECT_CHAT:projectId:messageId y retorna la URL de navegación
+ * Formato esperado: /proyectos/{id}?view=CHAT (sin /admin, view en mayúsculas)
  */
 export function parseProjectChatUrl(url: string): string {
   // Formato: URL_PROJECT_CHAT:123:456
@@ -94,16 +95,17 @@ export function parseProjectChatUrl(url: string): string {
     const projectId = parts[0];
     const messageId = parts[1] || '';
     
+    // Formato: /proyectos/{id}?view=CHAT (sin /admin, view en mayúsculas)
     if (messageId) {
-      return `/admin/proyectos/${projectId}?view=chat&message=${messageId}`;
+      return `/proyectos/${projectId}?view=CHAT&message=${messageId}`;
     }
-    return `/admin/proyectos/${projectId}?view=chat`;
+    return `/proyectos/${projectId}?view=CHAT`;
   }
   
-  // Otros formatos: URL_PROJECT:123 → /admin/proyectos/123
+  // Otros formatos: URL_PROJECT:123 → /proyectos/123 (sin /admin)
   if (url.startsWith('URL_PROJECT:')) {
     const projectId = url.replace('URL_PROJECT:', '');
-    return `/admin/proyectos/${projectId}`;
+    return `/proyectos/${projectId}`;
   }
   
   return url;
