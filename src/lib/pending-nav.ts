@@ -13,51 +13,32 @@ export interface PendingNav {
 
 /**
  * Lee y limpia pending navigation desde Android nativo.
- * 
- * v418: Usa el método JavaScript expuesto por MainActivity:
- * - window.AndroidPendingNav.getPendingNav()
- * - Archivo pending_nav.json como fallback
- * - Capacitor Preferences como último recurso
+ * v418: Usa SharedPreferences (que MainActivity ahora escribe)
  */
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) {
     return null;
   }
 
-  // v418: Intentar usar el método nativo expuesto por MainActivity
-  try {
-    const androidNav = (window as any).AndroidPendingNav;
-    if (androidNav && typeof androidNav.getPendingNav === 'function') {
-      const result = androidNav.getPendingNav();
-      if (result) {
-        const data = JSON.parse(result);
-        if (data?.url) {
-          console.log('[PendingNav] Desde Android nativo:', data.url);
-          return {
-            url: data.url,
-            tag: data.tag || ''
-          };
-        }
-      }
-    }
-  } catch (e) {
-    console.log('[PendingNav] Método nativo no disponible:', e);
-  }
-
-  // Fallback: intentar leer desde Capacitor Preferences
+  // Leer desde Capacitor Preferences (que MainActivity escribe)
   try {
     const hasPending = await Preferences.get({ key: 'has_pending' });
+    console.log('[PendingNav] has_pending:', hasPending.value);
     
     if (hasPending.value === 'true') {
       const pendingUrl = await Preferences.get({ key: 'pending_url' });
       const pendingTag = await Preferences.get({ key: 'pending_tag' });
 
-      await Preferences.remove({ key: 'has_pending' });
-      await Preferences.remove({ key: 'pending_url' });
-      await Preferences.remove({ key: 'pending_tag' });
+      console.log('[PendingNav] pending_url:', pendingUrl.value);
+      console.log('[PendingNav] pending_tag:', pendingTag.value);
 
       if (pendingUrl.value) {
-        console.log('[PendingNav] Desde Preferences:', pendingUrl.value);
+        // Limpiar después de leer
+        await Preferences.remove({ key: 'has_pending' });
+        await Preferences.remove({ key: 'pending_url' });
+        await Preferences.remove({ key: 'pending_tag' });
+
+        console.log('[PendingNav] Navegando a:', pendingUrl.value);
         return {
           url: pendingUrl.value,
           tag: pendingTag.value || ''
@@ -65,7 +46,7 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
       }
     }
   } catch (e) {
-    console.log('[PendingNav] Preferences no disponible:', e);
+    console.error('[PendingNav] Error:', e);
   }
 
   return null;
