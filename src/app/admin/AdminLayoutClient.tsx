@@ -31,17 +31,24 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   useEffect(() => {
-    // Solo procesar UNA VEZ con ref
-    if (pendingNavRef.current) {
+    // v425: PROTEGER contra React StrictMode - ejecutar solo una vez
+    // Usar flag local además del ref para evitar race conditions
+    const isRunning = (window as any).__pendingNavRunning;
+    if (isRunning || pendingNavRef.current) {
       console.log('[PendingNav] Ya procesado, ignorando');
       return;
     }
     
-    console.log('[AdminLayout] Ejecutando handlePendingNav');
+    // Marcar comorunning inmediatamente
+    (window as any).__pendingNavRunning = true;
     pendingNavRef.current = true;
+    
+    console.log('[AdminLayout] Ejecutando handlePendingNav');
     
     async function handlePendingNav() {
       console.log('[PendingNav] handlePendingNav iniciado');
+      
+      // v425: Primero leer el pending nav
       const pending = await getAndClearPendingNav();
       
       if (!pending?.url) {
@@ -51,17 +58,24 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       
       console.log('[PendingNav] URL recibida:', pending.url);
       
-      // Esperar hasta que la sesión esté disponible (max 3 segundos)
+      // v425: Obtener el rol - esperar hasta 3 segundos por la sesión
       let userRole = (session?.user as any)?.role;
       let attempts = 0;
+      
+      // Si no hay sesión, esperar y reintentar
       while (!userRole && attempts < 6) {
-        console.log('[PendingNav] Esperando sesi��n... intento', attempts + 1);
+        console.log('[PendingNav] Esperando sesión... intento', attempts + 1);
         await new Promise(r => setTimeout(r, 500));
         try {
           const res = await fetch('/api/auth/session');
-          const data = await res.json();
-          userRole = data?.user?.role;
-        } catch (e) {}
+          if (res.ok) {
+            const data = await res.json();
+            userRole = data?.user?.role;
+            console.log('[PendingNav] Rol obtenido:', userRole);
+          }
+        } catch (e) {
+          console.log('[PendingNav] Error en sesión:', e);
+        }
         attempts++;
       }
       
