@@ -75,42 +75,77 @@ export async function registerFCMToken(userId: number): Promise<void> {
     });
 
     // 2. Manejar tap en notificación (app en background o cerrada)
-    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+    PushNotifications.addListener('pushNotificationActionPerformed', async (action) => {
       console.log('[PushNative] Tap en notificación:', JSON.stringify(action));
       const notification = action.notification || {};
       const data = notification.data || {};
       const url = data.url || '';
-      
-      // v415: Parsear URLs especiales de la PWA para navegación correcta
+
       console.log('[PushNative] URL de navegación:', url);
       console.log('[PushNative] Data completa:', JSON.stringify(data));
-      
-      if (url.startsWith('URL_PROJECT_CHAT:')) {
-        // Chat de proyecto: URL_PROJECT_CHAT:123 → /admin/proyectos/123
-        const projectId = url.replace('URL_PROJECT_CHAT:', '');
-        console.log('[PushNative] Navegando a chat proyecto:', projectId);
-        window.location.href = `/admin/proyectos/${projectId}`;
+
+      // v-fix: Obtener el rol del usuario para navegar correctamente según su perfil
+      let userRole: string = 'OPERADOR';
+      try {
+        const res = await fetch('/api/auth/session');
+        if (res.ok) {
+          const session = await res.json();
+          userRole = session?.user?.role || 'OPERADOR';
+        }
+      } catch (e) {
+        console.warn('[PushNative] No se pudo obtener sesión, usando OPERADOR por defecto');
+      }
+      console.log('[PushNative] Rol del usuario:', userRole);
+
+      // Helper: resuelve URL_PROJECT_CHAT:123 al slug correcto según rol
+      function resolveProjectChatUrl(rawUrl: string, role: string): string {
+        if (rawUrl.startsWith('URL_PROJECT_CHAT:')) {
+          const parts = rawUrl.replace('URL_PROJECT_CHAT:', '').split(':');
+          const projectId = parts[0];
+          const upperRole = role.toUpperCase();
+          if (['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(upperRole)) {
+            return `/admin/proyectos/${projectId}?view=CHAT`;
+          } else if (upperRole === 'SUBCONTRATISTA') {
+            return `/admin/subcontratista/proyecto/${projectId}?view=chat`;
+          } else {
+            return `/admin/operador/proyecto/${projectId}?view=chat`;
+          }
+        }
+        if (rawUrl.startsWith('URL_PROJECT:')) {
+          const projectId = rawUrl.replace('URL_PROJECT:', '');
+          const upperRole = role.toUpperCase();
+          if (['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(upperRole)) {
+            return `/admin/proyectos/${projectId}?view=CHAT`;
+          } else if (upperRole === 'SUBCONTRATISTA') {
+            return `/admin/subcontratista/proyecto/${projectId}?view=chat`;
+          } else {
+            return `/admin/operador/proyecto/${projectId}?view=chat`;
+          }
+        }
+        return rawUrl;
+      }
+
+      if (url.startsWith('URL_PROJECT_CHAT:') || url.startsWith('URL_PROJECT:')) {
+        const navUrl = resolveProjectChatUrl(url, userRole);
+        console.log('[PushNative] Navegando a proyecto/chat según rol:', navUrl);
+        window.location.href = navUrl;
       } else if (url.startsWith('URL_TASK:')) {
-        // Tarea: URL_TASK:projectId:appointmentId → /admin/calendario?task=X&project=Y
         const parts = url.replace('URL_TASK:', '').split(':');
         const projectId = parts[0];
         const appointmentId = parts[1];
         console.log('[PushNative] Navegando a tarea:', appointmentId, 'proyecto:', projectId);
         window.location.href = `/admin/calendario?task=${appointmentId}&project=${projectId}`;
       } else if (data.projectId) {
-        console.log('[PushNative] Navegando a proyecto (data.projectId):', data.projectId);
-        window.location.href = `/admin/proyectos/${data.projectId}`;
+        const navUrl = resolveProjectChatUrl(`URL_PROJECT_CHAT:${data.projectId}`, userRole);
+        console.log('[PushNative] Navegando a proyecto (data.projectId):', navUrl);
+        window.location.href = navUrl;
       } else if (data.type === 'appointment') {
-        console.log('[PushNative] Navegando a calendario');
         window.location.href = '/admin/calendario';
       } else if (data.type === 'chat') {
-        console.log('[PushNative] Navegando a proyectos (chat)');
         window.location.href = '/admin/proyectos';
       } else if (data.type === 'new-project') {
-        console.log('[PushNative] Navegando a proyectos (new-project)');
         window.location.href = '/admin/proyectos';
       } else {
-        // Default: ir a dashboard
         console.log('[PushNative] Navegando a dashboard (default)');
         window.location.href = '/admin';
       }
