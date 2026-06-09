@@ -44,8 +44,17 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       
       console.log('[PendingNav] handlePendingNav iniciado');
       
-      // v425: Primero leer el pending nav
-      const pending = await getAndClearPendingNav();
+      // v427: Esperar a que MainActivity termine de crear el archivo (max 2 segundos)
+      let pending = null;
+      for (let i = 0; i < 4; i++) {
+        console.log('[PendingNav] Intentando leer archivo... intento', i + 1);
+        await new Promise(r => setTimeout(r, 500));
+        pending = await getAndClearPendingNav();
+        if (pending?.url) {
+          console.log('[PendingNav] Archivo encontrado!');
+          break;
+        }
+      }
       
       if (!pending?.url) {
         console.log('[PendingNav] No hay pending navigation');
