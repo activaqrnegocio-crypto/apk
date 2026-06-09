@@ -31,21 +31,17 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   useEffect(() => {
-    // v425: PROTEGER contra React StrictMode - ejecutar solo una vez
-    // Usar flag local además del ref para evitar race conditions
-    const isRunning = (window as any).__pendingNavRunning;
-    if (isRunning || pendingNavRef.current) {
-      console.log('[PendingNav] Ya procesado, ignorando');
-      return;
-    }
-    
-    // Marcar comorunning inmediatamente
-    (window as any).__pendingNavRunning = true;
-    pendingNavRef.current = true;
+    // v426: NO marcar al inicio - permitir reintentos si el archivo no existía
     
     console.log('[AdminLayout] Ejecutando handlePendingNav');
     
     async function handlePendingNav() {
+      // Si ya navegamos antes, no hacer nada
+      if ((window as any).__pendingNavDone) {
+        console.log('[PendingNav] Ya navegamos antes, ignorando');
+        return;
+      }
+      
       console.log('[PendingNav] handlePendingNav iniciado');
       
       // v425: Primero leer el pending nav
@@ -58,25 +54,34 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       
       console.log('[PendingNav] URL recibida:', pending.url);
       
-      // v425: Obtener el rol - esperar hasta 3 segundos por la sesión
+      // v426: Obtener el rol - PRIERO esperar la sesión de useSession()
       let userRole = (session?.user as any)?.role;
       let attempts = 0;
       
-      // Si no hay sesión, esperar y reintentar
-      while (!userRole && attempts < 6) {
+      // Si no hay sesión de useSession(), esperar hasta que esté lista
+      while (!userRole && attempts < 10) {
         console.log('[PendingNav] Esperando sesión... intento', attempts + 1);
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 300));
+        userRole = (session?.user as any)?.role;
+        if (userRole) {
+          console.log('[PendingNav] Rol obtenido de useSession:', userRole);
+        }
+        attempts++;
+      }
+      
+      // Si sigue sin rol, intentar fetch como último recurso
+      if (!userRole) {
+        console.log('[PendingNav] Intentando fetch como último recurso...');
         try {
           const res = await fetch('/api/auth/session');
           if (res.ok) {
             const data = await res.json();
             userRole = data?.user?.role;
-            console.log('[PendingNav] Rol obtenido:', userRole);
+            console.log('[PendingNav] Rol obtenido por fetch:', userRole);
           }
         } catch (e) {
-          console.log('[PendingNav] Error en sesión:', e);
+          console.log('[PendingNav] Error en fetch:', e);
         }
-        attempts++;
       }
       
       console.log('[PendingNav] User role final:', userRole);
@@ -89,6 +94,9 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       // Generar URL de navegación basada en el rol
       const navigateUrl = parseProjectChatUrl(pending.url, userRole);
       console.log('[PendingNav] Navegando a:', navigateUrl);
+      
+      // v426: Marcar comodone ANTES de navegar
+      (window as any).__pendingNavDone = true;
       
       // Navegar
       window.location.href = navigateUrl;
