@@ -33,23 +33,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   
   // Función para procesar navegación pendiente
   async function processPendingNav() {
-    // Evitar doble ejecución si ya procesamos esta sesión
-    if ((window as any).__pendingNavDone) {
-      // Pero verificar si hay nueva ruta en localStorage (app minimizada)
-      try {
-        const newRoute = localStorage.getItem('pending_push_route');
-        if (!newRoute) {
-          console.log('[PendingNav] Ya procesado y sin nueva ruta, ignorando');
-          return;
-        }
-        // Hay nueva ruta - resetear flag
-        console.log('[PendingNav] Nueva ruta detectada, procesando:', newRoute);
-      } catch (e) {
-        console.log('[PendingNav] Ya procesado, ignorando');
-        return;
-      }
-    }
-
+    // SIEMPRE intentar procesar - leer de localStorage primero
     const pending = await getAndClearPendingNav();
     if (!pending?.url) {
       console.log('[PendingNav] No hay pending navigation');
@@ -60,7 +44,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
     (window as any).__pendingNavDone = true;
     console.log('[PendingNav] URL recibida:', pending.url);
 
-    // SIMPLE: extraer projectId y navegar directo
+    // Extraer projectId
     let projectId = '';
     if (pending.url.includes('URL_PROJECT_CHAT:')) {
       projectId = pending.url.replace('URL_PROJECT_CHAT:', '').split(':')[0];
@@ -68,17 +52,28 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       projectId = pending.url.replace('URL_PROJECT:', '');
     }
     
-    // Navegar con router de Next.js (NO window.location.href)
-    // AGREGAR delay pequeño para cold start (app cerrada)
+    // OBTENER ROL DEL USUARIO para navegar correctamente
+    let userRole = 'ADMIN';
+    try {
+      userRole = localStorage.getItem('last_user_role') || 'ADMIN';
+    } catch (e) {}
+    console.log('[PendingNav] User role:', userRole);
+    
+    // Navegar según el rol del usuario
+    // MAYOR delay para cold start (app cerrada/minimizada)
+    const delayMs = 500;
     if (projectId) {
-      console.log('[PendingNav] Navegando con router a proyecto:', projectId);
+      const targetPath = userRole === 'OPERADOR' || userRole === 'SUBCONTRACTOR'
+        ? `/admin/operador/proyecto/${projectId}?view=CHAT`
+        : `/admin/proyectos/${projectId}?view=CHAT`;
+      console.log('[PendingNav] Navegando con router a:', targetPath, 'delay:', delayMs);
       setTimeout(() => {
-        router.push(`/admin/proyectos/${projectId}?view=CHAT`);
-      }, 100);
+        router.push(targetPath);
+      }, delayMs);
     } else {
       setTimeout(() => {
         router.push('/admin');
-      }, 100);
+      }, delayMs);
     }
   }
   
