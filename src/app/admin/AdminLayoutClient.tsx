@@ -19,7 +19,7 @@ import OfflineErrorBoundary from '@/components/OfflineErrorBoundary'
 const GlobalSyncWorker = dynamic(() => import('@/components/GlobalSyncWorker'), { ssr: false })
 const OfflinePrefetcher = dynamic(() => import('@/components/OfflinePrefetcher'), { ssr: false })
 const SyncToast = dynamic(() => import('@/components/SyncToast'), { ssr: false })
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { getAndClearPendingNav, parseProjectChatUrl } from '@/lib/pending-nav'
 
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
@@ -27,15 +27,18 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pathname = usePathname()
   const [isNavigating, setIsNavigating] = useState(false)
 
-  // v420: Manejar navegación desde notificación push (respetando rol de usuario)
-  // v422: Esperar a que la sesión esté disponible antes de navegar
-  const [pendingNavProcessed, setPendingNavProcessed] = useState(false);
+  // v423: USAR REF para evitar race conditions
+  const pendingNavRef = useRef(false);
   
   useEffect(() => {
-    // Solo procesar una vez
-    if (pendingNavProcessed) return;
+    // Solo procesar UNA VEZ con ref
+    if (pendingNavRef.current) {
+      console.log('[PendingNav] Ya procesado, ignorando');
+      return;
+    }
     
-    console.log('[AdminLayout] Verificando pending nav, session:', session?.user ? 'sí' : 'no');
+    console.log('[AdminLayout] Ejecutando handlePendingNav');
+    pendingNavRef.current = true;
     
     async function handlePendingNav() {
       console.log('[PendingNav] handlePendingNav iniciado');
@@ -43,17 +46,16 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       
       if (!pending?.url) {
         console.log('[PendingNav] No hay pending navigation');
-        setPendingNavProcessed(true);
         return;
       }
       
       console.log('[PendingNav] URL recibida:', pending.url);
       
-      // Esperar hasta que la sesión esté disponible (max 5 segundos)
+      // Esperar hasta que la sesión esté disponible (max 3 segundos)
       let userRole = (session?.user as any)?.role;
       let attempts = 0;
-      while (!userRole && attempts < 10) {
-        console.log('[PendingNav] Esperando sesión... intento', attempts + 1);
+      while (!userRole && attempts < 6) {
+        console.log('[PendingNav] Esperando sesi��n... intento', attempts + 1);
         await new Promise(r => setTimeout(r, 500));
         try {
           const res = await fetch('/api/auth/session');
@@ -65,7 +67,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       
       console.log('[PendingNav] User role final:', userRole);
       
-      // Si sigue sin rol, usar operador por defecto (asumir que está logueado)
+      // Si sigue sin rol, usar operador por defecto
       if (!userRole) {
         userRole = 'OPERADOR';
       }
@@ -74,12 +76,12 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       const navigateUrl = parseProjectChatUrl(pending.url, userRole);
       console.log('[PendingNav] Navegando a:', navigateUrl);
       
-      setPendingNavProcessed(true);
+      // Navegar
       window.location.href = navigateUrl;
     }
     
     handlePendingNav();
-  }, [session, pendingNavProcessed]);
+  }, []); // SIN dependencias = ejecutar solo una vez al montar
 
   useEffect(() => {
     // Show progress bar on path change
