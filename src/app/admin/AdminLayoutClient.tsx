@@ -32,22 +32,28 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   // Función para procesar navegación pendiente
+  // v447: Simplificado - delay inicial + reintentos
   // Función para procesar navegación con reintentos
   // Espera hasta que la sesión esté lista (para cold start)
-  async function processPendingNav(retries = 5, delayMs = 600) {
+  async function processPendingNav(retries = 10, delayMs = 800) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       console.log('[PendingNav] Intento', attempt, 'de', retries);
       
-      // v437: Esperar a que la sesión esté lista
-      if (!session && attempt === 1) {
-        console.log('[PendingNav] Sesión no lista, esperando...');
-        await new Promise(r => setTimeout(r, delayMs));
-        continue;
+      // v447: Delay inicial solo en primer intento para cold start
+      if (attempt === 1) {
+        console.log('[PendingNav] Esperando inicialización cold start...');
+        await new Promise(r => setTimeout(r, 2000));
+        
+        // También esperar sesión si no está lista
+        if (!session) {
+          console.log('[PendingNav] Esperando sesión...');
+          await new Promise(r => setTimeout(r, 1000));
+        }
       }
       
       const pending = await getAndClearPendingNav();
       if (!pending?.url) {
-        // Reintentar con delay
+        // Reintentar con delay (no en primer intento ya tuvo delay)
         if (attempt < retries) {
           console.log('[PendingNav] Reintentando en', delayMs, 'ms...');
           await new Promise(r => setTimeout(r, delayMs));
