@@ -49,27 +49,25 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
         return;
       }
 
-      // ✅ MARCAR INMEDIATAMENTE antes de cualquier await
-      // Esto evita que una segunda instancia del layout también navegue
+      // MARCAR INMEDIATAMENTE
       (window as any).__pendingNavDone = true;
       console.log('[PendingNav] URL recibida:', pending.url);
 
-      // Obtener rol — fetch directo, más rápido que esperar useSession
-      let userRole = 'OPERADOR';
-      try {
-        const res = await fetch('/api/auth/session');
-        if (res.ok) {
-          const data = await res.json();
-          userRole = data?.user?.role || 'OPERADOR';
-          console.log('[PendingNav] Rol obtenido:', userRole);
-        }
-      } catch (e) {
-        console.warn('[PendingNav] Error obteniendo sesión, usando OPERADOR');
+      // SIMPLE: extraer projectId y navegar directo
+      let projectId = '';
+      if (pending.url.includes('URL_PROJECT_CHAT:')) {
+        projectId = pending.url.replace('URL_PROJECT_CHAT:', '').split(':')[0];
+      } else if (pending.url.includes('URL_PROJECT:')) {
+        projectId = pending.url.replace('URL_PROJECT:', '');
       }
-
-      const navigateUrl = parseProjectChatUrl(pending.url, userRole);
-      console.log('[PendingNav] Navegando a:', navigateUrl);
-      window.location.href = navigateUrl;
+      
+      // Navegar directo sin esperar sesión
+      if (projectId) {
+        console.log('[PendingNav] Navegando directo a proyecto:', projectId);
+        window.location.href = `/admin/proyectos/${projectId}?view=CHAT`;
+      } else {
+        window.location.href = '/admin';
+      }
     }
     
     handlePendingNav();
