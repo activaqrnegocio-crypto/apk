@@ -33,20 +33,34 @@ export function initPushRouteListener(): void {
   } catch (e) {}
 }
 
+// INTENTO 1: Función auxiliar para leer localStorage inmediatamente
+function readFromLocalStorage(): string | null {
+  try {
+    return localStorage.getItem('pending_push_route');
+  } catch (e) {
+    return null;
+  }
+}
+
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) return null;
 
-  // INTENTO 1: Leer de localStorage (sin borrar inmediatamente)
-  try {
-    const lsRoute = localStorage.getItem('pending_push_route');
-    if (lsRoute) {
-      // Solo borrar después de retornar exitosamente
-      console.log('[PendingNav] localStorage leido:', lsRoute);
-      return { url: lsRoute, tag: '' };
-    }
-  } catch (e) {}
+  // INTENTO 1: Leer de localStorage inmediatamente (cold start necesita este valor)
+  let lsRoute = readFromLocalStorage();
+  if (lsRoute) {
+    console.log('[PendingNav] localStorage leido:', lsRoute);
+    return { url: lsRoute, tag: '' };
+  }
 
-  // INTENTO 2: Verificar memoria
+  // INTENTO 2: Pequeña espera para cold start (Android puede haber guardado hace milisegundos)
+  await new Promise(resolve => setTimeout(resolve, 100));
+  lsRoute = readFromLocalStorage();
+  if (lsRoute) {
+    console.log('[PendingNav] localStorage leido (retry):', lsRoute);
+    return { url: lsRoute, tag: '' };
+  }
+
+  // INTENTO 3: Verificar memoria (para app ya abierta)
   if (pendingRoute) {
     console.log('[PendingNav] Ruta de memoria:', pendingRoute);
     return { url: pendingRoute, tag: '' };
