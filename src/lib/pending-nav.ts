@@ -10,47 +10,43 @@ export interface PendingNav {
   tag: string;
 }
 
+// Almacena la ruta recibida desde el evento pushRoute
+let pendingRoute: string | null = null;
+
+/**
+ * Inicializa el listener para el evento pushRoute desde Android nativo.
+ * v429: Usa CustomEvent desde evaluateJavascript
+ */
+export function initPushRouteListener(): void {
+  if (!Capacitor.isNativePlatform()) {
+    return;
+  }
+  
+  window.addEventListener('pushRoute', ((event: CustomEvent) => {
+    pendingRoute = event.detail;
+  }) as EventListener);
+}
+
 /**
  * Lee y limpia pending navigation desde Android nativo.
- * v428: Usa SharedPreferences (compatible con MainActivity)
+ * v429: Lee del evento pushRoute
  */
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   console.log('[PendingNav] getAndClearPendingNav llamado');
+  
   if (!Capacitor.isNativePlatform()) {
     console.log('[PendingNav] No es plataforma nativa, retornando null');
     return null;
   }
-
-  try {
-    console.log('[PendingNav] Leyendo de SharedPreferences...');
-    
-    const hasPending = await Preferences.get({ key: 'has_pending' });
-    const pendingUrl = await Preferences.get({ key: 'pending_url' });
-    const pendingTag = await Preferences.get({ key: 'pending_tag' });
-    
-    console.log('[PendingNav] has_pending:', hasPending.value);
-    console.log('[PendingNav] pending_url:', pendingUrl.value);
-    
-    if (hasPending.value === 'true' && pendingUrl.value) {
-      console.log('[PendingNav] URL:', pendingUrl.value);
-      console.log('[PendingNav] Tag:', pendingTag.value);
-      
-      // Limpiar después de leer
-      await Preferences.remove({ key: 'has_pending' });
-      await Preferences.remove({ key: 'pending_url' });
-      await Preferences.remove({ key: 'pending_tag' });
-      console.log('[PendingNav] SharedPreferences limpiadas');
-      
-      return {
-        url: pendingUrl.value,
-        tag: pendingTag.value || ''
-      };
-    }
-  } catch (e) {
-    console.log('[PendingNav] Error:', e);
+  
+  // v429: Retornar la ruta del evento pushRoute
+  if (pendingRoute) {
+    const result = { url: pendingRoute, tag: '' };
+    pendingRoute = null;
+    return result;
   }
-
-  console.log('[PendingNav] No hay pending navigation');
+  
+  console.log('[PendingNav] No hay pending route');
   return null;
 }
 

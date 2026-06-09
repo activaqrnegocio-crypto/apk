@@ -1,7 +1,6 @@
 package com.aquatech.crm;
 
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -10,7 +9,6 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     
     private static final String TAG = "AquatechFCM";
-    private static final String PREFS_NAME = "AquatechPush";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -29,24 +27,22 @@ public class MainActivity extends BridgeActivity {
 
     /**
      * Maneja el Intent cuando la notificación es tocada.
-     * v428: Guardar en SharedPreferences (compatible con Capacitor Preferences)
+     * v429: Enviar directamente al WebView via evaluateJavascript
      */
     private void handleNotificationIntent(Intent intent) {
-        Log.d(TAG, "handleNotificationIntent llamado, intent: " + (intent != null ? "no es null" : "es null"));
+        Log.d(TAG, "handleNotificationIntent llamado");
         if (intent == null) {
-            Log.w(TAG, "Intent es null, saliendo");
+            Log.w(TAG, "Intent es null");
             return;
         }
         
-        // Log todos los extras para debug
+        // Log todos los extras
         Bundle extras = intent.getExtras();
         if (extras != null) {
             Log.d(TAG, "Extras size: " + extras.size());
             for (String key : extras.keySet()) {
-                Log.d(TAG, "Extra key: " + key + " = " + extras.get(key));
+                Log.d(TAG, "Extra: " + key + " = " + extras.get(key));
             }
-        } else {
-            Log.w(TAG, "No hay extras en el intent");
         }
         
         // Support both "push_url" (our custom) and "url" (from server)
@@ -54,27 +50,40 @@ public class MainActivity extends BridgeActivity {
         if (pushUrl == null) {
             pushUrl = intent.getStringExtra("url");
         }
-        String pushTag = intent.getStringExtra("push_tag");
-        if (pushTag == null) {
-            pushTag = intent.getStringExtra("tag");
-        }
         
-        Log.d(TAG, "pushUrl extraído: " + (pushUrl != null ? pushUrl : "NULL"));
+        Log.d(TAG, "pushUrl: " + (pushUrl != null ? pushUrl : "NULL"));
         
         if (pushUrl != null && !pushUrl.isEmpty()) {
-            Log.d(TAG, "Notificación tocada - URL: " + pushUrl + ", Tag: " + pushTag);
+            Log.d(TAG, "Notificación tocada - Enviando al WebView: " + pushUrl);
             
-            // v428: Guardar en SharedPreferences
-            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
-            prefs.edit()
-                .putString("pending_url", pushUrl)
-                .putString("pending_tag", pushTag)
-                .putString("has_pending", "true")
-                .apply();
-            
-            Log.d(TAG, "Pending nav guardado en SharedPreferences");
-        } else {
-            Log.w(TAG, "NO se guardó pending nav porque pushUrl está vacío");
+            // v429: Enviar directamente al WebView via evaluateJavascript
+            sendRouteToWebView(pushUrl);
+        }
+    }
+    
+    /**
+     * Envía la ruta al WebView usando evaluateJavascript
+     * Este método inyecta un evento CustomEvent que el frontend escucha
+     */
+    private void sendRouteToWebView(String route) {
+        if (route == null || route.isEmpty()) {
+            Log.w(TAG, "route es null o vacío");
+            return;
+        }
+        
+        // Escapar comillas simples para JS
+        String safeRoute = route.replace("'", "\\'");
+        String js = "window.dispatchEvent(new CustomEvent('pushRoute',{detail:'" + safeRoute + "'}))";
+        
+        Log.d(TAG, "Ejecutando JS: " + js);
+        
+        try {
+            bridge.getWebView().post(() -> {
+                bridge.getWebView().evaluateJavascript(js, null);
+            });
+            Log.d(TAG, "Evento pushRoute enviado al WebView");
+        } catch (Exception e) {
+            Log.e(TAG, "Error: " + e.getMessage());
         }
     }
 }

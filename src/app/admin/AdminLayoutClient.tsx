@@ -20,7 +20,7 @@ const GlobalSyncWorker = dynamic(() => import('@/components/GlobalSyncWorker'), 
 const OfflinePrefetcher = dynamic(() => import('@/components/OfflinePrefetcher'), { ssr: false })
 const SyncToast = dynamic(() => import('@/components/SyncToast'), { ssr: false })
 import { useState, useEffect, useRef } from 'react'
-import { getAndClearPendingNav, parseProjectChatUrl, clearPendingNavFile } from '@/lib/pending-nav'
+import { getAndClearPendingNav, parseProjectChatUrl, initPushRouteListener, clearPendingNavFile } from '@/lib/pending-nav'
 
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
@@ -31,7 +31,8 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   useEffect(() => {
-    // v426: NO marcar al inicio - permitir reintentos si el archivo no existía
+    // v429: Inicializar listener para pushRoute desde Android nativo
+    initPushRouteListener();
     
     console.log('[AdminLayout] Ejecutando handlePendingNav');
     
@@ -44,17 +45,8 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       
       console.log('[PendingNav] handlePendingNav iniciado');
       
-      // v427: Esperar a que MainActivity termine de crear el archivo (max 2 segundos)
-      let pending = null;
-      for (let i = 0; i < 4; i++) {
-        console.log('[PendingNav] Intentando leer archivo... intento', i + 1);
-        await new Promise(r => setTimeout(r, 500));
-        pending = await getAndClearPendingNav();
-        if (pending?.url) {
-          console.log('[PendingNav] Archivo encontrado!');
-          break;
-        }
-      }
+      // v429: El evento pushRoute ya almacenó la ruta, solo leer
+      const pending = await getAndClearPendingNav();
       
       if (!pending?.url) {
         console.log('[PendingNav] No hay pending navigation');
