@@ -1,6 +1,7 @@
 package com.aquatech.crm;
 
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -56,7 +57,14 @@ public class MainActivity extends BridgeActivity {
         if (pushUrl != null && !pushUrl.isEmpty()) {
             Log.d(TAG, "Notificación tocada - Enviando al WebView: " + pushUrl);
             
-            // v429: Enviar directamente al WebView via evaluateJavascript
+// v429c: SIEMPRE guardar en SharedPreferences (sin importar el evento)
+            SharedPreferences prefs = getSharedPreferences("AquatechPush", MODE_PRIVATE);
+            prefs.edit()
+                .putString("pending_url", pushUrl)
+                .putString("has_pending", "true")
+                .apply();
+            
+            // También intentar enviar al WebView
             sendRouteToWebView(pushUrl);
         }
     }

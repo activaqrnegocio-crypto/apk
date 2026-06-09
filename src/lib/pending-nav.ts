@@ -46,6 +46,23 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
     return result;
   }
   
+  // v429b: Fallback - leer de SharedPreferences por si el evento llegó antes del listener
+  try {
+    const hasPending = await Preferences.get({ key: 'has_pending' });
+    const pendingUrl = await Preferences.get({ key: 'pending_url' });
+    
+    if (hasPending.value === 'true' && pendingUrl.value) {
+      console.log('[PendingNav] Fallback - URL desde SharedPreferences:', pendingUrl.value);
+      
+      await Preferences.remove({ key: 'has_pending' });
+      await Preferences.remove({ key: 'pending_url' });
+      
+      return { url: pendingUrl.value, tag: '' };
+    }
+  } catch (e) {
+    console.log('[PendingNav] Fallback error:', e);
+  }
+  
   console.log('[PendingNav] No hay pending route');
   return null;
 }
