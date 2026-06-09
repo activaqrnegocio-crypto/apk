@@ -1,5 +1,5 @@
 ﻿// src/lib/pending-nav.ts
-// v435: Simplificado - solo localStorage instantáneo
+// v438: PendingNavPlugin (archivo JSON) + localStorage + memoria
 
 import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
@@ -11,29 +11,22 @@ export interface PendingNav {
 
 let pendingRoute: string | null = null;
 
+// Referencia al plugin PendingNav
+const PendingNavPlugin = (Capacitor as any).Plugins.PendingNavPlugin;
+
 export function initPushRouteListener(): void {
   if (!Capacitor.isNativePlatform()) return;
   
-  console.log('[PendingNav] initPushRouteListener');
+  console.log('[PendingNav] initPushRouteListener v438');
   
+  // Escuchar evento nativo (para app ya abierta)
   window.addEventListener('pushRoute', ((event: CustomEvent) => {
     console.log('[PendingNav] pushRoute evento:', event.detail);
     pendingRoute = event.detail;
   }) as EventListener);
-  
-  // NO BORRAR de localStorage aquí - esperar a que getAndClearPendingNav lo use
-  // El valor puede existir desde que Android abrió la app hace segundos
-  try {
-    const lsRoute = localStorage.getItem('pending_push_route');
-    if (lsRoute) {
-      // NO borrar aquí - solo guardar en memoria para cold start
-      pendingRoute = lsRoute;
-      console.log('[PendingNav] Leído de localStorage (sin borrar):', lsRoute);
-    }
-  } catch (e) {}
 }
 
-// INTENTO 1: Función auxiliar para leer localStorage inmediatamente
+// INTENTO 1: Leer localStorage
 function readFromLocalStorage(): string | null {
   try {
     return localStorage.getItem('pending_push_route');
@@ -42,31 +35,64 @@ function readFromLocalStorage(): string | null {
   }
 }
 
+// INTENTO 2: Leer de PendingNavPlugin (archivo JSON)
+async function readFromPlugin(): Promise<string | null> {
+  try {
+    if (PendingNavPlugin && PendingNavPlugin.getAndClearPendingNav) {
+      const result = await PendingNavPlugin.getAndClearPendingNav();
+      if (result && result.url) {
+        console.log('[PendingNav] ✓ Plugin:', result.url);
+        return result.url;
+      }
+    }
+  } catch (e) {
+    console.log('[PendingNav] Plugin error:', e);
+  }
+  return null;
+}
+
+// INTENTO 3: Leer de Capacitor Preferences
+async function readFromPreferences(): Promise<string | null> {
+  try {
+    const result = await Preferences.get({ key: 'pending_push_route' });
+    return result.value;
+  } catch (e) {
+    return null;
+  }
+}
+
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) return null;
 
-  // INTENTO 1: Leer de localStorage inmediatamente (cold start necesita este valor)
+  // ORDEN DE PRIORIDADES (cold start debe funcionar):
+  
+  // 1. PendingNavPlugin - archivo JSON escrito por MainActivity
+  const pluginRoute = await readFromPlugin();
+  if (pluginRoute) {
+    return { url: pluginRoute, tag: '' };
+  }
+
+  // 2. localStorage
   let lsRoute = readFromLocalStorage();
   if (lsRoute) {
-    console.log('[PendingNav] localStorage leido:', lsRoute);
+    console.log('[PendingNav] ✓ localStorage:', lsRoute);
     return { url: lsRoute, tag: '' };
   }
 
-  // INTENTO 2: Pequeña espera para cold start (Android puede haber guardado hace milisegundos)
-  await new Promise(resolve => setTimeout(resolve, 100));
-  lsRoute = readFromLocalStorage();
-  if (lsRoute) {
-    console.log('[PendingNav] localStorage leido (retry):', lsRoute);
-    return { url: lsRoute, tag: '' };
+  // 3. Capacitor Preferences
+  const prefRoute = await readFromPreferences();
+  if (prefRoute) {
+    console.log('[PendingNav] ✓ Preferences:', prefRoute);
+    return { url: prefRoute, tag: '' };
   }
 
-  // INTENTO 3: Verificar memoria (para app ya abierta)
+  // 4. Memoria
   if (pendingRoute) {
-    console.log('[PendingNav] Ruta de memoria:', pendingRoute);
+    console.log('[PendingNav] ✓ Memoria:', pendingRoute);
     return { url: pendingRoute, tag: '' };
   }
 
-  console.log('[PendingNav] No hay pending route');
+  console.log('[PendingNav] ✗ No hay pending route');
   return null;
 }
 

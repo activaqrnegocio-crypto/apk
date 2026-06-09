@@ -1,15 +1,23 @@
 package com.aquatech.crm;
 
 import android.content.Intent;
-import android.os.Bundle;
+import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import com.getcapacitor.BridgeActivity;
+import java.io.File;
+import java.io.FileWriter;
 
 public class MainActivity extends BridgeActivity {
     
     private static final String TAG = "AquatechFCM";
+    private static final String PREF_NAME = "aquatech_push";
+    private static final String KEY_PUSH_ROUTE = "pending_push_route";
+    private static final String PENDING_NAV_FILE = "pending_nav.json";
     private boolean notificationHandled = false;
+    private String pendingRoute = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -28,12 +36,11 @@ public class MainActivity extends BridgeActivity {
 
     /**
      * Maneja el Intent cuando la notificación es tocada.
-     * v432: Guardar en localStorage para que React lo lea al inicio
+     * v438: Archivo JSON + retry para cold start
      */
     private void handleNotificationIntent(Intent intent) {
         Log.d(TAG, "handleNotificationIntent llamado");
         
-        // Evitar procesar dos veces la misma notificación
         if (notificationHandled) {
             Log.d(TAG, "Ya procesado, ignorando");
             return;
@@ -44,7 +51,6 @@ public class MainActivity extends BridgeActivity {
             return;
         }
         
-        // Log todos los extras
         Bundle extras = intent.getExtras();
         if (extras != null) {
             Log.d(TAG, "Extras size: " + extras.size());
@@ -53,7 +59,6 @@ public class MainActivity extends BridgeActivity {
             }
         }
         
-        // Support both "push_url" (our custom) and "url" (from server)
         String pushUrl = intent.getStringExtra("push_url");
         if (pushUrl == null) {
             pushUrl = intent.getStringExtra("url");
@@ -63,45 +68,101 @@ public class MainActivity extends BridgeActivity {
         
         if (pushUrl != null && !pushUrl.isEmpty()) {
             notificationHandled = true;
-            Log.d(TAG, "Notificación tocada - Guardando en localStorage: " + pushUrl);
+            pendingRoute = pushUrl;
+            Log.d(TAG, "Notificación tocada - guardando: " + pushUrl);
             
-            // v432: GUARDAR EN LOCALSTORAGE - esto es lo que React leerá
-            saveToLocalStorage(pushUrl);
+            // v438: GUARDAR EN ARCHIVO JSON (para PendingNavPlugin)
+            saveToJsonFile(pushUrl);
+            
+            // También en SharedPreferences
+            saveToSharedPreferences(pushUrl);
+            
+            // Intentar localStorage con retry
+            saveToLocalStorageWithRetry(pushUrl);
         }
     }
     
     /**
-     * Guarda la ruta en localStorage para que React la lea al inicio.
-     * localStorage es la forma más confiable porque:
-     * 1. Es síncrono - disponible inmediatamente
-     * 2. Persiste aunque la app se reinicie
-     * 3. both Android WebView y Capacitor pueden acceder
+     * Guarda en archivo JSON - leído por PendingNavPlugin
      */
-    private void saveToLocalStorage(String route) {
-        if (route == null || route.isEmpty()) {
-            Log.w(TAG, "route es null o vacío");
-            return;
+    private void saveToJsonFile(String route) {
+        if (route == null || route.isEmpty()) return;
+        
+        try {
+            File file = new File(getFilesDir(), PENDING_NAV_FILE);
+            FileWriter writer = new FileWriter(file);
+            writer.write("{\"url\":\"" + route.replace("\"", "\\\"") + "\",\"tag\":\"\"}");
+            writer.flush();
+            writer.close();
+            Log.d(TAG, "✅ Guardado en JSON: " + route);
+        } catch (Exception e) {
+            Log.e(TAG, "Error guardando JSON: " + e.getMessage());
         }
+    }
+    
+    /**
+     * Guarda en SharedPreferences
+     */
+    private void saveToSharedPreferences(String route) {
+        if (route == null || route.isEmpty()) return;
         
-        // Escapar comillas simples para JS
+        try {
+            SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+            prefs.edit().putString(KEY_PUSH_ROUTE, route).apply();
+            Log.d(TAG, "✅ Guardado en SharedPreferences: " + route);
+        } catch (Exception e) {
+            Log.e(TAG, "Error SharedPreferences: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Intenta guardar en localStorage con retry hasta 3 veces.
+     */
+    private void saveToLocalStorageWithRetry(String route) {
+        if (route == null || route.isEmpty()) return;
+        
         String safeRoute = route.replace("'", "\\'");
-        
-        // Guardar en localStorage y también dispatch evento
         String js = "try { " +
             "localStorage.setItem('pending_push_route', '" + safeRoute + "'); " +
             "console.log('[Native] Guardado en localStorage:', '" + safeRoute + "'); " +
             "window.dispatchEvent(new CustomEvent('pushRoute',{detail:'" + safeRoute + "'})); " +
             "} catch(e) { console.error('[Native] Error:', e); }";
         
-        Log.d(TAG, "Ejecutando JS para guardar: " + js);
-        
-        try {
-            bridge.getWebView().post(() -> {
-                bridge.getWebView().evaluateJavascript(js, null);
-            });
-            Log.d(TAG, "✅ Guardado en localStorage y evento enviado");
-        } catch (Exception e) {
-            Log.e(TAG, "Error: " + e.getMessage());
+        Log.d(TAG, "JS para guardar: " + js);
+        attemptSave(0, js);
+    }
+    
+    private void attemptSave(final int attempt, final String js) {
+        if (attempt >= 3) {
+            Log.w(TAG, "Máximo de intentos alcanzado");
+            return;
         }
+        
+        final int[] delays = {500, 1000, 2000};
+        final int delay = delays[attempt];
+        
+        Log.d(TAG, "Intento " + (attempt + 1) + " en " + delay + "ms");
+        
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                if (bridge != null && bridge.getWebView() != null) {
+                    bridge.getWebView().post(() -> {
+                        try {
+                            bridge.getWebView().evaluateJavascript(js, null);
+                            Log.d(TAG, "✅ Guardado en intento " + (attempt + 1));
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error evaluateJavascript: " + e.getMessage());
+                            if (attempt < 2) attemptSave(attempt + 1, js);
+                        }
+                    });
+                } else {
+                    Log.w(TAG, "WebView null, retry en " + delay + "ms");
+                    if (attempt < 2) attemptSave(attempt + 1, js);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error en intento " + attempt + ": " + e.getMessage());
+                if (attempt < 2) attemptSave(attempt + 1, js);
+            }
+        }, delay);
     }
 }
