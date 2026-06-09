@@ -33,9 +33,17 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   
   // Función para procesar navegación pendiente
   // Función para procesar navegación con reintentos
-  async function processPendingNav(retries = 3, delayMs = 800) {
+  // Espera hasta que la sesión esté lista (para cold start)
+  async function processPendingNav(retries = 5, delayMs = 600) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       console.log('[PendingNav] Intento', attempt, 'de', retries);
+      
+      // v437: Esperar a que la sesión esté lista
+      if (!session && attempt === 1) {
+        console.log('[PendingNav] Sesión no lista, esperando...');
+        await new Promise(r => setTimeout(r, delayMs));
+        continue;
+      }
       
       const pending = await getAndClearPendingNav();
       if (!pending?.url) {
@@ -62,15 +70,23 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       }
       
       // OBTENER ROL DEL USUARIO para navegar correctamente
+      // Primero intentar de session, luego de localStorage
       let userRole = 'ADMIN';
       try {
-        userRole = localStorage.getItem('last_user_role') || 'ADMIN';
+        if (session?.user?.role) {
+          userRole = session.user.role as string;
+          // También guardar en localStorage para frío start
+          localStorage.setItem('last_user_role', userRole);
+        } else {
+          userRole = localStorage.getItem('last_user_role') || 'ADMIN';
+        }
       } catch (e) {}
       console.log('[PendingNav] User role:', userRole);
       
       // Navegar según el rol del usuario
+      // NOTA: Roles válidos son OPERATOR, SUBCONTRATISTA, ADMIN, ADMINISTRADORA, SUPERADMIN
       if (projectId) {
-        const targetPath = userRole === 'OPERADOR' || userRole === 'SUBCONTRACTOR'
+        const targetPath = userRole === 'OPERATOR' || userRole === 'SUBCONTRATISTA'
           ? `/admin/operador/proyecto/${projectId}?view=CHAT`
           : `/admin/proyectos/${projectId}?view=CHAT`;
         console.log('[PendingNav] Navegando con router a:', targetPath);
