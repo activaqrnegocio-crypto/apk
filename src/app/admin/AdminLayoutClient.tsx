@@ -31,48 +31,97 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   // v423: USAR REF para evitar race conditions
   const pendingNavRef = useRef(false);
   
+  // Función para procesar navegación pendiente
+  async function processPendingNav() {
+    // Evitar doble ejecución si ya procesamos esta sesión
+    if ((window as any).__pendingNavDone) {
+      // Pero verificar si hay nueva ruta en localStorage (app minimizada)
+      try {
+        const newRoute = localStorage.getItem('pending_push_route');
+        if (!newRoute) {
+          console.log('[PendingNav] Ya procesado y sin nueva ruta, ignorando');
+          return;
+        }
+        // Hay nueva ruta - resetear flag
+        console.log('[PendingNav] Nueva ruta detectada, procesando:', newRoute);
+      } catch (e) {
+        console.log('[PendingNav] Ya procesado, ignorando');
+        return;
+      }
+    }
+
+    const pending = await getAndClearPendingNav();
+    if (!pending?.url) {
+      console.log('[PendingNav] No hay pending navigation');
+      return;
+    }
+
+    // MARCAR INMEDIATAMENTE
+    (window as any).__pendingNavDone = true;
+    console.log('[PendingNav] URL recibida:', pending.url);
+
+    // SIMPLE: extraer projectId y navegar directo
+    let projectId = '';
+    if (pending.url.includes('URL_PROJECT_CHAT:')) {
+      projectId = pending.url.replace('URL_PROJECT_CHAT:', '').split(':')[0];
+    } else if (pending.url.includes('URL_PROJECT:')) {
+      projectId = pending.url.replace('URL_PROJECT:', '');
+    }
+    
+    // Navegar con router de Next.js (NO window.location.href)
+    // AGREGAR delay pequeño para cold start (app cerrada)
+    if (projectId) {
+      console.log('[PendingNav] Navegando con router a proyecto:', projectId);
+      setTimeout(() => {
+        router.push(`/admin/proyectos/${projectId}?view=CHAT`);
+      }, 100);
+    } else {
+      setTimeout(() => {
+        router.push('/admin');
+      }, 100);
+    }
+  }
+  
   useEffect(() => {
     // v429: Inicializar listener para pushRoute desde Android nativo
     initPushRouteListener();
     
     console.log('[AdminLayout] Ejecutando handlePendingNav');
+    processPendingNav();
     
-    async function handlePendingNav() {
-      // Evitar doble ejecución
-      if ((window as any).__pendingNavDone) {
-        console.log('[PendingNav] Ya procesado, ignorando');
-        return;
-      }
-
-      const pending = await getAndClearPendingNav();
-      if (!pending?.url) {
-        console.log('[PendingNav] No hay pending navigation');
-        return;
-      }
-
-      // MARCAR INMEDIATAMENTE
-      (window as any).__pendingNavDone = true;
-      console.log('[PendingNav] URL recibida:', pending.url);
-
-      // SIMPLE: extraer projectId y navegar directo
-      let projectId = '';
-      if (pending.url.includes('URL_PROJECT_CHAT:')) {
-        projectId = pending.url.replace('URL_PROJECT_CHAT:', '').split(':')[0];
-      } else if (pending.url.includes('URL_PROJECT:')) {
-        projectId = pending.url.replace('URL_PROJECT:', '');
-      }
-      
-      // Navegar con router de Next.js (NO window.location.href)
-      if (projectId) {
-        console.log('[PendingNav] Navegando con router a proyecto:', projectId);
-        router.push(`/admin/proyectos/${projectId}?view=CHAT`);
-      } else {
-        router.push('/admin');
-      }
-    }
+    // APP ABIERTA EN FOREGROUND: escuchar eventos pushRoute directamente
+    const handlePushRoute = (event: Event) => {
+      console.log('[PendingNav] pushRoute evento recibido (app abierta):', (event as CustomEvent).detail);
+      // Resetear flag para permitir nueva navegación
+      (window as any).__pendingNavDone = false;
+      // Procesar la nueva ruta
+      processPendingNav();
+    };
     
-    handlePendingNav();
+    window.addEventListener('pushRoute', handlePushRoute as EventListener);
+    
+    return () => {
+      window.removeEventListener('pushRoute', handlePushRoute as EventListener);
+    };
   }, []); // SIN dependencias = ejecutar solo una vez al montar
+  
+  // useEffect PARA APP MINIMIZADA - detectar cuando vuelve del background
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[PendingNav] App стала visible (minimizada)');
+        // Resetear flag para permitir nueva navegación
+        (window as any).__pendingNavDone = false;
+        // Procesar cualquier ruta pendiente
+        await processPendingNav();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     // Show progress bar on path change

@@ -35,15 +35,8 @@ export function initPushRouteListener(): void {
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) return null;
 
-  // Si ya tenemos ruta, retornarla inmediatamente
-  if (pendingRoute) {
-    const result = { url: pendingRoute, tag: '' };
-    pendingRoute = null;
-    console.log('[PendingNav] Ruta obtenida:', result.url);
-    return result;
-  }
-
-  // Solo un intento rápido con localStorage
+  // SIEMPRE leer de localStorage - la app puede estar minimizada
+  // y la variable en memoria ya fue procesada antes
   try {
     const lsRoute = localStorage.getItem('pending_push_route');
     if (lsRoute) {
@@ -52,6 +45,14 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
       return { url: lsRoute, tag: '' };
     }
   } catch (e) {}
+
+  // También verificar memoria por si es cold start
+  if (pendingRoute) {
+    const result = { url: pendingRoute, tag: '' };
+    pendingRoute = null;
+    console.log('[PendingNav] Ruta obtenida (memoria):', result.url);
+    return result;
+  }
 
   console.log('[PendingNav] No hay pending route');
   return null;
