@@ -37,69 +37,38 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
     console.log('[AdminLayout] Ejecutando handlePendingNav');
     
     async function handlePendingNav() {
-      // Si ya navegamos antes, no hacer nada
+      // Evitar doble ejecución
       if ((window as any).__pendingNavDone) {
-        console.log('[PendingNav] Ya navegamos antes, ignorando');
+        console.log('[PendingNav] Ya procesado, ignorando');
         return;
       }
-      
-      console.log('[PendingNav] handlePendingNav iniciado');
-      
-      // v429: El evento pushRoute ya almacenó la ruta, solo leer
+
       const pending = await getAndClearPendingNav();
-      
       if (!pending?.url) {
         console.log('[PendingNav] No hay pending navigation');
         return;
       }
-      
+
+      // ✅ MARCAR INMEDIATAMENTE antes de cualquier await
+      // Esto evita que una segunda instancia del layout también navegue
+      (window as any).__pendingNavDone = true;
       console.log('[PendingNav] URL recibida:', pending.url);
-      
-      // v426: Obtener el rol - PRIERO esperar la sesión de useSession()
-      let userRole = (session?.user as any)?.role;
-      let attempts = 0;
-      
-      // Si no hay sesión de useSession(), esperar hasta que esté lista
-      while (!userRole && attempts < 10) {
-        console.log('[PendingNav] Esperando sesión... intento', attempts + 1);
-        await new Promise(r => setTimeout(r, 300));
-        userRole = (session?.user as any)?.role;
-        if (userRole) {
-          console.log('[PendingNav] Rol obtenido de useSession:', userRole);
+
+      // Obtener rol — fetch directo, más rápido que esperar useSession
+      let userRole = 'OPERADOR';
+      try {
+        const res = await fetch('/api/auth/session');
+        if (res.ok) {
+          const data = await res.json();
+          userRole = data?.user?.role || 'OPERADOR';
+          console.log('[PendingNav] Rol obtenido:', userRole);
         }
-        attempts++;
+      } catch (e) {
+        console.warn('[PendingNav] Error obteniendo sesión, usando OPERADOR');
       }
-      
-      // Si sigue sin rol, intentar fetch como último recurso
-      if (!userRole) {
-        console.log('[PendingNav] Intentando fetch como último recurso...');
-        try {
-          const res = await fetch('/api/auth/session');
-          if (res.ok) {
-            const data = await res.json();
-            userRole = data?.user?.role;
-            console.log('[PendingNav] Rol obtenido por fetch:', userRole);
-          }
-        } catch (e) {
-          console.log('[PendingNav] Error en fetch:', e);
-        }
-      }
-      
-      console.log('[PendingNav] User role final:', userRole);
-      
-      // Si sigue sin rol, usar operador por defecto
-      if (!userRole) {
-        userRole = 'OPERADOR';
-      }
-      
-      // Generar URL de navegación basada en el rol
+
       const navigateUrl = parseProjectChatUrl(pending.url, userRole);
       console.log('[PendingNav] Navegando a:', navigateUrl);
-      
-      // v426: Eliminar archivo ANTES de navegar (antes del reload)
-      await clearPendingNavFile();
-      
-      // Navegar
       window.location.href = navigateUrl;
     }
     
