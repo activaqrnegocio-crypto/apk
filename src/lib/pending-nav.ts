@@ -21,13 +21,14 @@ export function initPushRouteListener(): void {
     pendingRoute = event.detail;
   }) as EventListener);
   
-  // Leer localStorage solo una vez al inicio
+  // NO BORRAR de localStorage aquí - esperar a que getAndClearPendingNav lo use
+  // El valor puede existir desde que Android abrió la app hace segundos
   try {
     const lsRoute = localStorage.getItem('pending_push_route');
     if (lsRoute) {
+      // NO borrar aquí - solo guardar en memoria para cold start
       pendingRoute = lsRoute;
-      localStorage.removeItem('pending_push_route');
-      console.log('[PendingNav] localStorage:', lsRoute);
+      console.log('[PendingNav] Leído de localStorage (sin borrar):', lsRoute);
     }
   } catch (e) {}
 }
@@ -35,27 +36,32 @@ export function initPushRouteListener(): void {
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) return null;
 
-  // SIEMPRE leer de localStorage - la app puede estar minimizada
-  // y la variable en memoria ya fue procesada antes
+  // INTENTO 1: Leer de localStorage (sin borrar inmediatamente)
   try {
     const lsRoute = localStorage.getItem('pending_push_route');
     if (lsRoute) {
-      localStorage.removeItem('pending_push_route');
-      console.log('[PendingNav] localStorage:', lsRoute);
+      // Solo borrar después de retornar exitosamente
+      console.log('[PendingNav] localStorage leido:', lsRoute);
       return { url: lsRoute, tag: '' };
     }
   } catch (e) {}
 
-  // También verificar memoria por si es cold start
+  // INTENTO 2: Verificar memoria
   if (pendingRoute) {
-    const result = { url: pendingRoute, tag: '' };
-    pendingRoute = null;
-    console.log('[PendingNav] Ruta obtenida (memoria):', result.url);
-    return result;
+    console.log('[PendingNav] Ruta de memoria:', pendingRoute);
+    return { url: pendingRoute, tag: '' };
   }
 
   console.log('[PendingNav] No hay pending route');
   return null;
+}
+
+export async function clearPendingNavAfterUse(): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    localStorage.removeItem('pending_push_route');
+    console.log('[PendingNav] Borrado despues de usar');
+  } catch (e) {}
 }
 
 export async function clearPendingNavFile(): Promise<void> {
@@ -66,6 +72,14 @@ export async function clearPendingNavFile(): Promise<void> {
   try {
     await Preferences.remove({ key: 'has_pending' });
     await Preferences.remove({ key: 'pending_url' });
+  } catch (e) {}
+}
+
+// Guardar el rol del usuario para cuando llegue la notificación
+export function saveUserRoleForPush(role: string): void {
+  try {
+    localStorage.setItem('last_user_role', role);
+    console.log('[PendingNav] Rol guardado:', role);
   } catch (e) {}
 }
 

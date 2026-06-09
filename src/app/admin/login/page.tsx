@@ -39,6 +39,10 @@ export default function LoginPage() {
         if (cachedAuth && cachedAuth.username.toLowerCase() === username.toLowerCase()) {
           // Success! Even if we are offline, we trick the app via the Service Worker interceptor
           localStorage.setItem('auth_shadow_active', 'true')
+          // Guardar el rol para notificaciones push
+          const userRole = cachedAuth.role === 'OPERATOR' ? 'OPERADOR' : cachedAuth.role === 'SUBCONTRATISTA' ? 'SUBCONTRACTOR' : 'ADMIN';
+          localStorage.setItem('last_user_role', userRole);
+          console.log('[Login] Rol guardado para push:', userRole);
           window.location.href = cachedAuth.role === 'OPERATOR' ? '/admin/operador' : cachedAuth.role === 'SUBCONTRATISTA' ? '/admin/subcontratista' : '/admin'
           return
         } else {
@@ -62,8 +66,7 @@ export default function LoginPage() {
       setError('Credenciales incorrectas')
       setLoading(false)
     } else {
-      // Redirigir inmediatamente. El servidor en /admin manejará el rol y los trabajadores 
-      // de segundo plano guardarán la sesión en IndexedDB para el modo offline.
+      // Redirigir a /admin - el rol se guardará cuando se cargue el layout
       window.location.href = '/admin'
     }
   }

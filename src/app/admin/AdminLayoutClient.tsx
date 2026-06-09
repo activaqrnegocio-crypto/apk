@@ -20,7 +20,7 @@ const GlobalSyncWorker = dynamic(() => import('@/components/GlobalSyncWorker'), 
 const OfflinePrefetcher = dynamic(() => import('@/components/OfflinePrefetcher'), { ssr: false })
 const SyncToast = dynamic(() => import('@/components/SyncToast'), { ssr: false })
 import { useState, useEffect, useRef } from 'react'
-import { getAndClearPendingNav, parseProjectChatUrl, initPushRouteListener, clearPendingNavFile } from '@/lib/pending-nav'
+import { getAndClearPendingNav, parseProjectChatUrl, initPushRouteListener, clearPendingNavFile, clearPendingNavAfterUse } from '@/lib/pending-nav'
 
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
@@ -32,52 +32,67 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   // Función para procesar navegación pendiente
-  async function processPendingNav() {
-    // SIEMPRE intentar procesar - leer de localStorage primero
-    const pending = await getAndClearPendingNav();
-    if (!pending?.url) {
-      console.log('[PendingNav] No hay pending navigation');
-      return;
-    }
+  // Función para procesar navegación con reintentos
+  async function processPendingNav(retries = 3, delayMs = 800) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      console.log('[PendingNav] Intento', attempt, 'de', retries);
+      
+      const pending = await getAndClearPendingNav();
+      if (!pending?.url) {
+        // Reintentar con delay
+        if (attempt < retries) {
+          console.log('[PendingNav] Reintentando en', delayMs, 'ms...');
+          await new Promise(r => setTimeout(r, delayMs));
+          continue;
+        }
+        console.log('[PendingNav] No hay pending navigation despues de', retries, 'intentos');
+        return;
+      }
 
-    // MARCAR INMEDIATAMENTE
-    (window as any).__pendingNavDone = true;
-    console.log('[PendingNav] URL recibida:', pending.url);
+      // MARCAR INMEDIATAMENTE
+      (window as any).__pendingNavDone = true;
+      console.log('[PendingNav] URL recibida:', pending.url);
 
-    // Extraer projectId
-    let projectId = '';
-    if (pending.url.includes('URL_PROJECT_CHAT:')) {
-      projectId = pending.url.replace('URL_PROJECT_CHAT:', '').split(':')[0];
-    } else if (pending.url.includes('URL_PROJECT:')) {
-      projectId = pending.url.replace('URL_PROJECT:', '');
-    }
-    
-    // OBTENER ROL DEL USUARIO para navegar correctamente
-    let userRole = 'ADMIN';
-    try {
-      userRole = localStorage.getItem('last_user_role') || 'ADMIN';
-    } catch (e) {}
-    console.log('[PendingNav] User role:', userRole);
-    
-    // Navegar según el rol del usuario
-    // MAYOR delay para cold start (app cerrada/minimizada)
-    const delayMs = 500;
-    if (projectId) {
-      const targetPath = userRole === 'OPERADOR' || userRole === 'SUBCONTRACTOR'
-        ? `/admin/operador/proyecto/${projectId}?view=CHAT`
-        : `/admin/proyectos/${projectId}?view=CHAT`;
-      console.log('[PendingNav] Navegando con router a:', targetPath, 'delay:', delayMs);
-      setTimeout(() => {
+      // Extraer projectId
+      let projectId = '';
+      if (pending.url.includes('URL_PROJECT_CHAT:')) {
+        projectId = pending.url.replace('URL_PROJECT_CHAT:', '').split(':')[0];
+      } else if (pending.url.includes('URL_PROJECT:')) {
+        projectId = pending.url.replace('URL_PROJECT:', '');
+      }
+      
+      // OBTENER ROL DEL USUARIO para navegar correctamente
+      let userRole = 'ADMIN';
+      try {
+        userRole = localStorage.getItem('last_user_role') || 'ADMIN';
+      } catch (e) {}
+      console.log('[PendingNav] User role:', userRole);
+      
+      // Navegar según el rol del usuario
+      if (projectId) {
+        const targetPath = userRole === 'OPERADOR' || userRole === 'SUBCONTRACTOR'
+          ? `/admin/operador/proyecto/${projectId}?view=CHAT`
+          : `/admin/proyectos/${projectId}?view=CHAT`;
+        console.log('[PendingNav] Navegando con router a:', targetPath);
         router.push(targetPath);
-      }, delayMs);
-    } else {
-      setTimeout(() => {
+      } else {
         router.push('/admin');
-      }, delayMs);
+      }
+      
+      // Borrar después de usar exitosamente
+      await clearPendingNavAfterUse();
+      return;
     }
   }
   
   useEffect(() => {
+    // v436: Guardar el rol del usuario cuando la sesión está disponible
+    if (session?.user?.role) {
+      const userRole = session.user.role as string;
+      localStorage.setItem('last_user_role', userRole);
+      console.log('[AdminLayout] Rol guardado desde sesión:', userRole);
+    }
+    
     // v429: Inicializar listener para pushRoute desde Android nativo
     initPushRouteListener();
     
@@ -98,7 +113,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
     return () => {
       window.removeEventListener('pushRoute', handlePushRoute as EventListener);
     };
-  }, []); // SIN dependencias = ejecutar solo una vez al montar
+  }, [session]); // Incluir session para guardar el rol
   
   // useEffect PARA APP MINIMIZADA - detectar cuando vuelve del background
   useEffect(() => {
