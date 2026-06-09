@@ -1,13 +1,9 @@
 // src/lib/pending-nav.ts
 // Lee pending_url cuando la app se abre desde una notificación push
+// v428: Usar SharedPreferences en vez de archivo - compatible con MainActivity
 
 import { Capacitor } from '@capacitor/core';
-import { Filesystem, Directory } from '@capacitor/filesystem';
-
-const PENDING_NAV_FILE = 'pending_nav.json';
-
-// Usar string directamente para evitar errores de tipo
-const FILES_DIR = 'FILES';
+import { Preferences } from '@capacitor/preferences';
 
 export interface PendingNav {
   url: string;
@@ -16,8 +12,7 @@ export interface PendingNav {
 
 /**
  * Lee y limpia pending navigation desde Android nativo.
- * v419: Lee desde archivo JSON (que MainActivity crea)
- * v421: Agregar logs de depuración
+ * v428: Usa SharedPreferences (compatible con MainActivity)
  */
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   console.log('[PendingNav] getAndClearPendingNav llamado');
@@ -27,73 +22,36 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   }
 
   try {
-    console.log('[PendingNav] Intentando leer archivo:', PENDING_NAV_FILE);
-    // Leer el archivo JSON desde el directorio de archivos internos
-    const result = await Filesystem.readFile({
-      path: PENDING_NAV_FILE,
-      directory: FILES_DIR as any,
-    });
-
-    console.log('[PendingNav] Archivo leído, resultado:', JSON.stringify(result));
-
-    // Capacitor Filesystem devuelve el contenido como base64, necesitamos decodificarlo
-    let jsonContent: string;
-    if (typeof result.data === 'string') {
-      // Si es un string que parece base64 (comienza con ewog), decodificar
-      const dataStr = result.data as string;
-      if (dataStr.startsWith('ewog') || dataStr.includes('Ilw')) {
-        try {
-          jsonContent = atob(dataStr);
-          console.log('[PendingNav] Contenido decodificado:', jsonContent);
-        } catch (decodeError) {
-          console.log('[PendingNav] Error decodificando base64, usando string original');
-          jsonContent = dataStr;
-        }
-      } else {
-        jsonContent = dataStr;
-      }
-    } else {
-      // Si es Blob u otro tipo, convertir a string
-      jsonContent = String(result.data);
-    }
-
-    // Parsear el JSON
-    const data = JSON.parse(jsonContent);
+    console.log('[PendingNav] Leyendo de SharedPreferences...');
     
-    if (data.has_pending && data.url) {
-      console.log('[PendingNav] URL:', data.url);
-      console.log('[PendingNav] Tag:', data.tag);
-
-      // v426: NO eliminar el archivo aquí - hacerlo después de navegar exitosamente
-      // Esto permite reintentar si la sesión no está lista aún
-      console.log('[PendingNav] Archivo NO eliminado (esperando navegación)');
-
+    const hasPending = await Preferences.get({ key: 'has_pending' });
+    const pendingUrl = await Preferences.get({ key: 'pending_url' });
+    const pendingTag = await Preferences.get({ key: 'pending_tag' });
+    
+    console.log('[PendingNav] has_pending:', hasPending.value);
+    console.log('[PendingNav] pending_url:', pendingUrl.value);
+    
+    if (hasPending.value === 'true' && pendingUrl.value) {
+      console.log('[PendingNav] URL:', pendingUrl.value);
+      console.log('[PendingNav] Tag:', pendingTag.value);
+      
+      // Limpiar después de leer
+      await Preferences.remove({ key: 'has_pending' });
+      await Preferences.remove({ key: 'pending_url' });
+      await Preferences.remove({ key: 'pending_tag' });
+      console.log('[PendingNav] SharedPreferences limpiadas');
+      
       return {
-        url: data.url,
-        tag: data.tag || ''
+        url: pendingUrl.value,
+        tag: pendingTag.value || ''
       };
     }
   } catch (e) {
-    console.log('[PendingNav] No hay pending nav o error:', e);
+    console.log('[PendingNav] Error:', e);
   }
 
+  console.log('[PendingNav] No hay pending navigation');
   return null;
-}
-
-/**
- * Elimina el archivo de pending nav
- * Llamar esto DESPUÉS de navegar exitosamente
- */
-export async function clearPendingNavFile(): Promise<void> {
-  try {
-    await Filesystem.deleteFile({
-      path: PENDING_NAV_FILE,
-      directory: FILES_DIR as any,
-    });
-    console.log('[PendingNav] Archivo eliminado después de navegación');
-  } catch (e) {
-    console.log('[PendingNav] Error eliminando archivo:', e);
-  }
 }
 
 /**
@@ -103,6 +61,26 @@ function isUserAdmin(role?: string): boolean {
   if (!role) return false;
   const upperRole = role.toUpperCase();
   return ['ADMIN', 'ADMINISTRADOR', 'ADMINISTRADORA', 'SUPERADMIN', 'BOSS'].includes(upperRole);
+}
+
+/**
+ * Limpia el pending navigation (sin retornarlo).
+ * Útil para cuando ya no necesitamos navegar pero queremos limpiar.
+ */
+export async function clearPendingNavFile(): Promise<void> {
+  console.log('[PendingNav] clearPendingNavFile llamado');
+  if (!Capacitor.isNativePlatform()) {
+    return;
+  }
+
+  try {
+    await Preferences.remove({ key: 'has_pending' });
+    await Preferences.remove({ key: 'pending_url' });
+    await Preferences.remove({ key: 'pending_tag' });
+    console.log('[PendingNav] SharedPreferences limpiadas');
+  } catch (e) {
+    console.log('[PendingNav] Error limpiando:', e);
+  }
 }
 
 /**
