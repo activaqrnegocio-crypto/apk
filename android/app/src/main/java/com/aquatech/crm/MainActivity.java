@@ -2,6 +2,7 @@ package com.aquatech.crm;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -77,6 +78,9 @@ public class MainActivity extends BridgeActivity {
             // También en SharedPreferences
             saveToSharedPreferences(pushUrl);
             
+            // GUARDAR en Capacitor Preferences - usar el mismo mecanismo que el plugin
+            saveToCapacitorPreferences(pushUrl);
+            
             // Intentar localStorage con retry
             saveToLocalStorageWithRetry(pushUrl);
         }
@@ -112,6 +116,23 @@ public class MainActivity extends BridgeActivity {
             Log.d(TAG, "✅ Guardado en SharedPreferences: " + route);
         } catch (Exception e) {
             Log.e(TAG, "Error SharedPreferences: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Guarda en Capacitor Preferences - este es el storage que usa el plugin Preferences
+     * v439: Guardar donde Capacitor puede encontrar
+     */
+    private void saveToCapacitorPreferences(String route) {
+        if (route == null || route.isEmpty()) return;
+        
+        try {
+            // Usar SharedPreferences con el nombre que Capacitor Preferences usa
+            SharedPreferences prefs = getSharedPreferences("CapacitorPreferences", MODE_PRIVATE);
+            prefs.edit().putString("pending_push_route", route).apply();
+            Log.d(TAG, "✅ Guardado en CapacitorPreferences: " + route);
+        } catch (Exception e) {
+            Log.e(TAG, "Error CapacitorPreferences: " + e.getMessage());
         }
     }
     
