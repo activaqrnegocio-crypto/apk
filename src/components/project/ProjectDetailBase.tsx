@@ -74,7 +74,11 @@ export default function ProjectDetailBase({
     return () => window.removeEventListener('resize', check)
   }, [])
 
-  const [activeTab, setActiveTab] = useState<'CHAT' | 'GALLERY' | 'EVIDENCE'>('CHAT')
+// v421: Leer view de URL inmediatamente (deep link desde push notification)
+  const initialView = searchParams.get('view')?.toUpperCase()
+  const [activeTab, setActiveTab] = useState<'CHAT' | 'GALLERY' | 'EVIDENCE'>(
+    (initialView === 'GALLERY' || initialView === 'EVIDENCE') ? initialView : 'CHAT'
+  )
 
   const GALLERY_LABEL = 'Planos y Referencias'
   const GALLERY_LIMIT = 8

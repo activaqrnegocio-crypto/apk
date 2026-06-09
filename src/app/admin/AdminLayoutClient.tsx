@@ -141,9 +141,11 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   useEffect(() => {
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible') {
-        console.log('[PendingNav] App стала visible (minimizada)');
+        console.log('[PendingNav] App visible (volviendo de minimize)');
         // Resetear flag para permitir nueva navegación
         (window as any).__pendingNavDone = false;
+        // Delay para dar tiempo al nativo de escribir pending route
+        await new Promise(r => setTimeout(r, 1500));
         // Procesar cualquier ruta pendiente
         await processPendingNav();
       }
