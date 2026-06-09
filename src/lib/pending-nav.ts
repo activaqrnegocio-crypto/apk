@@ -15,21 +15,25 @@ let pendingRoute: string | null = null;
 
 /**
  * Inicializa el listener para el evento pushRoute desde Android nativo.
- * v429: Usa CustomEvent desde evaluateJavascript
+ * v430: Agregar logs para debug
  */
 export function initPushRouteListener(): void {
   if (!Capacitor.isNativePlatform()) {
+    console.log('[PendingNav] initPushRouteListener: no es nativo');
     return;
   }
   
+  console.log('[PendingNav] initPushRouteListener: configurando listener para pushRoute');
+  
   window.addEventListener('pushRoute', ((event: CustomEvent) => {
+    console.log('[PendingNav] 🔥 Evento pushRoute recibido:', event.detail);
     pendingRoute = event.detail;
   }) as EventListener);
 }
 
 /**
  * Lee y limpia pending navigation desde Android nativo.
- * v429: Lee del evento pushRoute
+ * v431: Retry más largo (5 intentos de 1 segundo) paradar tiempo a que el WebView esté listo
  */
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   console.log('[PendingNav] getAndClearPendingNav llamado');
@@ -39,31 +43,43 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
     return null;
   }
   
-  // v429: Retornar la ruta del evento pushRoute
-  if (pendingRoute) {
-    const result = { url: pendingRoute, tag: '' };
-    pendingRoute = null;
-    return result;
-  }
-  
-  // v429b: Fallback - leer de SharedPreferences por si el evento llegó antes del listener
-  try {
-    const hasPending = await Preferences.get({ key: 'has_pending' });
-    const pendingUrl = await Preferences.get({ key: 'pending_url' });
+  // Intentar 5 veces con intervalo de 1 segundo (para eventos que llegan tarde)
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    console.log('[PendingNav] Intento', attempt, '/ 5 - pendingRoute:', pendingRoute);
     
-    if (hasPending.value === 'true' && pendingUrl.value) {
-      console.log('[PendingNav] Fallback - URL desde SharedPreferences:', pendingUrl.value);
-      
-      await Preferences.remove({ key: 'has_pending' });
-      await Preferences.remove({ key: 'pending_url' });
-      
-      return { url: pendingUrl.value, tag: '' };
+    // Si hay ruta del evento pushRoute
+    if (pendingRoute) {
+      const result = { url: pendingRoute, tag: '' };
+      pendingRoute = null;
+      console.log('[PendingNav] ✅ Ruta obtenida del evento:', result.url);
+      return result;
     }
-  } catch (e) {
-    console.log('[PendingNav] Fallback error:', e);
+    
+    // Fallback: verificar SharedPreferences
+    try {
+      const hasPending = await Preferences.get({ key: 'has_pending' });
+      const pendingUrl = await Preferences.get({ key: 'pending_url' });
+      
+      if (hasPending.value === 'true' && pendingUrl.value) {
+        console.log('[PendingNav] ✅ Fallback - URL desde SharedPreferences:', pendingUrl.value);
+        
+        await Preferences.remove({ key: 'has_pending' });
+        await Preferences.remove({ key: 'pending_url' });
+        
+        return { url: pendingUrl.value, tag: '' };
+      }
+    } catch (e) {
+      console.log('[PendingNav] Fallback error:', e);
+    }
+    
+    // Esperar antes del siguiente intento
+    if (attempt < 5) {
+      console.log('[PendingNav] Esperando 1s...');
+      await new Promise(r => setTimeout(r, 1000));
+    }
   }
   
-  console.log('[PendingNav] No hay pending route');
+  console.log('[PendingNav] �� No hay pending route después de 5 intentos');
   return null;
 }
 
