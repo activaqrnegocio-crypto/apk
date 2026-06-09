@@ -2,7 +2,7 @@
 
 import './admin.css'
 
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import Sidebar from '@/components/Sidebar'
 import ServiceWorkerRegistration from '@/components/ServiceWorkerRegistration'
 import StorageInitializer from '@/components/StorageInitializer'
@@ -25,6 +25,7 @@ import { getAndClearPendingNav, parseProjectChatUrl, initPushRouteListener, clea
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
   const pathname = usePathname()
+  const router = useRouter()
   const [isNavigating, setIsNavigating] = useState(false)
 
   // v423: USAR REF para evitar race conditions
@@ -61,12 +62,12 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
         projectId = pending.url.replace('URL_PROJECT:', '');
       }
       
-      // Navegar directo sin esperar sesión
+      // Navegar con router de Next.js (NO window.location.href)
       if (projectId) {
-        console.log('[PendingNav] Navegando directo a proyecto:', projectId);
-        window.location.href = `/admin/proyectos/${projectId}?view=CHAT`;
+        console.log('[PendingNav] Navegando con router a proyecto:', projectId);
+        router.push(`/admin/proyectos/${projectId}?view=CHAT`);
       } else {
-        window.location.href = '/admin';
+        router.push('/admin');
       }
     }
     
