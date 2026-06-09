@@ -64,18 +64,10 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
       console.log('[PendingNav] URL:', data.url);
       console.log('[PendingNav] Tag:', data.tag);
 
-      // Eliminar el archivo después de leer
-      try {
-        await Filesystem.deleteFile({
-          path: PENDING_NAV_FILE,
-          directory: FILES_DIR as any,
-        });
-        console.log('[PendingNav] Archivo eliminado');
-      } catch (e) {
-        console.log('[PendingNav] Error eliminando archivo (puede no existir):', e);
-      }
+      // v426: NO eliminar el archivo aquí - hacerlo después de navegar exitosamente
+      // Esto permite reintentar si la sesión no está lista aún
+      console.log('[PendingNav] Archivo NO eliminado (esperando navegación)');
 
-      console.log('[PendingNav] Navegando a:', data.url);
       return {
         url: data.url,
         tag: data.tag || ''
@@ -86,6 +78,22 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   }
 
   return null;
+}
+
+/**
+ * Elimina el archivo de pending nav
+ * Llamar esto DESPUÉS de navegar exitosamente
+ */
+export async function clearPendingNavFile(): Promise<void> {
+  try {
+    await Filesystem.deleteFile({
+      path: PENDING_NAV_FILE,
+      directory: FILES_DIR as any,
+    });
+    console.log('[PendingNav] Archivo eliminado después de navegación');
+  } catch (e) {
+    console.log('[PendingNav] Error eliminando archivo:', e);
+  }
 }
 
 /**

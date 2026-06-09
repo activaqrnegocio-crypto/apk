@@ -20,7 +20,7 @@ const GlobalSyncWorker = dynamic(() => import('@/components/GlobalSyncWorker'), 
 const OfflinePrefetcher = dynamic(() => import('@/components/OfflinePrefetcher'), { ssr: false })
 const SyncToast = dynamic(() => import('@/components/SyncToast'), { ssr: false })
 import { useState, useEffect, useRef } from 'react'
-import { getAndClearPendingNav, parseProjectChatUrl } from '@/lib/pending-nav'
+import { getAndClearPendingNav, parseProjectChatUrl, clearPendingNavFile } from '@/lib/pending-nav'
 
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
@@ -95,8 +95,8 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       const navigateUrl = parseProjectChatUrl(pending.url, userRole);
       console.log('[PendingNav] Navegando a:', navigateUrl);
       
-      // v426: Marcar comodone ANTES de navegar
-      (window as any).__pendingNavDone = true;
+      // v426: Eliminar archivo ANTES de navegar (antes del reload)
+      await clearPendingNavFile();
       
       // Navegar
       window.location.href = navigateUrl;
