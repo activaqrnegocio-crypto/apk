@@ -29,6 +29,18 @@ export function initPushRouteListener(): void {
     console.log('[PendingNav] 🔥 Evento pushRoute recibido:', event.detail);
     pendingRoute = event.detail;
   }) as EventListener);
+  
+  // v433: Verificar si hay ruta pendiente en localStorage (cold start)
+  try {
+    const lsRoute = localStorage.getItem('pending_push_route');
+    if (lsRoute) {
+      console.log('[PendingNav] 📱 Ruta encontrada en localStorage al inicio:', lsRoute);
+      pendingRoute = lsRoute;
+      localStorage.removeItem('pending_push_route');
+    }
+  } catch (e) {
+    console.log('[PendingNav] Error leyendo localStorage:', e);
+  }
 }
 
 /**
@@ -53,6 +65,18 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
       pendingRoute = null;
       console.log('[PendingNav] ✅ Ruta obtenida del evento:', result.url);
       return result;
+    }
+    
+    // Fallback: verificar localStorage (guardado por MainActivity en cold start)
+    try {
+      const lsRoute = localStorage.getItem('pending_push_route');
+      if (lsRoute) {
+        localStorage.removeItem('pending_push_route');
+        console.log('[PendingNav] ✅ Fallback - URL desde localStorage:', lsRoute);
+        return { url: lsRoute, tag: '' };
+      }
+    } catch (e) {
+      console.log('[PendingNav] localStorage error:', e);
     }
     
     // Fallback: verificar SharedPreferences
@@ -103,6 +127,14 @@ export async function clearPendingNavFile(): Promise<void> {
   }
 
   try {
+    // Limpiar localStorage también
+    try {
+      localStorage.removeItem('pending_push_route');
+      console.log('[PendingNav] localStorage limpiado');
+    } catch (e) {
+      console.log('[PendingNav] Error limpiando localStorage:', e);
+    }
+    
     await Preferences.remove({ key: 'has_pending' });
     await Preferences.remove({ key: 'pending_url' });
     await Preferences.remove({ key: 'pending_tag' });
