@@ -96,19 +96,30 @@ console.log('[PendingNav] Esperando inicialización cold start (8s)...');
       } catch (e) {}
       console.log('[PendingNav] User role:', userRole);
       
+      // v457: Detectar si es cold start (app iniciada desde cero vs minimizada)
+      // En cold start, router.replace() puede no funcionar correctamente
+      const isColdStart = !pathname || pathname === '/' || pathname === '';
+      
       // Navegar según el rol del usuario
-      // v456: Navegar DIRECTO al proyecto sin pasar por /admin (evita carrera)
+      // v457: Usar window.location.href en cold start, router.replace() en app ya abierta
       if (projectId) {
         const targetPath = userRole === 'OPERATOR' || userRole === 'SUBCONTRATISTA'
           ? `/admin/operador/proyecto/${projectId}?view=CHAT`
           : `/admin/proyectos/${projectId}?view=CHAT`;
-        console.log('[PendingNav] Navegando directo a:', targetPath);
+        
+        console.log('[PendingNav] Navegando a:', targetPath, '(coldStart:', isColdStart, ')');
         
         // v456: MARCAR como hecho ANTES de navegar (evita reintentos que sobrescriben)
         pendingNavRef.current = true;
         
-        // v456: Navegación directa - sin pasar por /admin
-        router.replace(targetPath);
+        // v457: Navigation diferente según tipo de inicio
+        if (isColdStart) {
+          // Cold start: usar window.location.href para garantizar navegación
+          window.location.href = targetPath;
+        } else {
+          // App ya abierta: usar router.replace() (más suave)
+          router.replace(targetPath);
+        }
         
         // v456: Limpiar después de navegación
         setTimeout(() => {
@@ -118,7 +129,11 @@ console.log('[PendingNav] Esperando inicialización cold start (8s)...');
       } else {
         // Sin projectId - ir a dashboard
         pendingNavRef.current = true;
-        router.push('/admin');
+        if (isColdStart) {
+          window.location.href = '/admin';
+        } else {
+          router.push('/admin');
+        }
         setTimeout(() => {
           clearPendingNavAfterUse();
         }, 500);
