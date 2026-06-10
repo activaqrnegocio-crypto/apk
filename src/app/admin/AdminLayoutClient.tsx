@@ -37,6 +37,12 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   // Espera hasta que la sesión esté lista (para cold start)
   async function processPendingNav(retries = 12, delayMs = 1000) {
     for (let attempt = 1; attempt <= retries; attempt++) {
+      // v456: Si ya procesamos, salir del bucle
+      if (pendingNavRef.current) {
+        console.log('[PendingNav] Ya procesado, saliendo del bucle');
+        return;
+      }
+      
       console.log('[PendingNav] Intento', attempt, 'de', retries);
       
       // v455: Delay inicial mayor para cold start (8 segundos para esperar cold start completo)
@@ -63,8 +69,9 @@ console.log('[PendingNav] Esperando inicialización cold start (8s)...');
         return;
       }
 
-      // MARCAR INMEDIATAMENTE
+      // MARCAR INMEDIATAMENTE (v456 - evitar reintentos que sobrescriben)
       (window as any).__pendingNavDone = true;
+      pendingNavRef.current = true; // v456: Marcar ref también
       console.log('[PendingNav] URL recibida:', pending.url);
 
       // Extraer projectId
@@ -90,29 +97,30 @@ console.log('[PendingNav] Esperando inicialización cold start (8s)...');
       console.log('[PendingNav] User role:', userRole);
       
       // Navegar según el rol del usuario
-      // v450: Usar router.replace + setTimeout para navegación forzada
+      // v456: Navegar DIRECTO al proyecto sin pasar por /admin (evita carrera)
       if (projectId) {
         const targetPath = userRole === 'OPERATOR' || userRole === 'SUBCONTRATISTA'
           ? `/admin/operador/proyecto/${projectId}?view=CHAT`
           : `/admin/proyectos/${projectId}?view=CHAT`;
-        console.log('[PendingNav] Navegando a:', targetPath);
+        console.log('[PendingNav] Navegando directo a:', targetPath);
         
-        // v455: Forzar navegación con router.replace + delay
-        router.replace('/admin');
-        setTimeout(() => {
-          router.replace(targetPath);
-          // v455: Esperar a que la navegación se complete antes de borrar
-          setTimeout(() => {
-            clearPendingNavAfterUse();
-            console.log('[PendingNav] Borrado después de navegación completa');
-          }, 500);
-        }, 150);
-      } else {
-        router.push('/admin');
-        // v455: Esperar a que la navegación se complete antes de borrar
+        // v456: MARCAR como hecho ANTES de navegar (evita reintentos que sobrescriben)
+        pendingNavRef.current = true;
+        
+        // v456: Navegación directa - sin pasar por /admin
+        router.replace(targetPath);
+        
+        // v456: Limpiar después de navegación
         setTimeout(() => {
           clearPendingNavAfterUse();
-          console.log('[PendingNav] Borrado después de navegación completa');
+          console.log('[PendingNav] Limpieza post-navegación');
+        }, 500);
+      } else {
+        // Sin projectId - ir a dashboard
+        pendingNavRef.current = true;
+        router.push('/admin');
+        setTimeout(() => {
+          clearPendingNavAfterUse();
         }, 500);
       }
       
