@@ -36,10 +36,22 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   // Función para procesar navegación con reintentos
   // Espera hasta que la sesión esté lista (para cold start)
   async function processPendingNav(retries = 12, delayMs = 1000) {
+    // v500: VERIFICAR FLAG GLOBAL AL INICIO para evitar múltiples ejecuciones平行
+    if ((window as any).__pendingNavDone) {
+      console.log('[PendingNav] __pendingNavDone=true al inicio, salir');
+      return;
+    }
+    
     for (let attempt = 1; attempt <= retries; attempt++) {
       // v456: Si ya procesamos, salir del bucle
       if (pendingNavRef.current) {
         console.log('[PendingNav] Ya procesado, saliendo del bucle');
+        return;
+      }
+      
+      // v500: Tambien verificar flag global
+      if ((window as any).__pendingNavDone) {
+        console.log('[PendingNav] __pendingNavDone=true, salir');
         return;
       }
       
