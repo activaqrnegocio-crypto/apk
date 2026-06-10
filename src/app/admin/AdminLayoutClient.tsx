@@ -32,22 +32,22 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   // Función para procesar navegación pendiente
-  // v447: Simplificado - delay inicial + reintentos
+  // v454: Delay inicial MAYOR para cold start (4 segundos para esperar evaluateJavascript)
   // Función para procesar navegación con reintentos
   // Espera hasta que la sesión esté lista (para cold start)
-  async function processPendingNav(retries = 10, delayMs = 800) {
+  async function processPendingNav(retries = 12, delayMs = 1000) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       console.log('[PendingNav] Intento', attempt, 'de', retries);
       
-      // v447: Delay inicial solo en primer intento para cold start
+      // v454: Delay inicial mayor para cold start (4 segundos para esperar los delays de evaluateJavascript en MainActivity)
       if (attempt === 1) {
-        console.log('[PendingNav] Esperando inicialización cold start...');
-        await new Promise(r => setTimeout(r, 2000));
+        console.log('[PendingNav] Esperando inicialización cold start (4s)...');
+        await new Promise(r => setTimeout(r, 4000));
         
         // También esperar sesión si no está lista
         if (!session) {
           console.log('[PendingNav] Esperando sesión...');
-          await new Promise(r => setTimeout(r, 1000));
+          await new Promise(r => setTimeout(r, 1500));
         }
       }
       
