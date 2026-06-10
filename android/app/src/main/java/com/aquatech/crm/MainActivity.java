@@ -82,8 +82,8 @@ public class MainActivity extends BridgeActivity {
             // GUARDAR en Capacitor Preferences - usar el mismo mecanismo que el plugin
             saveToCapacitorPreferences(pushUrl);
             
-            // Intentar localStorage con retry
-            saveToLocalStorageWithRetry(pushUrl);
+            // v452: Guardar en variable global (mas confiable)
+            saveToGlobalVar(pushUrl);
         }
     }
     
@@ -138,17 +138,17 @@ public class MainActivity extends BridgeActivity {
     }
     
     /**
-     * Intenta guardar en localStorage con retry hasta 3 veces.
+     * Intenta guardar en variable global (mas confiable que localStorage).
+     * v452: Usar window.__pendingPushRoute directamente
      */
-    private void saveToLocalStorageWithRetry(String route) {
+    private void saveToGlobalVar(String route) {
         if (route == null || route.isEmpty()) return;
         
         String safeRoute = route.replace("'", "\\'");
-        String js = "try { " +
-            "localStorage.setItem('pending_push_route', '" + safeRoute + "'); " +
-            "console.log('[Native] Guardado en localStorage:', '" + safeRoute + "'); " +
-            "window.dispatchEvent(new CustomEvent('pushRoute',{detail:'" + safeRoute + "'})); " +
-            "} catch(e) { console.error('[Native] Error:', e); }";
+        // Guardar en variable global + dispatch event
+        String js = "window.__pendingPushRoute = '" + safeRoute + "'; " +
+            "console.log('[Native] Guardado en variable global:', '" + safeRoute + "'); " +
+            "window.dispatchEvent(new CustomEvent('pushRoute',{detail:'" + safeRoute + "'}));";
         
         Log.d(TAG, "JS para guardar: " + js);
         attemptSave(0, js);

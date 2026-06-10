@@ -44,8 +44,8 @@ public class PendingNavPlugin extends Plugin {
             String content = json.toString();
             Log.d(TAG, "Pending nav encontrado: " + content);
             
-            // Eliminar el archivo inmediatamente
-            file.delete();
+            // v452: NO eliminar - dejar que JavaScript lo maneje
+            // El archivo queda hasta que se naviga exitosamente
             
             // Parsear y retornar
             JSObject result = new JSObject();

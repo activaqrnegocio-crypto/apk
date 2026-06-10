@@ -31,6 +31,10 @@ const config: CapacitorConfig = {
     PendingNavPlugin: {
       // No necesita configuración - se registra en MainActivity
     },
+    // v451: Plugin nativo para SharedPreferences
+    NativePreferences: {
+      // No necesita configuración
+    },
   },
 };
 

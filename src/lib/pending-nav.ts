@@ -1,5 +1,5 @@
 ﻿// src/lib/pending-nav.ts
-// v448: Forzar navegación por /admin para minimizar funcione
+// v451: Agregar fallback nativo directo - SharedPreferences
 
 import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
@@ -14,10 +14,13 @@ let pendingRoute: string | null = null;
 // Referencia al plugin PendingNav
 const PendingNavPlugin = (Capacitor as any).Plugins.PendingNavPlugin;
 
+// v451: Plugin nativo para leer SharedPreferences directamente
+const NativePreferences = (Capacitor as any).Plugins.NativePreferences;
+
 export function initPushRouteListener(): void {
   if (!Capacitor.isNativePlatform()) return;
   
-  console.log('[PendingNav] initPushRouteListener v438');
+  console.log('[PendingNav] initPushRouteListener v451');
   
   // Escuchar evento nativo (para app ya abierta)
   window.addEventListener('pushRoute', ((event: CustomEvent) => {
@@ -26,7 +29,20 @@ export function initPushRouteListener(): void {
   }) as EventListener);
 }
 
-// INTENTO 1: Leer localStorage
+// INTENTO 1: Leer de variable global (mas confiable que localStorage)
+// v452: window.__pendingPushRoute es seteado por MainActivity
+function readFromGlobalVar(): string | null {
+  try {
+    const route = (window as any).__pendingPushRoute;
+    if (route) {
+      console.log('[PendingNav] ✓ GlobalVar:', route);
+      return route;
+    }
+  } catch (e) {}
+  return null;
+}
+
+// INTENTO 2: Leer localStorage
 function readFromLocalStorage(): string | null {
   try {
     return localStorage.getItem('pending_push_route');
@@ -35,7 +51,7 @@ function readFromLocalStorage(): string | null {
   }
 }
 
-// INTENTO 2: Leer de PendingNavPlugin (archivo JSON)
+// INTENTO 3: Leer de PendingNavPlugin (archivo JSON)
 async function readFromPlugin(): Promise<string | null> {
   try {
     if (PendingNavPlugin && PendingNavPlugin.getAndClearPendingNav) {
@@ -51,7 +67,7 @@ async function readFromPlugin(): Promise<string | null> {
   return null;
 }
 
-// INTENTO 3: Leer de Capacitor Preferences
+// INTENTO 4: Leer de Capacitor Preferences
 async function readFromPreferences(): Promise<string | null> {
   try {
     const result = await Preferences.get({ key: 'pending_push_route' });
@@ -66,27 +82,33 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
 
   // ORDEN DE PRIORIDADES (cold start debe funcionar):
   
-  // 1. PendingNavPlugin - archivo JSON escrito por MainActivity
+  // 1. Variable global (mas confiable) - PRIORITARIO
+  const globalRoute = readFromGlobalVar();
+  if (globalRoute) {
+    return { url: globalRoute, tag: '' };
+  }
+
+  // 2. PendingNavPlugin - archivo JSON escrito por MainActivity
   const pluginRoute = await readFromPlugin();
   if (pluginRoute) {
     return { url: pluginRoute, tag: '' };
   }
 
-  // 2. localStorage
+  // 3. localStorage - puede fallar en cold start (DOMException)
   let lsRoute = readFromLocalStorage();
   if (lsRoute) {
     console.log('[PendingNav] ✓ localStorage:', lsRoute);
     return { url: lsRoute, tag: '' };
   }
 
-  // 3. Capacitor Preferences
+  // 4. Capacitor Preferences
   const prefRoute = await readFromPreferences();
   if (prefRoute) {
     console.log('[PendingNav] ✓ Preferences:', prefRoute);
     return { url: prefRoute, tag: '' };
   }
 
-  // 4. Memoria
+  // 5. Memoria
   if (pendingRoute) {
     console.log('[PendingNav] ✓ Memoria:', pendingRoute);
     return { url: pendingRoute, tag: '' };
@@ -99,6 +121,9 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
 export async function clearPendingNavAfterUse(): Promise<void> {
   if (!Capacitor.isNativePlatform()) return;
   try {
+    // Limpiar variable global
+    (window as any).__pendingPushRoute = null;
+    // Limpiar localStorage
     localStorage.removeItem('pending_push_route');
     console.log('[PendingNav] Borrado despues de usar');
   } catch (e) {}
