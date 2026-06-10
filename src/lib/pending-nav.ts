@@ -14,8 +14,24 @@ let pendingRoute: string | null = null;
 // Referencia al plugin PendingNav
 const PendingNavPlugin = (Capacitor as any).Plugins.PendingNavPlugin;
 
-// v451: Plugin nativo para leer SharedPreferences directamente
+// v452: Plugin nativo para leer SharedPreferences directamente (el mismo storage que MainActivity)
 const NativePreferences = (Capacitor as any).Plugins.NativePreferences;
+
+// INTENTO 5: Leer de NativePreferences (SharedPreferences nativas - el mismo storage que MainActivity)
+async function readFromNativePreferences(): Promise<string | null> {
+  try {
+    if (NativePreferences && NativePreferences.get) {
+      const result = await NativePreferences.get({ key: 'pending_push_route' });
+      if (result && result.value) {
+        console.log('[PendingNav] ✓ NativePreferences:', result.value);
+        return result.value;
+      }
+    }
+  } catch (e) {
+    console.log('[PendingNav] NativePreferences error:', e);
+  }
+  return null;
+}
 
 export function initPushRouteListener(): void {
   if (!Capacitor.isNativePlatform()) return;
@@ -101,14 +117,21 @@ export async function getAndClearPendingNav(): Promise<PendingNav | null> {
     return { url: lsRoute, tag: '' };
   }
 
-  // 4. Capacitor Preferences
+  // 4. Capacitor Preferences (el plugin oficial - usa storage diferente)
   const prefRoute = await readFromPreferences();
   if (prefRoute) {
     console.log('[PendingNav] ✓ Preferences:', prefRoute);
     return { url: prefRoute, tag: '' };
   }
 
-  // 5. Memoria
+  // 5. NativePreferences (SharedPreferences nativas - el MISMO storage que MainActivity)
+  const nativePrefRoute = await readFromNativePreferences();
+  if (nativePrefRoute) {
+    console.log('[PendingNav] ✓ NativePreferences:', nativePrefRoute);
+    return { url: nativePrefRoute, tag: '' };
+  }
+
+  // 6. Memoria
   if (pendingRoute) {
     console.log('[PendingNav] ✓ Memoria:', pendingRoute);
     return { url: pendingRoute, tag: '' };
