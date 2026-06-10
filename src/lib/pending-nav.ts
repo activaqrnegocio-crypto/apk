@@ -3,6 +3,7 @@
 
 import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
+import { Filesystem, Directory } from '@capacitor/filesystem';
 
 export interface PendingNav {
   url: string;
@@ -16,7 +17,28 @@ const PendingNavPlugin = (Capacitor as any).Plugins.PendingNavPlugin;
 
 // v452: Plugin nativo para leer SharedPreferences directamente (el mismo storage que MainActivity)
 const NativePreferences = (Capacitor as any).Plugins.NativePreferences;
-
+// v453: Filesystem para leer archivo JSON (para cold start - app minimizada/cerrada)
+async function readFromJsonFile(): Promise<string | null> {
+  try {
+    const result = await Filesystem.readFile({
+      path: 'pending_nav.json',
+      directory: Directory.Data
+    });
+    if (result && result.data) {
+      const dataStr = typeof result.data === 'string' ? result.data : '';
+      if (dataStr) {
+        const data = JSON.parse(dataStr);
+        console.log('[PendingNav] ✓ JSON file:', data.url);
+        // Limpiar archivo después de leer
+        try { await (Filesystem as any).removeFile({ path: 'pending_nav.json', directory: Directory.Data }); } catch {}
+        return data.url || null;
+      }
+    }
+  } catch (e) {
+    // Archivo no existe o error
+  }
+  return null;
+}
 // INTENTO 5: Leer de NativePreferences (SharedPreferences nativas - el mismo storage que MainActivity)
 async function readFromNativePreferences(): Promise<string | null> {
   try {
@@ -96,15 +118,21 @@ async function readFromPreferences(): Promise<string | null> {
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) return null;
 
-  console.log('[PendingNav] getAndClearPendingNav v452 - iniziando...');
+  console.log('[PendingNav] getAndClearPendingNav v453 - iniziando...');
 
   // ORDEN DE PRIORIDADES (cold start debe funcionar):
   
+  // 0. JSON file (Filesystem) - para app minimizada/cerrada (PRIMERO para cold start)
+  const jsonRoute = await readFromJsonFile();
+  if (jsonRoute) {
+    console.log('[PendingNav] ✓ JSON file (PRIMERO):', jsonRoute);
+    return { url: jsonRoute, tag: '' };
+  }
+
   // 1. NativePreferences (SharedPreferences nativas - el MISMO storage que MainActivity)
-  // PRIORITARIO para cold start - leer primero
   const nativePrefRoute = await readFromNativePreferences();
   if (nativePrefRoute) {
-    console.log('[PendingNav] ✓ NativePreferences (PRIMERO):', nativePrefRoute);
+    console.log('[PendingNav] ✓ NativePreferences:', nativePrefRoute);
     return { url: nativePrefRoute, tag: '' };
   }
 
