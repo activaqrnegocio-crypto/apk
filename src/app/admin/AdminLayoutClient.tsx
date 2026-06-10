@@ -90,12 +90,18 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       console.log('[PendingNav] User role:', userRole);
       
       // Navegar según el rol del usuario
+      // v448: SIEMPRE pasar por /admin primero (para minimizar también funcione)
       // NOTA: Roles válidos son OPERATOR, SUBCONTRATISTA, ADMIN, ADMINISTRADORA, SUPERADMIN
       if (projectId) {
         const targetPath = userRole === 'OPERATOR' || userRole === 'SUBCONTRATISTA'
           ? `/admin/operador/proyecto/${projectId}?view=CHAT`
           : `/admin/proyectos/${projectId}?view=CHAT`;
         console.log('[PendingNav] Navegando con router a:', targetPath);
+        
+        // v448: Forzar navegación pasando por /admin primero (necesario para app minimizada)
+        router.push('/admin');
+        // Pequeño delay para asegurar cambio de ruta
+        await new Promise(r => setTimeout(r, 100));
         router.push(targetPath);
       } else {
         router.push('/admin');

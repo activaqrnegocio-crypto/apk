@@ -37,15 +37,16 @@ public class MainActivity extends BridgeActivity {
 
     /**
      * Maneja el Intent cuando la notificación es tocada.
-     * v438: Archivo JSON + retry para cold start
+     * v440: SIEMPRE procesar - quitar notificationHandled
      */
     private void handleNotificationIntent(Intent intent) {
         Log.d(TAG, "handleNotificationIntent llamado");
         
-        if (notificationHandled) {
-            Log.d(TAG, "Ya procesado, ignorando");
-            return;
-        }
+        // v440: NO verificar notificationHandled - siempre procesar
+        //if (notificationHandled) {
+        //    Log.d(TAG, "Ya procesado, ignorando");
+        //    return;
+        //}
         
         if (intent == null) {
             Log.w(TAG, "Intent es null");
@@ -68,7 +69,7 @@ public class MainActivity extends BridgeActivity {
         Log.d(TAG, "pushUrl: " + (pushUrl != null ? pushUrl : "NULL"));
         
         if (pushUrl != null && !pushUrl.isEmpty()) {
-            notificationHandled = true;
+            // v440: NO setear notificationHandled - siempre procesar
             pendingRoute = pushUrl;
             Log.d(TAG, "Notificación tocada - guardando: " + pushUrl);
             

@@ -1,5 +1,5 @@
 ﻿// src/lib/pending-nav.ts
-// v438: PendingNavPlugin (archivo JSON) + localStorage + memoria
+// v448: Forzar navegación por /admin para minimizar funcione
 
 import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
