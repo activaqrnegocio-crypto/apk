@@ -32,22 +32,22 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   // Función para procesar navegación pendiente
-  // v454: Delay inicial MAYOR para cold start (4 segundos para esperar evaluateJavascript)
+  // v455: Delay inicial MAYOR para cold start (8 segundos para esperar cold start completo)
   // Función para procesar navegación con reintentos
   // Espera hasta que la sesión esté lista (para cold start)
   async function processPendingNav(retries = 12, delayMs = 1000) {
     for (let attempt = 1; attempt <= retries; attempt++) {
       console.log('[PendingNav] Intento', attempt, 'de', retries);
       
-      // v454: Delay inicial mayor para cold start (4 segundos para esperar los delays de evaluateJavascript en MainActivity)
+      // v455: Delay inicial mayor para cold start (8 segundos para esperar cold start completo)
       if (attempt === 1) {
-        console.log('[PendingNav] Esperando inicialización cold start (4s)...');
-        await new Promise(r => setTimeout(r, 4000));
+console.log('[PendingNav] Esperando inicialización cold start (8s)...');
+        await new Promise(r => setTimeout(r, 8000));
         
         // También esperar sesión si no está lista
         if (!session) {
           console.log('[PendingNav] Esperando sesión...');
-          await new Promise(r => setTimeout(r, 1500));
+          await new Promise(r => setTimeout(r, 2000));
         }
       }
       
@@ -97,17 +97,25 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
           : `/admin/proyectos/${projectId}?view=CHAT`;
         console.log('[PendingNav] Navegando a:', targetPath);
         
-        // v450: Forzar navegación con router.replace + delay
+        // v455: Forzar navegación con router.replace + delay
         router.replace('/admin');
         setTimeout(() => {
           router.replace(targetPath);
+          // v455: Esperar a que la navegación se complete antes de borrar
+          setTimeout(() => {
+            clearPendingNavAfterUse();
+            console.log('[PendingNav] Borrado después de navegación completa');
+          }, 500);
         }, 150);
       } else {
         router.push('/admin');
+        // v455: Esperar a que la navegación se complete antes de borrar
+        setTimeout(() => {
+          clearPendingNavAfterUse();
+          console.log('[PendingNav] Borrado después de navegación completa');
+        }, 500);
       }
       
-      // Borrar después de usar exitosamente
-      await clearPendingNavAfterUse();
       return;
     }
   }
