@@ -139,14 +139,15 @@ public class MainActivity extends BridgeActivity {
     
     /**
      * Intenta guardar en variable global (mas confiable que localStorage).
-     * v452: Usar window.__pendingPushRoute directamente
+     * v453: Tambien guardar en localStorage para cold start
      */
     private void saveToGlobalVar(String route) {
         if (route == null || route.isEmpty()) return;
         
         String safeRoute = route.replace("'", "\\'");
-        // Guardar en variable global + dispatch event
+        // Guardar en variable global + dispatch event + localStorage para cold start
         String js = "window.__pendingPushRoute = '" + safeRoute + "'; " +
+            "try { localStorage.setItem('pending_push_route', '" + safeRoute + "'); } catch(e) {} " +
             "console.log('[Native] Guardado en variable global:', '" + safeRoute + "'); " +
             "window.dispatchEvent(new CustomEvent('pushRoute',{detail:'" + safeRoute + "'}));";
         

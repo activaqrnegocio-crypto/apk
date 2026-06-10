@@ -5,6 +5,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.io.FileReader;
 import java.io.BufferedReader;
@@ -13,6 +14,7 @@ import java.io.BufferedReader;
  * Plugin de Capacitor para leer pending navigation desde archivo JSON.
  * Este archivo es escrito por MainActivity cuando se toca una notificación.
  */
+@CapacitorPlugin()
 public class PendingNavPlugin extends Plugin {
     
     private static final String TAG = "PendingNavPlugin";
@@ -42,7 +44,8 @@ public class PendingNavPlugin extends Plugin {
             reader.close();
             
             String content = json.toString();
-            Log.d(TAG, "Pending nav encontrado: " + content);
+            Log.d(TAG, "Pending nav encontrado (RAW): '" + content + "'");
+            Log.d(TAG, "Content length: " + content.length());
             
             // v452: NO eliminar - dejar que JavaScript lo maneje
             // El archivo queda hasta que se naviga exitosamente
@@ -54,8 +57,11 @@ public class PendingNavPlugin extends Plugin {
             if (content.contains("\"url\":")) {
                 int urlStart = content.indexOf("\"url\":\"") + 6;
                 int urlEnd = content.indexOf("\"", urlStart);
+                Log.d(TAG, "urlStart: " + urlStart + ", urlEnd: " + urlEnd);
                 if (urlEnd > urlStart) {
-                    result.put("url", content.substring(urlStart, urlEnd));
+                    String url = content.substring(urlStart, urlEnd);
+                    Log.d(TAG, "URL extraída: '" + url + "'");
+                    result.put("url", url);
                 }
             }
             if (content.contains("\"tag\":")) {
@@ -65,6 +71,8 @@ public class PendingNavPlugin extends Plugin {
                     result.put("tag", content.substring(tagStart, tagEnd));
                 }
             }
+            
+            Log.d(TAG, "Resultado JSObject: " + result.toString());
             
             call.resolve(result);
             

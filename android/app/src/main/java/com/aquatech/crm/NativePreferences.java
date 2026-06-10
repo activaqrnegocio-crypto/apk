@@ -6,11 +6,13 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.annotation.CapacitorPlugin;
 
 /**
  * Plugin para leer SharedPreferences nativas directamente.
  * Usa las mismas prefs que MainActivity para pending_push_route.
  */
+@CapacitorPlugin()
 public class NativePreferences extends Plugin {
     
     private static final String TAG = "NativePreferences";

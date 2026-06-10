@@ -96,39 +96,44 @@ async function readFromPreferences(): Promise<string | null> {
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) return null;
 
+  console.log('[PendingNav] getAndClearPendingNav v452 - iniziando...');
+
   // ORDEN DE PRIORIDADES (cold start debe funcionar):
   
-  // 1. Variable global (mas confiable) - PRIORITARIO
-  const globalRoute = readFromGlobalVar();
-  if (globalRoute) {
-    return { url: globalRoute, tag: '' };
+  // 1. NativePreferences (SharedPreferences nativas - el MISMO storage que MainActivity)
+  // PRIORITARIO para cold start - leer primero
+  const nativePrefRoute = await readFromNativePreferences();
+  if (nativePrefRoute) {
+    console.log('[PendingNav] ✓ NativePreferences (PRIMERO):', nativePrefRoute);
+    return { url: nativePrefRoute, tag: '' };
   }
 
   // 2. PendingNavPlugin - archivo JSON escrito por MainActivity
   const pluginRoute = await readFromPlugin();
   if (pluginRoute) {
+    console.log('[PendingNav] ✓ Plugin (JSON):', pluginRoute);
     return { url: pluginRoute, tag: '' };
   }
 
-  // 3. localStorage - puede fallar en cold start (DOMException)
+  // 3. Variable global (mas confiable para app abierta)
+  const globalRoute = readFromGlobalVar();
+  if (globalRoute) {
+    console.log('[PendingNav] ✓ GlobalVar:', globalRoute);
+    return { url: globalRoute, tag: '' };
+  }
+
+  // 4. localStorage
   let lsRoute = readFromLocalStorage();
   if (lsRoute) {
     console.log('[PendingNav] ✓ localStorage:', lsRoute);
     return { url: lsRoute, tag: '' };
   }
 
-  // 4. Capacitor Preferences (el plugin oficial - usa storage diferente)
+  // 5. Capacitor Preferences (el plugin oficial)
   const prefRoute = await readFromPreferences();
   if (prefRoute) {
     console.log('[PendingNav] ✓ Preferences:', prefRoute);
     return { url: prefRoute, tag: '' };
-  }
-
-  // 5. NativePreferences (SharedPreferences nativas - el MISMO storage que MainActivity)
-  const nativePrefRoute = await readFromNativePreferences();
-  if (nativePrefRoute) {
-    console.log('[PendingNav] ✓ NativePreferences:', nativePrefRoute);
-    return { url: nativePrefRoute, tag: '' };
   }
 
   // 6. Memoria
