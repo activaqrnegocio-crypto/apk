@@ -73,11 +73,8 @@ export const authOptions: AuthOptions = {
       }
 
       // Per-request session validation for 'Force Logout'
-      // Throttled: Check DB only every 60 seconds to avoid connection pool saturation
-      const now = Date.now()
-      const shouldCheck = !token.lastChecked || (now - (token.lastChecked as number)) > 60000
-
-      if (token.userId && shouldCheck) {
+      // v609: ALWAYS check DB on every request to ensure immediate logout
+      if (token.userId) {
         try {
           const dbUser = await prisma.user.findUnique({
             where: { id: Number(token.userId) },
@@ -91,11 +88,10 @@ export const authOptions: AuthOptions = {
             // Sync permissions and role in the background
             token.permissions = dbUser.permissions
             token.role = dbUser.role
-            token.lastChecked = now // Update timestamp on success
           }
         } catch (error) {
-          console.error('[Auth JWT Check] Error in session validation (skipping this cycle):', error)
-          // On error (e.g. pool timeout), we allow the session to stay valid for another cycle
+          console.error('[Auth JWT Check] Error in session validation:', error)
+          // On error, allow the session - don't block on DB issues
         }
       }
 
