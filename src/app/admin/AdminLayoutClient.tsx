@@ -28,6 +28,17 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const router = useRouter()
   const [isNavigating, setIsNavigating] = useState(false)
 
+  // v605: Verificar si hubo logout forzado
+  useEffect(() => {
+    const forceLogout = localStorage.getItem('force_logout_pending')
+    if (forceLogout === '1') {
+      console.log('[AdminLayout] Force logout detectado, redirigiendo...')
+      localStorage.removeItem('force_logout_pending')
+      // Redirigir a force-logout
+      window.location.replace('/admin/force-logout')
+    }
+  }, [])
+
   // v423: USAR REF para evitar race conditions
   const pendingNavRef = useRef(false);
   

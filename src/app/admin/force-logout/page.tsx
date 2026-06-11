@@ -12,6 +12,9 @@ export default function ForceLogoutPage() {
     async function doLogout() {
       console.log('[ForceLogout] Ejecutando logout forzado...')
       
+      // v605: Establecer flag ANTES de limpiar para que persista
+      localStorage.setItem('force_logout_pending', '1')
+      
       // Obtener userId de la sesión actual
       const userId = session?.user?.id
       console.log('[ForceLogout] UserID:', userId)
