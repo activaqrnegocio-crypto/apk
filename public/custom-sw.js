@@ -701,7 +701,12 @@ async function navigationHandler(request) {
     
     // ── APK COLD START FIX: Check cache FIRST for Android ──
     // v410: This is the key fix - when app opens offline, SW must respond with cache immediately
-    if (isAndroidNative) {
+    // v605: BUT - if URL has no-cache parameter (from logout), skip cache
+    const urlObj = new URL(request.url);
+    if (urlObj.searchParams.has('nocache') || urlObj.searchParams.has('t')) {
+      console.log('[SW v410] Cache bypass for:', request.url);
+      // Continue to network fetch
+    } else if (isAndroidNative) {
       // Try exact URL match in cache first
       let cached = await caches.match(request.url, { ignoreVary: true, ignoreSearch: true });
       if (isValidHTMLResponse(cached)) {
@@ -1379,9 +1384,9 @@ self.addEventListener('message', (event) => {
           }
         };
       }),
-      // Clear all caches
+      // Clear ALL caches (v605 - fix logout persistence)
       caches.keys().then(keys => 
-        Promise.all(keys.filter(k => k.startsWith('aquatech-')).map(k => {
+        Promise.all(keys.map(k => {
           console.log('[SW] Deleting cache:', k);
           return caches.delete(k);
         }))

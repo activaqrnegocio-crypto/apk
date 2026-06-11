@@ -556,8 +556,9 @@ export default memo(function Sidebar() {
       console.warn('Offline logout fallback', e)
     }
     
-    // Redirigir a force-logout que limpia todo
-    window.location.replace('/admin/force-logout')
+    // Redirigir a force-logout que limpia todo - con cache-buster para evitar cache
+    const timestamp = Date.now()
+    window.location.replace(`/admin/force-logout?t=${timestamp}`)
   }
 
   const isActive = (href: string) => {
