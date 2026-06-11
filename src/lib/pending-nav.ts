@@ -286,6 +286,31 @@ export async function clearPendingNavAfterUse(): Promise<void> {
     localStorage.removeItem('pending_push_route');
     console.log('[PendingNav] Borrado despues de usar');
   } catch (e) {}
+  
+  // v601: BORRAR ARCHIVO JSON DESPUÉS DE LEER
+  try {
+    await Filesystem.deleteFile({
+      path: 'pending_nav.json',
+      directory: Directory.Data
+    });
+    console.log('[PendingNav] ✓ Archivo JSON borrado');
+  } catch (e) {
+    // Puede que no exista
+  }
+  
+  // v601: BORRAR SharedPreferences
+  try {
+    if (NativePreferences && NativePreferences.clear) {
+      await NativePreferences.clear();
+      console.log('[PendingNav] ✓ NativePreferences borrado');
+    }
+  } catch (e) {}
+  
+  // v601: BORRAR Capacitor Preferences
+  try {
+    await Preferences.remove({ key: 'pending_nav' });
+    await Preferences.remove({ key: 'has_pending' });
+  } catch (e) {}
 }
 
 export async function clearPendingNavFile(): Promise<void> {
