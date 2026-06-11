@@ -49,11 +49,15 @@ export default function ForceLogoutPage() {
         await Preferences.clear()
       } catch (e) {}
       
-      // Llamar signOut
+      // Llamar signOut de NextAuth (invalida cookie)
       await signOut({ redirect: false })
       
+      // v607: Esperar un momento para que se procese el signOut
+      await new Promise(r => setTimeout(r, 500))
+      
       console.log('[ForceLogout] Redirigiendo a login...')
-      router.replace('/admin/login')
+      // No usar router.replace -forzar reload completo
+      window.location.href = '/admin/login?loggedOut=1&t=' + Date.now()
     }
     
     doLogout()

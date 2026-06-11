@@ -14,10 +14,10 @@ export default function LoginPage() {
   const [isOffline, setIsOffline] = useState(false)
 
   useEffect(() => {
-    // v603: Si viene de logout, forzar cierre de sesión
+    // v607: Si viene de logout (cualquier parámetro related), forzar cierre de sesión
     const params = new URLSearchParams(window.location.search)
-    if (params.get('forceLogout') === '1') {
-      console.log('[Login] Force logout detectado, limpiando sesión...')
+    if (params.get('forceLogout') === '1' || params.get('loggedOut') === '1') {
+      console.log('[Login] Logout detectado, limpiando sesión...')
       // Limpiar todo
       localStorage.clear()
       sessionStorage.clear()
@@ -28,13 +28,7 @@ export default function LoginPage() {
       import('@capacitor/preferences').then(({ Preferences }) => {
         Preferences.clear().catch(() => {})
       }).catch(() => {})
-      // v603: Llamar signOut de NextAuth para invalidate el token
-      import('next-auth/react').then(({ signOut }) => {
-        signOut({ redirect: false }).then(() => {
-          console.log('[Login] signOut completado')
-        })
-      }).catch(() => {})
-      // Quitar el parámetro de la URL
+      // v607: Remover parámetros de la URL
       window.history.replaceState({}, '', '/admin/login')
     }
     
