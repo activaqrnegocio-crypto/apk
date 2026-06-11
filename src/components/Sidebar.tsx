@@ -540,6 +540,15 @@ export default memo(function Sidebar() {
         })
       }
       
+      // v602: Limpiar Capacitor Preferences
+      try {
+        const { Preferences } = await import('@capacitor/preferences');
+        await Preferences.clear();
+        console.log('[Logout] Preferences cleared');
+      } catch (e) {
+        console.log('[Logout] Preferences clear skipped:', e);
+      }
+      
       // Llamar signOut de NextAuth
       await signOut({ redirect: false })
       

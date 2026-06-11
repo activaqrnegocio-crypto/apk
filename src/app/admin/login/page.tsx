@@ -14,6 +14,24 @@ export default function LoginPage() {
   const [isOffline, setIsOffline] = useState(false)
 
   useEffect(() => {
+    // v602: Si viene de logout, forzar cierre de sesión
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('forceLogout') === '1') {
+      console.log('[Login] Force logout detectado, limpiando sesión...')
+      // Limpiar todo
+      localStorage.clear()
+      sessionStorage.clear()
+      document.cookie.split(';').forEach(function(c) { 
+        document.cookie = c.replace(/^ +/, '').replace(/=.*/, '=;expires=' + new Date().toUTCString() + ';path=/'); 
+      })
+      // Limpiar Capacitor Preferences
+      import('@capacitor/preferences').then(({ Preferences }) => {
+        Preferences.clear().catch(() => {})
+      }).catch(() => {})
+      // Quitar el parámetro de la URL
+      window.history.replaceState({}, '', '/admin/login')
+    }
+    
     setIsOffline(!navigator.onLine)
     const handleStatus = () => setIsOffline(!navigator.onLine)
     window.addEventListener('online', handleStatus)
