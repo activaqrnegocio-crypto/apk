@@ -1,15 +1,34 @@
 'use client'
 
-import { signOut } from 'next-auth/react'
+import { signOut, useSession } from 'next-auth/react'
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
 export default function ForceLogoutPage() {
   const router = useRouter()
+  const { data: session } = useSession()
   
   useEffect(() => {
     async function doLogout() {
       console.log('[ForceLogout] Ejecutando logout forzado...')
+      
+      // Obtener userId de la sesión actual
+      const userId = session?.user?.id
+      console.log('[ForceLogout] UserID:', userId)
+      
+      // Llamar API para invalidar sesión en servidor
+      if (userId) {
+        try {
+          await fetch('/api/auth/force-logout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId })
+          })
+          console.log('[ForceLogout] Sesión invalidada en servidor')
+        } catch (e) {
+          console.log('[ForceLogout] API error:', e)
+        }
+      }
       
       // Limpiar todo
       localStorage.clear()
@@ -32,7 +51,7 @@ export default function ForceLogoutPage() {
     }
     
     doLogout()
-  }, [router])
+  }, [router, session])
   
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
