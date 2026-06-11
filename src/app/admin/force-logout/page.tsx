@@ -15,8 +15,11 @@ export default function ForceLogoutPage() {
       // v605: Establecer flag ANTES de limpiar para que persista
       localStorage.setItem('force_logout_pending', '1')
       
-      // Obtener userId de la sesión actual
-      const userId = session?.user?.id
+      // v607: Obtener userId de localStorage (guardado por Sidebar)
+      let userId: string | undefined = session?.user?.id as string | undefined
+      if (!userId) {
+        userId = localStorage.getItem('logout_user_id') || undefined
+      }
       console.log('[ForceLogout] UserID:', userId)
       
       // Llamar API para invalidar sesión en servidor

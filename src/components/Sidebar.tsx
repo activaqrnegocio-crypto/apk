@@ -490,6 +490,15 @@ export default memo(function Sidebar() {
 
   const handleLogout = async () => {
     try {
+      // v607: Obtener userId de la sesión ANTES de limpiar
+      const userId = session?.user?.id
+      console.log('[Logout] UserID para invalidar:', userId)
+      
+      // v607: Guardar userId para el force-logout
+      if (userId) {
+        localStorage.setItem('logout_user_id', String(userId))
+      }
+      
       // v410: Enviar mensaje LOGOUT al Service Worker para limpiar authShadow
       // Y esperar confirmación antes de continuar
       if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
