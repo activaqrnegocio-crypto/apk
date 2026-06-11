@@ -556,8 +556,8 @@ export default memo(function Sidebar() {
       console.warn('Offline logout fallback', e)
     }
     
-    // Redirigir a login - usar replace en vez de href para evitar historial
-    window.location.replace('/admin/login?forceLogout=1')
+    // Redirigir a force-logout que limpia todo
+    window.location.replace('/admin/force-logout')
   }
 
   const isActive = (href: string) => {
