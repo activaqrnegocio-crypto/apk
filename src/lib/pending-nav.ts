@@ -152,6 +152,65 @@ async function readFromPreferences(): Promise<string | null> {
   }
 }
 
+// v600: Verificar si hay datos pendientes SIN borrarlos
+export async function checkPendingNav(): Promise<boolean> {
+  if (!Capacitor.isNativePlatform()) return false;
+
+  try {
+    // 1. JSON file (Filesystem)
+    const jsonRoute = await readFromJsonFile();
+    if (jsonRoute) {
+      console.log('[PendingNav] checkPendingNav: JSON file tiene datos');
+      return true;
+    }
+
+    // 2. SharedPreferences nativas
+    const nativePrefRoute = await readFromNativePreferences();
+    if (nativePrefRoute) {
+      console.log('[PendingNav] checkPendingNav: NativePreferences tiene datos');
+      return true;
+    }
+
+    // 3. Capacitor Preferences
+    try {
+      const capPref = await Preferences.get({ key: 'pending_nav' });
+      if (capPref.value) {
+        console.log('[PendingNav] checkPendingNav: Capacitor Preferences tiene datos');
+        return true;
+      }
+    } catch (e) { /* ignore */ }
+
+    // 4. localStorage
+    const lsRoute = localStorage.getItem('pending_nav');
+    if (lsRoute) {
+      console.log('[PendingNav] checkPendingNav: localStorage tiene datos');
+      return true;
+    }
+
+    // 5. Variable global
+    if ((window as any).__pendingRoute) {
+      console.log('[PendingNav] checkPendingNav: __pendingRoute tiene datos');
+      return true;
+    }
+
+    // 6. Plugin
+    if (PendingNavPlugin && PendingNavPlugin.getAndClearPendingNav) {
+      // El plugin puede tener un método de verificación
+      const hasData = await PendingNavPlugin.hasPendingNav?.();
+      if (hasData) {
+        console.log('[PendingNav] checkPendingNav: Plugin tiene datos');
+        return true;
+      }
+    }
+
+    console.log('[PendingNav] checkPendingNav: NO hay datos pendientes');
+    return false;
+  } catch (e) {
+    console.log('[PendingNav] checkPendingNav error:', e);
+    return false;
+  }
+}
+
 export async function getAndClearPendingNav(): Promise<PendingNav | null> {
   if (!Capacitor.isNativePlatform()) return null;
 

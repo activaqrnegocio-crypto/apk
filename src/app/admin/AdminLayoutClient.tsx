@@ -20,7 +20,7 @@ const GlobalSyncWorker = dynamic(() => import('@/components/GlobalSyncWorker'), 
 const OfflinePrefetcher = dynamic(() => import('@/components/OfflinePrefetcher'), { ssr: false })
 const SyncToast = dynamic(() => import('@/components/SyncToast'), { ssr: false })
 import { useState, useEffect, useRef } from 'react'
-import { getAndClearPendingNav, parseProjectChatUrl, initPushRouteListener, clearPendingNavFile, clearPendingNavAfterUse } from '@/lib/pending-nav'
+import { getAndClearPendingNav, checkPendingNav, parseProjectChatUrl, initPushRouteListener, clearPendingNavFile, clearPendingNavAfterUse } from '@/lib/pending-nav'
 
 export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession()
@@ -32,13 +32,16 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
   const pendingNavRef = useRef(false);
   
   // Función para procesar navegación pendiente
-  // v455: Delay inicial MAYOR para cold start (8 segundos para esperar cold start completo)
+
+// v455: Delay inicial MAYOR para cold start (8 segundos para esperar cold start completo)
   // Función para procesar navegación con reintentos
   // Espera hasta que la sesión esté lista (para cold start)
   async function processPendingNav(retries = 12, delayMs = 1000) {
-    // v500: VERIFICAR FLAG GLOBAL AL INICIO para evitar múltiples ejecuciones平行
-    if ((window as any).__pendingNavDone) {
-      console.log('[PendingNav] __pendingNavDone=true al inicio, salir');
+    // v600: VERIFICAR SI HAY DATOS PENDIENTES antes de procesar
+    // Esto evita ejecuciones innecesarias cuando no hay nada que procesar
+    const hasPending = await checkPendingNav();
+    if (!hasPending) {
+      console.log('[PendingNav] No hay datos pendientes, salir');
       return;
     }
     
@@ -172,8 +175,8 @@ console.log('[PendingNav] Esperando inicialización cold start (8s)...');
     // APP ABIERTA EN FOREGROUND: escuchar eventos pushRoute directamente
     const handlePushRoute = (event: Event) => {
       console.log('[PendingNav] pushRoute evento recibido (app abierta):', (event as CustomEvent).detail);
-      // Resetear flag para permitir nueva navegación
-      (window as any).__pendingNavDone = false;
+      // v600: Ya no reseteamos flag - checkPendingNav verificará si hay datos
+      // (window as any).__pendingNavDone = false;
       // Procesar la nueva ruta
       processPendingNav();
     };
@@ -190,8 +193,8 @@ console.log('[PendingNav] Esperando inicialización cold start (8s)...');
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'visible') {
         console.log('[PendingNav] App visible (volviendo de minimize)');
-        // Resetear flag para permitir nueva navegación
-        (window as any).__pendingNavDone = false;
+        // v600: Ya no reseteamos flag - checkPendingNav verificará si hay datos
+        // (window as any).__pendingNavDone = false;
         // Delay para dar tiempo al nativo de escribir pending route
         await new Promise(r => setTimeout(r, 1500));
         // Procesar cualquier ruta pendiente
